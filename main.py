@@ -35,6 +35,7 @@ class DocumentType(str, Enum):
     DECLARACAO_PERIODICA_IVA = "declaracao periodica iva"
     COMPROVATIVO_ENTREGA = "comprovativo entrega"
     NOTIFICACAO = "notificacao"
+    NOTA_LANCAMENTO = "nota lancamento"
     IBAN = "iban"
     OTHER = "outro"
 
@@ -86,8 +87,15 @@ def build_output_hash_index(output_path: Path) -> set:
 
 def file_name_from_metadata(metadata: DocumentMetadata, file_hash: str) -> str:
     file_name = f"{metadata.issue_date} - {metadata.document_type} - {metadata.issuing_party}"
-    if metadata.service_name: file_name += f" - {metadata.service_name}"
-    if metadata.total_amount: file_name += f" - {metadata.total_amount} {metadata.total_amount_currency}"
+    if metadata.service_name: 
+        file_name += f" - {metadata.service_name}"
+    if metadata.total_amount:
+        amount_str = (
+            f"{metadata.total_amount:.0f}"
+            if metadata.total_amount.is_integer()
+            else f"{metadata.total_amount:.2f}"
+        )
+        file_name += f" - {amount_str} {metadata.total_amount_currency}"
     file_name += f" - {file_hash}.pdf"
     return file_name.lower()
 
