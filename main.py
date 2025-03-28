@@ -37,11 +37,11 @@ class DocumentType(str, Enum):
     NOTIFICACAO = "notificacao"
     NOTA_LANCAMENTO = "nota lancamento"
     IBAN = "iban"
-    OTHER = "outro"
+    UNKNOWN = "unknown"
 
 class DocumentMetadata(BaseModel):
     issue_date: str = Field(description="Date issued, format: YYYY-MM-DD.", example="2025-01-02")
-    document_type: DocumentType = Field(description="Type of document based on content.")
+    document_type: DocumentType = Field(description="Type of document based on content. When in doubt, use 'unknown'.", example="fatura")
     issuing_party: str = Field(description="Issuer name, one word if possible.", example="Amazon")
     service_name : Optional[str] = Field(description="Product/service name (if applicable), in one word if possible. Skip if document type combined with issuing party are suggestive enough.", example="Youtube Premium")
     description_slug: str = Field(description="Short, URL-friendly doc description.", example="combustivel")
