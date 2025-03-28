@@ -26,28 +26,26 @@ class DocumentType(str, Enum):
     BANK_TRANSFER = "transferencia bancaria"
     FOLHA_FERIAS = "folha de ferias"
     CONTRATO_ADESAO = "contrato de adesao"
-    REFERENCIA_PAGAMENTO = "referencia de pagamento"
+    REFERENCIA_PAGAMENTO = "referencia para pagamento"
     PEDIDO_ATUALIZACAO_DADOS = "pedido de atualizacao de dados"
     SEGURO_AUTOMOVEL = "seguro automovel"
     CUSTOS_ACCOES = "custos acoes"
+    PEDIDO_INFORMACAO = "pedido de informacao"
+    DECLARACAO_CIRCULACAO = "declaracao de circulacao"
+    DECLARACAO_PERIODICA_IVA = "declaracao periodica iva"
+    COMPROVATIVO_ENTREGA = "comprovativo entrega"
+    NOTIFICACAO = "notificacao"
+    IBAN = "iban"
     OTHER = "outro"
-
-class DocumentDescription(str, Enum):
-    UNKNOWN = "UNKNOWN"
-    FATURA_CONTABILIDADE = "fatura contabilidade"
-    GOOGLE_ONE = "google one"
-    YOUTUBE_PREMIUM = "youtube premium"
-    RESCUETIME = "rescuetime"
-    PARALLELS = "parallels"
-    PORTAGENS = "portagens"
 
 class DocumentMetadata(BaseModel):
     issue_date: str = Field(description="Date issued, format: YYYY-MM-DD.", example="2025-01-02")
     document_type: DocumentType = Field(description="Type of document based on content.")
-    document_description: DocumentDescription = Field(description="Description of document based on content.")
     issuing_party: str = Field(description="Issuer name, one word if possible.", example="Amazon")
+    service_name : Optional[str] = Field(description="Product/service name (if applicable), in one word if possible. Skip if document type combined with issuing party are suggestive enough.", example="Youtube Premium")
     description_slug: str = Field(description="Short, URL-friendly doc description.", example="combustivel")
-    total_amount: Optional[float] = Field(description="Total amount mentioned, if any.", example=99.99)
+    total_amount: Optional[float] = Field(description="Total currency amount mentioned, if any.", example=99.99)
+    total_amount_currency: Optional[str] = Field(description="Currency of the total amount, if any.", example="EUR")
     confidence: float = Field(description="Confidence score between 0 and 1.")
     reasoning: str = Field(description="Why this classification was chosen.")
 
@@ -55,8 +53,8 @@ class DocumentMetadata(BaseModel):
 
 TOOLS = [
     {
-        "name": "classify_document_type",
-        "description": "Classify the document based on layout and content, with reasoning.",
+        "name": "extract_document_metadata",
+        "description": "Extract metadata from a document (eg: document type, issuing party, etc.).",
         "input_schema": DocumentMetadata.model_json_schema()
     }
 ]
@@ -87,7 +85,10 @@ def build_output_hash_index(output_path: Path) -> set:
     return known_hashes
 
 def file_name_from_metadata(metadata: DocumentMetadata, file_hash: str) -> str:
-    file_name = f"{metadata.issue_date} - {metadata.document_type} - {metadata.issuing_party} - {metadata.document_description} - {file_hash}.pdf"
+    file_name = f"{metadata.issue_date} - {metadata.document_type} - {metadata.issuing_party}"
+    if metadata.service_name: file_name += f" - {metadata.service_name}"
+    if metadata.total_amount: file_name += f" - {metadata.total_amount} {metadata.total_amount_currency}"
+    file_name += f" - {file_hash}.pdf"
     return file_name.lower()
 
 def find_pdf_files(folder_path: Path):
