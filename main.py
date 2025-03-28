@@ -6,6 +6,7 @@ import shutil
 import hashlib
 import anthropic
 import pdf2image
+import argparse
 from enum import Enum
 from typing import Tuple, Optional
 from pathlib import Path
@@ -201,7 +202,12 @@ def process_folder(source_path: str):
     rename_pdf_files(files_to_process, file_hash_map, known_hashes, target_path)
     print("Processing complete.")
 
-# ------------------- RUN -------------------
-
 if __name__ == "__main__":
-    process_folder("/mnt/c/Users/engti/Desktop/cronologia-20250328T174115Z-001/cronologia/")
+    parser = argparse.ArgumentParser(description="Process a folder of PDF files.")
+    parser.add_argument(
+        "source_path",
+        type=str,
+        help="Path to the folder containing PDF files to process."
+    )
+    args = parser.parse_args()
+    process_folder(args.source_path)
