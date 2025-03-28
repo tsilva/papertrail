@@ -154,7 +154,7 @@ def classify_pdf_document(pdf_path: Path) -> DocumentMetadata:
 
 # ------------------- RENAMING & PROCESSING -------------------
 
-def rename_single_pdf(pdf_path: Path, file_hash: str, target_path: Path):
+def rename_single_pdf(pdf_path: Path, file_hash: str, target_path: Path, known_hashes: set):
     metadata = classify_pdf_document(pdf_path)
     filename = file_name_from_metadata(metadata, file_hash)
     new_pdf_path = target_path / filename
@@ -165,13 +165,16 @@ def rename_single_pdf(pdf_path: Path, file_hash: str, target_path: Path):
     with open(json_path, "w", encoding="utf-8") as f:
         json.dump(metadata.model_dump(), f, indent=4)
 
+    # Add the hash to known_hashes after successful processing
+    known_hashes.add(file_hash)
+
     print(f"Processed and copied: {pdf_path.name} -> {filename}")
 
 def rename_pdf_files(pdf_paths, file_hash_map, known_hashes, target_path, max_workers=4):
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         list(tqdm(
             executor.map(
-                lambda p: rename_single_pdf(p, file_hash_map[p], target_path),
+                lambda p: rename_single_pdf(p, file_hash_map[p], target_path, known_hashes),
                 pdf_paths
             ),
             total=len(pdf_paths)
