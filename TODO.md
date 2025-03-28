@@ -1,1 +1,2 @@
-- Keep track of processed documents using hashes, if hash not found, process and copy to correct folder.
+- Softcode enums, load them from JSON
+- Add .env file
