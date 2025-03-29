@@ -185,17 +185,20 @@ def classify_pdf_document(pdf_path: Path) -> DocumentMetadata:
 # ------------------- RENAMING & PROCESSING -------------------
 
 def rename_single_pdf(pdf_path: Path, file_hash: str, target_path: Path, known_hashes: set):
-    metadata = classify_pdf_document(pdf_path)
-    filename = file_name_from_metadata(metadata, file_hash)
-    new_pdf_path = target_path / filename
+    try:
+        metadata = classify_pdf_document(pdf_path)
+        filename = file_name_from_metadata(metadata, file_hash)
+        new_pdf_path = target_path / filename
 
-    shutil.copy2(pdf_path, new_pdf_path)
+        shutil.copy2(pdf_path, new_pdf_path)
 
-    with open(new_pdf_path.with_suffix('.json'), "w", encoding="utf-8") as f:
-        json.dump(metadata.model_dump(), f, indent=4)
+        with open(new_pdf_path.with_suffix('.json'), "w", encoding="utf-8") as f:
+            json.dump(metadata.model_dump(), f, indent=4)
 
-    known_hashes.add(file_hash)
-    print(f"Processed: {pdf_path.name} → {filename}")
+        known_hashes.add(file_hash)
+        print(f"Processed: {pdf_path.name} → {filename}")
+    except Exception as e:
+        print(f"Failed to process {pdf_path.name}: {e}")
 
 def rename_pdf_files(pdf_paths, file_hash_map, known_hashes, target_path, max_workers=4):
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
