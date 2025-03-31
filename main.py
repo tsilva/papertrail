@@ -17,7 +17,7 @@ from typing import Optional
 import anthropic
 import pdf2image
 from tqdm import tqdm
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, ValidationError, field_validator
 from concurrent.futures import ThreadPoolExecutor
 
 # ------------------- CONFIG -------------------
@@ -39,7 +39,7 @@ class DocumentMetadata(BaseModel):
     total_amount_currency: Optional[str] = Field(description="Currency of the total amount.", example="EUR")
     confidence: float = Field(description="Confidence score between 0 and 1.")
     reasoning: str = Field(description="Why this classification was chosen.")
-    file_hash: str = Field(description="SHA256 hash of the file (first 8 chars).", example="a1b2c3d4")
+    hash: str = Field(description="SHA256 hash of the file (first 8 chars).", example="a1b2c3d4")
 
     @field_validator('total_amount', mode='before')
     @classmethod
@@ -86,13 +86,10 @@ def build_output_hash_index(output_path: Path) -> dict:
     hash_index = {}
     for root, _, files in os.walk(output_path):
         for file in files:
-            if file.lower().endswith(".json"):
-                try:
-                    with open(Path(root) / file, "r", encoding="utf-8") as f:
-                        metadata = json.load(f)
-                        hash_index[metadata.get('file_hash')] = Path(root) / file.replace(".json", ".pdf")
-                except Exception as e:
-                    print(f"Error reading metadata file {file}: {e}")
+            if not file.lower().endswith(".json"): continue
+            with open(Path(root) / file, "r", encoding="utf-8") as f:
+                metadata = json.load(f)
+                hash_index[metadata.get('hash')] = Path(root) / file.replace(".json", ".pdf")
     return hash_index
 
 def sanitize_filename_component(s: str) -> str:
@@ -202,18 +199,21 @@ def rename_existing_files(output_path: Path):
     for file_hash, pdf_path in file_hash_map.items():
         metadata_path = pdf_path.with_suffix(".json")
         try:
-            with open(metadata_path, "r", encoding="utf-8") as f:
-                metadata = DocumentMetadata.model_validate(json.load(f))
+            with open(metadata_path, "r", encoding="utf-8") as f: metadata = DocumentMetadata.model_validate(json.load(f))
             new_filename = file_name_from_metadata(metadata, file_hash)
             new_pdf_path = output_path / new_filename
             new_metadata_path = new_pdf_path.with_suffix(".json")
-
-            if pdf_path != new_pdf_path:
-                shutil.move(pdf_path, new_pdf_path)
-                shutil.move(metadata_path, new_metadata_path)
-                print(f"Renamed: {pdf_path.name} → {new_filename}")
-        except FileNotFoundError:
-            print(f"Metadata file not found for: {pdf_path.name}")
+            if pdf_path == new_pdf_path: continue
+            shutil.move(pdf_path, new_pdf_path)
+            shutil.move(metadata_path, new_metadata_path)
+            print(f"Renamed: {pdf_path.name} → {new_filename}")
+        except ValidationError as ve:
+            print(pdf_path)
+            print(f"Validation error in {metadata_path.name}:")
+            for err in ve.errors():
+                loc = ' -> '.join(map(str, err['loc']))
+                msg = err['msg']
+                print(f"  - {loc}: {msg}")
         except Exception as e:
             print(f"Failed to rename {pdf_path.name}: {e}")
 
