@@ -17,7 +17,7 @@ from typing import Optional
 import anthropic
 import pdf2image
 from tqdm import tqdm
-from pydantic import BaseModel, Field, ValidationError, field_validator
+from pydantic import BaseModel, Field, field_validator
 from concurrent.futures import ThreadPoolExecutor
 
 # ------------------- CONFIG -------------------
@@ -82,8 +82,7 @@ TOOLS = [{
 def hash_file(path: Path) -> str:
     h = hashlib.sha256()
     with open(path, "rb") as f:
-        for chunk in iter(lambda: f.read(8192), b''):
-            h.update(chunk)
+        for chunk in iter(lambda: f.read(8192), b''): h.update(chunk)
     return h.hexdigest()[:8]
 
 def build_output_hash_index(output_path: Path) -> dict:
@@ -99,7 +98,7 @@ def build_output_hash_index(output_path: Path) -> dict:
 
 def sanitize_filename_component(s: str) -> str:
     s = unicodedata.normalize('NFKD', s).encode('ascii', 'ignore').decode('ascii')
-    s = re.sub(r'[\\/*?:"<>|()\[\]]', '', s).strip()
+    s = re.sub(r'[\\/*?:"<>|()\[\],]', '', s).strip()
     return re.sub(r'\s+', ' ', s)
 
 def file_name_from_metadata(metadata: DocumentMetadata, file_hash: str) -> str:
@@ -261,7 +260,7 @@ def rename_existing_files(output_path: Path):
 
 # ------------------- MAIN -------------------
 
-def process_folder(source_path: str, task: str):
+def process_folder(source_path: str, target_path: str, task: str):
     source_path = Path(source_path)
     target_path = Path("./output/")
     target_path.mkdir(parents=True, exist_ok=True)
@@ -272,8 +271,9 @@ def process_folder(source_path: str, task: str):
 
         print("Scanning for new PDFs...")
         pdf_paths = find_pdf_files(source_path)
-
-        file_hash_map = {pdf: hash_file(pdf) for pdf in pdf_paths}
+        
+        print(f"Calculating hashes for {len(pdf_paths)} PDFs...")
+        file_hash_map = {pdf: hash_file(pdf) for pdf in tqdm(pdf_paths, desc="Hashing files")}
         files_to_process = [pdf for pdf in pdf_paths if file_hash_map[pdf] not in known_hashes]
 
         print(f"Found {len(files_to_process)} new PDFs.")
@@ -282,12 +282,12 @@ def process_folder(source_path: str, task: str):
 
     elif task == "rename":
         print("Renaming existing PDF files and metadata based on metadata...")
-        rename_existing_files(target_path)
+        rename_existing_files(source_path)
         print("Renaming complete.")
 
     elif task == "validate":
         print("Validating existing metadata and PDFs...")
-        _ = validate_metadata(target_path)
+        _ = validate_metadata(source_path)
         print("Validation complete.")
 
     else:
@@ -296,6 +296,9 @@ def process_folder(source_path: str, task: str):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Process a folder of PDF files.")
     parser.add_argument("task", type=str, help="Specify task: 'extract', 'rename', or 'validate'.")
-    parser.add_argument("source_path", type=str, help="Path to PDF folder.")
+    parser.add_argument("source_path", type=str, help="Path to documents folder.")
+    parser.add_argument("--target_path", type=str, default="./output/", help="Path to output folder.")
     args = parser.parse_args()
-    process_folder(args.source_path, args.task)
+    process_folder(args.source_path, args.target_path, args.task)
+
+
