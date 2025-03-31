@@ -26,12 +26,16 @@ ANTHROPIC_MODEL_ID = os.getenv("ANTHROPIC_MODEL_ID")
 
 # ------------------- ENUMS & MODELS -------------------
 
-with open("config/document_types.json", "r", encoding="utf-8") as f: DOCUMENT_TYPES = json.load(f)
-def create_dynamic_enum(name, data): return Enum(name, dict([(k, k) for k in data]), type=str)
+with open("config/document_types.json", "r", encoding="utf-8") as f:
+    DOCUMENT_TYPES = json.load(f)
+
+def create_dynamic_enum(name, data):
+    return Enum(name, dict([(k, k) for k in data]), type=str)
+
 DocumentType = create_dynamic_enum('DocumentType', DOCUMENT_TYPES)
 
 class DocumentMetadata(BaseModel):
-    issue_date: str = Field(description="Date issued, format:трибун-MM-DD.", example="2025-01-02")
+    issue_date: str = Field(description="Date issued, format: YYYY-MM-DD.", example="2025-01-02")
     document_type: DocumentType = Field(description="Type of document.", example="fatura")
     issuing_party: str = Field(description="Issuer name, one word if possible.", example="Amazon")
     service_name: Optional[str] = Field(description="Product/service name if applicable.", example="Youtube Premium")
@@ -86,7 +90,8 @@ def build_output_hash_index(output_path: Path) -> dict:
     hash_index = {}
     for root, _, files in os.walk(output_path):
         for file in files:
-            if not file.lower().endswith(".json"): continue
+            if not file.lower().endswith(".json"):
+                continue
             with open(Path(root) / file, "r", encoding="utf-8") as f:
                 metadata = json.load(f)
                 hash_index[metadata.get('hash')] = Path(root) / file.replace(".json", ".pdf")
@@ -160,10 +165,9 @@ def classify_pdf_document(pdf_path: Path, file_hash: str) -> DocumentMetadata:
             raise ValueError("Claude did not return structured classification.")
 
         metadata = DocumentMetadata.model_validate(tool_result)
-        metadata.file_hash = file_hash
+        metadata.hash = file_hash
         return metadata
     except Exception as e:
-        print(e)
         raise RuntimeError(f"Classification failed for: {pdf_path}") from e
 
 # ------------------- RENAMING & PROCESSING -------------------
@@ -199,11 +203,13 @@ def rename_existing_files(output_path: Path):
     for file_hash, pdf_path in file_hash_map.items():
         metadata_path = pdf_path.with_suffix(".json")
         try:
-            with open(metadata_path, "r", encoding="utf-8") as f: metadata = DocumentMetadata.model_validate(json.load(f))
+            with open(metadata_path, "r", encoding="utf-8") as f:
+                metadata = DocumentMetadata.model_validate(json.load(f))
             new_filename = file_name_from_metadata(metadata, file_hash)
             new_pdf_path = output_path / new_filename
             new_metadata_path = new_pdf_path.with_suffix(".json")
-            if pdf_path == new_pdf_path: continue
+            if pdf_path == new_pdf_path:
+                continue
             shutil.move(pdf_path, new_pdf_path)
             shutil.move(metadata_path, new_metadata_path)
             print(f"Renamed: {pdf_path.name} → {new_filename}")
@@ -216,6 +222,43 @@ def rename_existing_files(output_path: Path):
                 print(f"  - {loc}: {msg}")
         except Exception as e:
             print(f"Failed to rename {pdf_path.name}: {e}")
+
+# ------------------- VALIDATION -------------------
+
+def validate_existing_metadata(output_path: Path):
+    errors = []
+    json_files = list(output_path.rglob("*.json"))
+
+    for metadata_path in tqdm(json_files, desc="Validating metadata"):
+        try:
+            with open(metadata_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            metadata = DocumentMetadata.model_validate(data)
+
+            file_hash = metadata.hash
+            if not file_hash:
+                raise ValueError("Missing 'hash' in metadata.")
+
+            pdf_path = metadata_path.with_suffix(".pdf")
+            if not pdf_path.exists():
+                raise FileNotFoundError(f"Missing PDF for metadata: {pdf_path.name}")
+
+            actual_hash = hash_file(pdf_path)
+            if file_hash != actual_hash:
+                raise ValueError(f"Hash mismatch: metadata hash is '{file_hash}', actual is '{actual_hash}'.")
+
+            if file_hash not in pdf_path.name:
+                raise ValueError(f"Filename '{pdf_path.name}' does not include the expected hash '{file_hash}'.")
+
+        except Exception as e:
+            errors.append((metadata_path, str(e)))
+
+    if errors:
+        print("\nValidation errors found:")
+        for meta_path, err in errors:
+            print(f"- {meta_path}: {err}")
+    else:
+        print("\nAll metadata files passed validation.")
 
 # ------------------- MAIN -------------------
 
@@ -237,16 +280,23 @@ def process_folder(source_path: str, task: str):
         print(f"Found {len(files_to_process)} new PDFs.")
         rename_pdf_files(files_to_process, file_hash_map, known_hashes, target_path)
         print("Extraction complete.")
+
     elif task == "rename":
         print("Renaming existing PDF files and metadata based on metadata...")
         rename_existing_files(target_path)
         print("Renaming complete.")
+
+    elif task == "validate":
+        print("Validating existing metadata and PDFs...")
+        validate_existing_metadata(target_path)
+        print("Validation complete.")
+
     else:
-        print("Invalid task specified. Use 'extract' or 'rename'.")
+        print("Invalid task specified. Use 'extract', 'rename', or 'validate'.")
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Process a folder of PDF files.")
-    parser.add_argument("task", type=str, help="Specify task: 'extract' or 'rename'.")
+    parser.add_argument("task", type=str, help="Specify task: 'extract', 'rename', or 'validate'.")
     parser.add_argument("source_path", type=str, help="Path to PDF folder.")
     args = parser.parse_args()
     process_folder(args.source_path, args.task)
