@@ -26,30 +26,12 @@ ANTHROPIC_MODEL_ID = os.getenv("ANTHROPIC_MODEL_ID")
 
 # ------------------- ENUMS & MODELS -------------------
 
-class DocumentType(str, Enum):
-    INVOICE = "fatura"
-    INVOICE_RECEIPT = "fatura-recibo"
-    RECEIPT = "recibo"
-    CREDIT_NOTE = "nota credito"
-    BANK_STATEMENT = "extrato bancario"
-    BANK_TRANSFER = "transferencia bancaria"
-    FOLHA_FERIAS = "folha ferias"
-    CONTRATO_ADESAO = "contrato adesao"
-    REFERENCIA_PAGAMENTO = "referencia pagamento"
-    PEDIDO_ATUALIZACAO_DADOS = "pedido atualizacao dados"
-    SEGURO_AUTOMOVEL = "seguro automovel"
-    CUSTOS_ACCOES = "custos acoes"
-    PEDIDO_INFORMACAO = "pedido informacao"
-    DECLARACAO_CIRCULACAO = "declaracao circulacao"
-    DECLARACAO_PERIODICA_IVA = "declaracao periodica iva"
-    COMPROVATIVO_ENTREGA = "comprovativo entrega"
-    NOTIFICACAO = "notificacao"
-    NOTA_LANCAMENTO = "nota lancamento"
-    IBAN = "iban"
-    UNKNOWN = "unknown"
+with open("config/document_types.json", "r", encoding="utf-8") as f: DOCUMENT_TYPES = json.load(f)
+def create_dynamic_enum(name, data): return Enum(name, dict([(k, k) for k in data]), type=str)
+DocumentType = create_dynamic_enum('DocumentType', DOCUMENT_TYPES)
 
 class DocumentMetadata(BaseModel):
-    issue_date: str = Field(description="Date issued, format: YYYY-MM-DD.", example="2025-01-02")
+    issue_date: str = Field(description="Date issued, format:трибун-MM-DD.", example="2025-01-02")
     document_type: DocumentType = Field(description="Type of document.", example="fatura")
     issuing_party: str = Field(description="Issuer name, one word if possible.", example="Amazon")
     service_name: Optional[str] = Field(description="Product/service name if applicable.", example="Youtube Premium")
@@ -57,6 +39,7 @@ class DocumentMetadata(BaseModel):
     total_amount_currency: Optional[str] = Field(description="Currency of the total amount.", example="EUR")
     confidence: float = Field(description="Confidence score between 0 and 1.")
     reasoning: str = Field(description="Why this classification was chosen.")
+    file_hash: str = Field(description="SHA256 hash of the file (first 8 chars).", example="a1b2c3d4")
 
     @field_validator('total_amount', mode='before')
     @classmethod
@@ -99,21 +82,22 @@ def hash_file(path: Path) -> str:
             h.update(chunk)
     return h.hexdigest()[:8]
 
-def extract_hash_from_filename(filename: str) -> Optional[str]:
-    parts = filename[:-4].split(" - ")
-    return parts[-1] if parts and len(parts[-1]) == 8 else None
-
 def build_output_hash_index(output_path: Path) -> set:
-    return {
-        extract_hash_from_filename(file)
-        for root, _, files in os.walk(output_path)
-        for file in files if file.lower().endswith(".pdf")
-        if extract_hash_from_filename(file)
-    }
+    hash_index = set()
+    for root, _, files in os.walk(output_path):
+        for file in files:
+            if file.lower().endswith(".json"):
+                try:
+                    with open(Path(root) / file, "r", encoding="utf-8") as f:
+                        metadata = json.load(f)
+                        hash_index.add(metadata.get('file_hash'))
+                except Exception as e:
+                    print(f"Error reading metadata file {file}: {e}")
+    return hash_index
 
 def sanitize_filename_component(s: str) -> str:
     s = unicodedata.normalize('NFKD', s).encode('ascii', 'ignore').decode('ascii')
-    s = re.sub(r'[\\/*?:"<>|]', '', s).strip()
+    s = re.sub(r'[\\/*?:"<>|()\[\]]', '', s).strip()
     return re.sub(r'\s+', ' ', s)
 
 def file_name_from_metadata(metadata: DocumentMetadata, file_hash: str) -> str:
@@ -143,7 +127,7 @@ def find_pdf_files(folder_path: Path):
 
 # ------------------- CLASSIFICATION -------------------
 
-def classify_pdf_document(pdf_path: Path) -> DocumentMetadata:
+def classify_pdf_document(pdf_path: Path, file_hash: str) -> DocumentMetadata:
     client = anthropic.Anthropic()
 
     try:
@@ -178,15 +162,18 @@ def classify_pdf_document(pdf_path: Path) -> DocumentMetadata:
         if not tool_result:
             raise ValueError("Claude did not return structured classification.")
 
-        return DocumentMetadata.model_validate(tool_result)
+        metadata = DocumentMetadata.model_validate(tool_result)
+        metadata.file_hash = file_hash
+        return metadata
     except Exception as e:
+        print(e)
         raise RuntimeError(f"Classification failed for: {pdf_path}") from e
 
 # ------------------- RENAMING & PROCESSING -------------------
 
 def rename_single_pdf(pdf_path: Path, file_hash: str, target_path: Path, known_hashes: set):
     try:
-        metadata = classify_pdf_document(pdf_path)
+        metadata = classify_pdf_document(pdf_path, file_hash)
         filename = file_name_from_metadata(metadata, file_hash)
         new_pdf_path = target_path / filename
 
@@ -217,7 +204,7 @@ def process_folder(source_path: str):
     target_path = Path("./output/")
     target_path.mkdir(parents=True, exist_ok=True)
 
-    print("Building hash index...")
+    print("Building hash index from metadata files...")
     known_hashes = build_output_hash_index(target_path)
 
     print("Scanning for new PDFs...")
