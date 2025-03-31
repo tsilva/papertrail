@@ -82,15 +82,15 @@ def hash_file(path: Path) -> str:
             h.update(chunk)
     return h.hexdigest()[:8]
 
-def build_output_hash_index(output_path: Path) -> set:
-    hash_index = set()
+def build_output_hash_index(output_path: Path) -> dict:
+    hash_index = {}
     for root, _, files in os.walk(output_path):
         for file in files:
             if file.lower().endswith(".json"):
                 try:
                     with open(Path(root) / file, "r", encoding="utf-8") as f:
                         metadata = json.load(f)
-                        hash_index.add(metadata.get('file_hash'))
+                        hash_index[metadata.get('file_hash')] = Path(root) / file.replace(".json", ".pdf")
                 except Exception as e:
                     print(f"Error reading metadata file {file}: {e}")
     return hash_index
@@ -197,28 +197,56 @@ def rename_pdf_files(pdf_paths, file_hash_map, known_hashes, target_path, max_wo
             total=len(pdf_paths)
         ))
 
+def rename_existing_files(output_path: Path):
+    file_hash_map = build_output_hash_index(output_path)
+    for file_hash, pdf_path in file_hash_map.items():
+        metadata_path = pdf_path.with_suffix(".json")
+        try:
+            with open(metadata_path, "r", encoding="utf-8") as f:
+                metadata = DocumentMetadata.model_validate(json.load(f))
+            new_filename = file_name_from_metadata(metadata, file_hash)
+            new_pdf_path = output_path / new_filename
+            new_metadata_path = new_pdf_path.with_suffix(".json")
+
+            if pdf_path != new_pdf_path:
+                shutil.move(pdf_path, new_pdf_path)
+                shutil.move(metadata_path, new_metadata_path)
+                print(f"Renamed: {pdf_path.name} → {new_filename}")
+        except FileNotFoundError:
+            print(f"Metadata file not found for: {pdf_path.name}")
+        except Exception as e:
+            print(f"Failed to rename {pdf_path.name}: {e}")
+
 # ------------------- MAIN -------------------
 
-def process_folder(source_path: str):
+def process_folder(source_path: str, task: str):
     source_path = Path(source_path)
     target_path = Path("./output/")
     target_path.mkdir(parents=True, exist_ok=True)
 
-    print("Building hash index from metadata files...")
-    known_hashes = build_output_hash_index(target_path)
+    if task == "extract":
+        print("Building hash index from metadata files...")
+        known_hashes = build_output_hash_index(target_path).keys()
 
-    print("Scanning for new PDFs...")
-    pdf_paths = find_pdf_files(source_path)
+        print("Scanning for new PDFs...")
+        pdf_paths = find_pdf_files(source_path)
 
-    file_hash_map = {pdf: hash_file(pdf) for pdf in pdf_paths}
-    files_to_process = [pdf for pdf in pdf_paths if file_hash_map[pdf] not in known_hashes]
+        file_hash_map = {pdf: hash_file(pdf) for pdf in pdf_paths}
+        files_to_process = [pdf for pdf in pdf_paths if file_hash_map[pdf] not in known_hashes]
 
-    print(f"Found {len(files_to_process)} new PDFs.")
-    rename_pdf_files(files_to_process, file_hash_map, known_hashes, target_path)
-    print("All done.")
+        print(f"Found {len(files_to_process)} new PDFs.")
+        rename_pdf_files(files_to_process, file_hash_map, known_hashes, target_path)
+        print("Extraction complete.")
+    elif task == "rename":
+        print("Renaming existing PDF files and metadata based on metadata...")
+        rename_existing_files(target_path)
+        print("Renaming complete.")
+    else:
+        print("Invalid task specified. Use 'extract' or 'rename'.")
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Process a folder of PDF files.")
+    parser.add_argument("task", type=str, help="Specify task: 'extract' or 'rename'.")
     parser.add_argument("source_path", type=str, help="Path to PDF folder.")
     args = parser.parse_args()
-    process_folder(args.source_path)
+    process_folder(args.source_path, args.task)
