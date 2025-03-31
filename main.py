@@ -198,34 +198,8 @@ def rename_pdf_files(pdf_paths, file_hash_map, known_hashes, target_path, max_wo
             total=len(pdf_paths)
         ))
 
-def rename_existing_files(output_path: Path):
-    file_hash_map = build_output_hash_index(output_path)
-    for file_hash, pdf_path in file_hash_map.items():
-        metadata_path = pdf_path.with_suffix(".json")
-        try:
-            with open(metadata_path, "r", encoding="utf-8") as f:
-                metadata = DocumentMetadata.model_validate(json.load(f))
-            new_filename = file_name_from_metadata(metadata, file_hash)
-            new_pdf_path = output_path / new_filename
-            new_metadata_path = new_pdf_path.with_suffix(".json")
-            if pdf_path == new_pdf_path:
-                continue
-            shutil.move(pdf_path, new_pdf_path)
-            shutil.move(metadata_path, new_metadata_path)
-            print(f"Renamed: {pdf_path.name} → {new_filename}")
-        except ValidationError as ve:
-            print(pdf_path)
-            print(f"Validation error in {metadata_path.name}:")
-            for err in ve.errors():
-                loc = ' -> '.join(map(str, err['loc']))
-                msg = err['msg']
-                print(f"  - {loc}: {msg}")
-        except Exception as e:
-            print(f"Failed to rename {pdf_path.name}: {e}")
-
-# ------------------- VALIDATION -------------------
-
-def validate_existing_metadata(output_path: Path):
+def validate_metadata(output_path: Path):
+    valid_entries = []
     errors = []
     json_files = list(output_path.rglob("*.json"))
 
@@ -250,6 +224,8 @@ def validate_existing_metadata(output_path: Path):
             if file_hash not in pdf_path.name:
                 raise ValueError(f"Filename '{pdf_path.name}' does not include the expected hash '{file_hash}'.")
 
+            valid_entries.append((pdf_path, metadata))
+
         except Exception as e:
             errors.append((metadata_path, str(e)))
 
@@ -259,6 +235,29 @@ def validate_existing_metadata(output_path: Path):
             print(f"- {meta_path}: {err}")
     else:
         print("\nAll metadata files passed validation.")
+
+    return valid_entries
+
+def rename_existing_files(output_path: Path):
+    valid_entries = validate_metadata(output_path)
+
+    for old_pdf_path, metadata in valid_entries:
+        file_hash = metadata.hash
+        new_filename = file_name_from_metadata(metadata, file_hash)
+        new_pdf_path = output_path / new_filename
+        new_metadata_path = new_pdf_path.with_suffix(".json")
+
+        # Skip if the filename hasn't changed
+        if old_pdf_path == new_pdf_path:
+            continue
+
+        try:
+            old_metadata_path = old_pdf_path.with_suffix(".json")
+            shutil.move(old_pdf_path, new_pdf_path)
+            shutil.move(old_metadata_path, new_metadata_path)
+            print(f"Renamed: {old_pdf_path.name} → {new_filename}")
+        except Exception as e:
+            print(f"Failed to rename {old_pdf_path.name}: {e}")
 
 # ------------------- MAIN -------------------
 
@@ -288,7 +287,7 @@ def process_folder(source_path: str, task: str):
 
     elif task == "validate":
         print("Validating existing metadata and PDFs...")
-        validate_existing_metadata(target_path)
+        _ = validate_metadata(target_path)
         print("Validation complete.")
 
     else:
