@@ -172,3 +172,5 @@ cython_debug/
 
 
 output/
+
+_helpers.md

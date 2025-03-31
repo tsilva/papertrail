@@ -15,7 +15,8 @@ from pathlib import Path
 from typing import Optional
 
 import anthropic
-import pdf2image
+import fitz
+import pandas as pd
 from tqdm import tqdm
 from pydantic import BaseModel, Field, field_validator
 from concurrent.futures import ThreadPoolExecutor
@@ -132,11 +133,15 @@ def classify_pdf_document(pdf_path: Path, file_hash: str) -> DocumentMetadata:
     client = anthropic.Anthropic()
 
     try:
-        image = pdf2image.convert_from_path(str(pdf_path), first_page=1, last_page=1)[0]
-        img_buffer = io.BytesIO()
-        image.save(img_buffer, format="jpeg")
+        # Use PyMuPDF to render the first page as an image
+        doc = fitz.open(str(pdf_path))
+        page = doc[0]  # First page
+        pix = page.get_pixmap()  # Render to pixmap
+        img_buffer = io.BytesIO(pix.tobytes("jpeg"))  # Convert to JPEG in memory
         img_b64 = base64.b64encode(img_buffer.getvalue()).decode("utf-8")
+        doc.close()  # Close the document
     except Exception as e:
+        print(e)
         raise RuntimeError(f"Failed to render PDF image: {pdf_path}") from e
 
     try:
@@ -258,16 +263,48 @@ def rename_existing_files(output_path: Path):
         except Exception as e:
             print(f"Failed to rename {old_pdf_path.name}: {e}")
 
+def export_metadata_to_csv(output_path: Path, csv_output: Optional[str] = "metadata_export.csv"):
+    metadata_list = []
+    json_files = list(output_path.rglob("*.json"))
+
+    for metadata_path in tqdm(json_files, desc="Collecting metadata"):
+        try:
+            with open(metadata_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            metadata = DocumentMetadata.model_validate(data)
+            metadata_dict = metadata.model_dump()
+            
+            # Remove 'reasoning' field
+            metadata_dict.pop("reasoning", None)
+
+            # Add filename (corresponding PDF)
+            pdf_path = metadata_path.with_suffix(".pdf")
+            metadata_dict["filename"] = pdf_path.name if pdf_path.exists() else ""
+
+            metadata_list.append(metadata_dict)
+        except Exception as e:
+            print(f"Skipping {metadata_path.name}: {e}")
+
+    if metadata_list:
+        df = pd.DataFrame(metadata_list)
+        # Optional: Reorder to put filename first
+        cols = ["filename"] + [col for col in df.columns if col != "filename"]
+        df = df[cols]
+        df.to_csv(csv_output, index=False)
+        print(f"\nExported {len(df)} entries to {csv_output}")
+    else:
+        print("\nNo valid metadata found to export.")
+
 # ------------------- MAIN -------------------
 
 def process_folder(source_path: str, target_path: str, task: str):
     source_path = Path(source_path)
-    target_path = Path("./output/")
+    target_path = Path(target_path)  # Use the provided target_path instead of hardcoding
     target_path.mkdir(parents=True, exist_ok=True)
 
     if task == "extract":
         print("Building hash index from metadata files...")
-        known_hashes = build_output_hash_index(target_path).keys()
+        known_hashes = set(build_output_hash_index(target_path).keys())  # Convert to set for efficiency
 
         print("Scanning for new PDFs...")
         pdf_paths = find_pdf_files(source_path)
@@ -290,6 +327,11 @@ def process_folder(source_path: str, target_path: str, task: str):
         _ = validate_metadata(source_path)
         print("Validation complete.")
 
+    elif task == "csv":
+        print("Exporting metadata to CSV...")
+        export_metadata_to_csv(source_path)
+        print("CSV export complete.")
+
     else:
         print("Invalid task specified. Use 'extract', 'rename', or 'validate'.")
 
@@ -300,5 +342,3 @@ if __name__ == "__main__":
     parser.add_argument("--target_path", type=str, default="./output/", help="Path to output folder.")
     args = parser.parse_args()
     process_folder(args.source_path, args.target_path, args.task)
-
-
