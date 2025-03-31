@@ -1,2 +1,1 @@
-- Add CSV export feature
-- Add ability to run validation checks (eg: is this kind of files available every month?)
+- Add ability to run validation checks (eg: expected recurring documents)
