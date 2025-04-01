@@ -22,17 +22,15 @@ A document classification and organization tool that uses Claude AI to automatic
 
 ## Installation 🛠️
 
-1. Clone this repository 📥
-2. Install required packages:
-   ```
-   pip install -r requirements.txt
-   ```
-3. Create a `.env` file with your Anthropic API key:
-   ```
-   ANTHROPIC_API_KEY=your_api_key_here
-   ANTHROPIC_MODEL_ID=claude-3-haiku-20240307
-   ```
-4. Create a `config` directory with `document_types.json` file that defines document categories 📂
+```bash
+git clone https://github.com/tsilva/documentor.git
+cd github-bootstrapper
+curl -L https://gist.githubusercontent.com/tsilva/258374c1ba2296d8ba22fffbf640f183/raw/venv-install.sh -o install.sh && chmod +x install.sh && ./install.sh
+```
+
+```bash
+curl -L https://gist.githubusercontent.com/tsilva/8588cb367242e3db8f1b33c42e4e5e06/raw/venv-run.sh -o run.sh && chmod +x run.sh && ./run.sh
+```
 
 ## Usage 🎯
 
