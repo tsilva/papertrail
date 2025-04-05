@@ -37,9 +37,9 @@ DocumentType = create_dynamic_enum('DocumentType', DOCUMENT_TYPES)
 
 class DocumentMetadata(BaseModel):
     issue_date: str = Field(description="Date issued, format: YYYY-MM-DD.", example="2025-01-02")
-    document_type: DocumentType = Field(description="Type of document.", example="fatura")
+    document_type: DocumentType = Field(description="Type of document.", example="invoice")
     issuing_party: str = Field(description="Issuer name, one word if possible.", example="Amazon")
-    service_name: Optional[str] = Field(description="Product/service name if applicable.", example="Youtube Premium")
+    service_name: Optional[str] = Field(description="Product/service name if applicable (as short as possible).", example="Youtube Premium")
     total_amount: Optional[float] = Field(default=None, description="Total currency amount.")
     total_amount_currency: Optional[str] = Field(description="Currency of the total amount.", example="EUR")
     confidence: float = Field(description="Confidence score between 0 and 1.")
@@ -176,11 +176,11 @@ def classify_pdf_document(pdf_path: Path, file_hash: str) -> DocumentMetadata:
 
 # ------------------- RENAMING & PROCESSING -------------------
 
-def rename_single_pdf(pdf_path: Path, file_hash: str, target_path: Path, known_hashes: set):
+def rename_single_pdf(pdf_path: Path, file_hash: str, processed_path: Path, known_hashes: set):
     try:
         metadata = classify_pdf_document(pdf_path, file_hash)
         filename = file_name_from_metadata(metadata, file_hash)
-        new_pdf_path = target_path / filename
+        new_pdf_path = processed_path / filename
 
         shutil.copy2(pdf_path, new_pdf_path)
 
@@ -192,11 +192,11 @@ def rename_single_pdf(pdf_path: Path, file_hash: str, target_path: Path, known_h
     except Exception as e:
         print(f"Failed to process {pdf_path.name}: {e}")
 
-def rename_pdf_files(pdf_paths, file_hash_map, known_hashes, target_path, max_workers=4):
+def rename_pdf_files(pdf_paths, file_hash_map, known_hashes, processed_path, max_workers=4):
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         list(tqdm(
             executor.map(
-                lambda p: rename_single_pdf(p, file_hash_map[p], target_path, known_hashes),
+                lambda p: rename_single_pdf(p, file_hash_map[p], processed_path, known_hashes),
                 pdf_paths
             ),
             total=len(pdf_paths)
@@ -297,39 +297,40 @@ def export_metadata_to_csv(output_path: Path, csv_output: Optional[str] = "metad
 
 # ------------------- MAIN -------------------
 
-def process_folder(source_path: str, target_path: str, task: str):
-    source_path = Path(source_path)
-    target_path = Path(target_path)  # Use the provided target_path instead of hardcoding
-    target_path.mkdir(parents=True, exist_ok=True)
+def process_folder(task: str, processed_path: str, raw_path: str = None):
+    if raw_path is not None:
+        raw_path = Path(raw_path)
+    processed_path = Path(processed_path)  # Use the provided processed_path instead of hardcoding
+    processed_path.mkdir(parents=True, exist_ok=True)
 
     if task == "extract":
         print("Building hash index from metadata files...")
-        known_hashes = set(build_output_hash_index(target_path).keys())  # Convert to set for efficiency
+        known_hashes = set(build_output_hash_index(processed_path).keys())  # Convert to set for efficiency
 
         print("Scanning for new PDFs...")
-        pdf_paths = find_pdf_files(source_path)
+        pdf_paths = find_pdf_files(raw_path)
         
         print(f"Calculating hashes for {len(pdf_paths)} PDFs...")
         file_hash_map = {pdf: hash_file(pdf) for pdf in tqdm(pdf_paths, desc="Hashing files")}
         files_to_process = [pdf for pdf in pdf_paths if file_hash_map[pdf] not in known_hashes]
 
         print(f"Found {len(files_to_process)} new PDFs.")
-        rename_pdf_files(files_to_process, file_hash_map, known_hashes, target_path)
+        rename_pdf_files(files_to_process, file_hash_map, known_hashes, processed_path)
         print("Extraction complete.")
 
     elif task == "rename":
         print("Renaming existing PDF files and metadata based on metadata...")
-        rename_existing_files(source_path)
+        rename_existing_files(processed_path)
         print("Renaming complete.")
 
     elif task == "validate":
         print("Validating existing metadata and PDFs...")
-        _ = validate_metadata(source_path)
+        _ = validate_metadata(processed_path)
         print("Validation complete.")
 
     elif task == "csv":
         print("Exporting metadata to CSV...")
-        export_metadata_to_csv(source_path)
+        export_metadata_to_csv(processed_path)
         print("CSV export complete.")
 
     else:
@@ -337,8 +338,13 @@ def process_folder(source_path: str, target_path: str, task: str):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Process a folder of PDF files.")
-    parser.add_argument("task", type=str, help="Specify task: 'extract', 'rename', or 'validate'.")
-    parser.add_argument("source_path", type=str, help="Path to documents folder.")
-    parser.add_argument("--target_path", type=str, default="./output/", help="Path to output folder.")
+    parser.add_argument("task", type=str, choices=['extract', 'rename', 'validate'], help="Specify task: 'extract', 'rename', or 'validate'.")
+    parser.add_argument("processed_path", type=str, help="Path to output folder.")
+    parser.add_argument("--raw_path", type=str, help="Path to documents folder (required for 'extract' task).")
     args = parser.parse_args()
-    process_folder(args.source_path, args.target_path, args.task)
+
+    # Manual check
+    if args.task == "extract" and not args.raw_path:
+        parser.error("the --raw_path argument is required when task is 'extract'.")
+
+    process_folder(args.task, args.processed_path, raw_path=args.raw_path)
