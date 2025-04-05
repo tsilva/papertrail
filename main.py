@@ -263,9 +263,9 @@ def rename_existing_files(output_path: Path):
         except Exception as e:
             print(f"Failed to rename {old_pdf_path.name}: {e}")
 
-def export_metadata_to_csv(output_path: Path, csv_output: Optional[str] = "metadata_export.csv"):
+def export_metadata_to_csv(processed_path: Path, csv_output_path: str):
     metadata_list = []
-    json_files = list(output_path.rglob("*.json"))
+    json_files = list(processed_path.rglob("*.json"))
 
     for metadata_path in tqdm(json_files, desc="Collecting metadata"):
         try:
@@ -290,16 +290,15 @@ def export_metadata_to_csv(output_path: Path, csv_output: Optional[str] = "metad
         # Optional: Reorder to put filename first
         cols = ["filename"] + [col for col in df.columns if col != "filename"]
         df = df[cols]
-        df.to_csv(csv_output, index=False)
-        print(f"\nExported {len(df)} entries to {csv_output}")
+        df.to_csv(csv_output_path, index=False)
+        print(f"\nExported {len(df)} entries to {csv_output_path}")
     else:
         print("\nNo valid metadata found to export.")
 
 # ------------------- MAIN -------------------
 
-def process_folder(task: str, processed_path: str, raw_path: str = None):
-    if raw_path is not None:
-        raw_path = Path(raw_path)
+def process_folder(task: str, processed_path: str, raw_path: str = None, csv_output_path: str = None):
+    if raw_path is not None: raw_path = Path(raw_path)
     processed_path = Path(processed_path)  # Use the provided processed_path instead of hardcoding
     processed_path.mkdir(parents=True, exist_ok=True)
 
@@ -330,7 +329,7 @@ def process_folder(task: str, processed_path: str, raw_path: str = None):
 
     elif task == "csv":
         print("Exporting metadata to CSV...")
-        export_metadata_to_csv(processed_path)
+        export_metadata_to_csv(processed_path, csv_output_path)
         print("CSV export complete.")
 
     else:
@@ -338,13 +337,22 @@ def process_folder(task: str, processed_path: str, raw_path: str = None):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Process a folder of PDF files.")
-    parser.add_argument("task", type=str, choices=['extract', 'rename', 'validate'], help="Specify task: 'extract', 'rename', or 'validate'.")
+    parser.add_argument("task", type=str, choices=['extract', 'rename', 'validate', 'csv'], help="Specify task: 'extract', 'rename', or 'validate'.")
     parser.add_argument("processed_path", type=str, help="Path to output folder.")
     parser.add_argument("--raw_path", type=str, help="Path to documents folder (required for 'extract' task).")
+    parser.add_argument("--csv_output_path", type=str, help="Path to output CSV file (for 'csv' task).")
     args = parser.parse_args()
 
-    # Manual check
-    if args.task == "extract" and not args.raw_path:
-        parser.error("the --raw_path argument is required when task is 'extract'.")
+    if not os.path.exists(args.processed_path): parser.error(f"The processed_path '{args.processed_path}' does not exist.")
+    if not os.path.isdir(args.processed_path): parser.error(f"The processed_path '{args.processed_path}' is not a directory.")
 
-    process_folder(args.task, args.processed_path, raw_path=args.raw_path)
+    if args.task == "extract":
+        if not args.raw_path: parser.error("the --raw_path argument is required when task is 'extract'.")
+        if not os.path.exists(args.raw_path): parser.error(f"The raw_path '{args.raw_path}' does not exist.")
+        if not os.path.isdir(args.raw_path): parser.error(f"The raw_path '{args.raw_path}' is not a directory.")
+
+    if args.task == "csv":
+        if not args.csv_output_path: parser.error("the --csv_output_path argument is required when task is 'csv'.")
+        if not args.csv_output_path.endswith(".csv"): parser.error("the --csv_output_path argument must end with '.csv'.")
+
+    process_folder(args.task, args.processed_path, raw_path=args.raw_path, csv_output_path=args.csv_output_path)
