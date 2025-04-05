@@ -273,13 +273,28 @@ def export_metadata_to_excel(processed_path: Path, excel_output_path: str):
                 data = json.load(f)
             metadata = DocumentMetadata.model_validate(data)
             metadata_dict = metadata.model_dump()
-            
+
             # Remove 'reasoning' field
             metadata_dict.pop("reasoning", None)
 
             # Add filename (corresponding PDF)
             pdf_path = metadata_path.with_suffix(".pdf")
-            metadata_dict["filename"] = pdf_path.name if pdf_path.exists() else ""
+            filename = pdf_path.name if pdf_path.exists() else ""
+            metadata_dict["filename"] = filename
+
+            # Add filename length
+            metadata_dict["filename_length"] = len(filename)
+
+            # Extract year and month from issue_date
+            try:
+                # Assuming YYYY-MM-DD format
+                date_parts = metadata.issue_date.split('-')
+                metadata_dict["year"] = int(date_parts[0])
+                metadata_dict["month"] = int(date_parts[1])
+            except (IndexError, ValueError, AttributeError):
+                # Handle cases where date is missing or malformed
+                metadata_dict["year"] = None
+                metadata_dict["month"] = None
 
             metadata_list.append(metadata_dict)
         except Exception as e:
@@ -287,9 +302,10 @@ def export_metadata_to_excel(processed_path: Path, excel_output_path: str):
 
     if metadata_list:
         df = pd.DataFrame(metadata_list)
-        # Optional: Reorder to put filename first
-        cols = ["filename"] + [col for col in df.columns if col != "filename"]
-        df = df[cols]
+        # Optional: Reorder to put filename, length, year, month first
+        base_cols = ["filename", "filename_length", "year", "month"]
+        other_cols = [col for col in df.columns if col not in base_cols]
+        df = df[base_cols + other_cols]
         df.to_excel(excel_output_path, index=False)
         print(f"\nExported {len(df)} entries to {excel_output_path}")
     else:
