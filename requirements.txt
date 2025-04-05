@@ -4,3 +4,4 @@ anthropic
 pdf2image
 tqdm
 Pillow
+openpyxl
