@@ -306,7 +306,17 @@ def export_metadata_to_excel(processed_path: Path, excel_output_path: str):
         base_cols = ["filename", "filename_length", "year", "month"]
         other_cols = [col for col in df.columns if col not in base_cols]
         df = df[base_cols + other_cols]
-        df.to_excel(excel_output_path, index=False)
+
+        # Use ExcelWriter to gain access to the worksheet object
+        with pd.ExcelWriter(excel_output_path, engine='openpyxl') as writer:
+            df.to_excel(writer, index=False, sheet_name='Sheet1')
+
+            # Access the workbook and worksheet objects
+            worksheet = writer.sheets['Sheet1']
+
+            # Freeze the top row (row 1)
+            worksheet.freeze_panes = 'A2'
+
         print(f"\nExported {len(df)} entries to {excel_output_path}")
     else:
         print("\nNo valid metadata found to export.")
