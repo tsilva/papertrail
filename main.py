@@ -27,7 +27,10 @@ ANTHROPIC_MODEL_ID = os.getenv("ANTHROPIC_MODEL_ID")
 
 # ------------------- ENUMS & MODELS -------------------
 
-with open("config/document_types.json", "r", encoding="utf-8") as f:
+# Always resolve config/document_types.json relative to this script's directory
+CONFIG_DIR = Path(__file__).parent / "config"
+DOCUMENT_TYPES_PATH = CONFIG_DIR / "document_types.json"
+with open(DOCUMENT_TYPES_PATH, "r", encoding="utf-8") as f:
     DOCUMENT_TYPES = json.load(f)
 
 def create_dynamic_enum(name, data):
