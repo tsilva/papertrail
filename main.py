@@ -339,11 +339,30 @@ def export_metadata_to_excel(processed_path: Path, excel_output_path: str):
     else:
         print("\nNo valid metadata found to export.")
 
+def copy_matching_files(processed_path: Path, regex_pattern: str, dest_folder: Path):
+    """
+    Copy all PDF and JSON files in processed_path whose filenames match regex_pattern to dest_folder.
+    """
+    dest_folder.mkdir(parents=True, exist_ok=True)
+    pattern = re.compile(regex_pattern)
+    files_copied = 0
+
+    for file in processed_path.iterdir():
+        if not file.is_file():
+            continue
+        if not (file.suffix.lower() in [".pdf", ".json"]):
+            continue
+        if pattern.search(file.name):
+            shutil.copy2(file, dest_folder / file.name)
+            files_copied += 1
+
+    print(f"Copied {files_copied} files matching '{regex_pattern}' to {dest_folder}")
+
 # ------------------- MAIN -------------------
 
-def process_folder(task: str, processed_path: str, raw_path: str = None, excel_output_path: str = None):
+def process_folder(task: str, processed_path: str, raw_path: str = None, excel_output_path: str = None, regex_pattern: str = None, copy_dest_folder: str = None):
     if raw_path is not None: raw_path = Path(raw_path)
-    processed_path = Path(processed_path)  # Use the provided processed_path instead of hardcoding
+    processed_path = Path(processed_path)
     processed_path.mkdir(parents=True, exist_ok=True)
 
     if task == "extract":
@@ -376,15 +395,24 @@ def process_folder(task: str, processed_path: str, raw_path: str = None, excel_o
         export_metadata_to_excel(processed_path, excel_output_path)
         print("Excel export complete.")
 
+    elif task == "copy-matching":
+        if not regex_pattern or not copy_dest_folder:
+            print("For 'copy-matching', --regex_pattern and --copy_dest_folder are required.")
+            return
+        copy_matching_files(processed_path, regex_pattern, Path(copy_dest_folder))
+        print("Copy-matching complete.")
+
     else:
-        print("Invalid task specified. Use 'extract', 'rename', 'validate', or 'excel'.")
+        print("Invalid task specified. Use 'extract', 'rename', 'validate', 'excel', or 'copy-matching'.")
 
 def main():
     parser = argparse.ArgumentParser(description="Process a folder of PDF files.")
-    parser.add_argument("task", type=str, choices=['extract', 'rename', 'validate', 'excel'], help="Specify task: 'extract', 'rename', 'validate', or 'excel'.")
+    parser.add_argument("task", type=str, choices=['extract', 'rename', 'validate', 'excel', 'copy-matching'], help="Specify task: 'extract', 'rename', 'validate', 'excel', or 'copy-matching'.")
     parser.add_argument("processed_path", type=str, help="Path to output folder.")
     parser.add_argument("--raw_path", type=str, help="Path to documents folder (required for 'extract' task).")
     parser.add_argument("--excel_output_path", type=str, help="Path to output Excel file (for 'excel' task).")
+    parser.add_argument("--regex_pattern", type=str, help="Regex pattern for matching filenames (for 'copy-matching' task).")
+    parser.add_argument("--copy_dest_folder", type=str, help="Destination folder for copied files (for 'copy-matching' task).")
     args = parser.parse_args()
 
     if not os.path.exists(args.processed_path): parser.error(f"The processed_path '{args.processed_path}' does not exist.")
@@ -399,7 +427,21 @@ def main():
         if not args.excel_output_path: parser.error("the --excel_output_path argument is required when task is 'excel'.")
         if not args.excel_output_path.endswith(".xlsx"): parser.error("the --excel_output_path argument must end with '.xlsx'.")
 
-    process_folder(args.task, args.processed_path, raw_path=args.raw_path, excel_output_path=args.excel_output_path)
+    if args.task == "copy-matching":
+        if not args.regex_pattern: parser.error("the --regex_pattern argument is required when task is 'copy-matching'.")
+        if not args.copy_dest_folder: parser.error("the --copy_dest_folder argument is required when task is 'copy-matching'.")
+        if not os.path.exists(args.copy_dest_folder):
+            os.makedirs(args.copy_dest_folder, exist_ok=True)
+        if not os.path.isdir(args.copy_dest_folder): parser.error(f"The copy_dest_folder '{args.copy_dest_folder}' is not a directory.")
+
+    process_folder(
+        args.task,
+        args.processed_path,
+        raw_path=args.raw_path,
+        excel_output_path=args.excel_output_path,
+        regex_pattern=args.regex_pattern,
+        copy_dest_folder=args.copy_dest_folder
+    )
 
 if __name__ == "__main__":
     main()

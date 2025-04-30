@@ -1,7 +1,0 @@
-python-dotenv
-pydantic
-anthropic
-pdf2image
-tqdm
-Pillow
-openpyxl
