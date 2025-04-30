@@ -361,7 +361,7 @@ def process_folder(task: str, processed_path: str, raw_path: str = None, excel_o
     else:
         print("Invalid task specified. Use 'extract', 'rename', 'validate', or 'excel'.")
 
-if __name__ == "__main__":
+def main():
     parser = argparse.ArgumentParser(description="Process a folder of PDF files.")
     parser.add_argument("task", type=str, choices=['extract', 'rename', 'validate', 'excel'], help="Specify task: 'extract', 'rename', 'validate', or 'excel'.")
     parser.add_argument("processed_path", type=str, help="Path to output folder.")
@@ -382,3 +382,6 @@ if __name__ == "__main__":
         if not args.excel_output_path.endswith(".xlsx"): parser.error("the --excel_output_path argument must end with '.xlsx'.")
 
     process_folder(args.task, args.processed_path, raw_path=args.raw_path, excel_output_path=args.excel_output_path)
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,27 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "documentor"
+version = "0.1.0"
+description = "Process and classify PDF documents, extract metadata, and export to Excel"
+authors = [
+    { name = "Tiago Silva", email = "eng.tiago.silva@gmail.com" }
+]
+dependencies = [
+    "tqdm",
+    "python-dotenv",
+    "anthropic",
+    "PyMuPDF",
+    "pandas",
+    "pydantic",
+    "openpyxl"
+]
+requires-python = ">=3.7"
+
+[project.scripts]
+documentor = "main:main"
+
+[tool.hatch.build.targets.wheel]
+include = ["main.py"]
