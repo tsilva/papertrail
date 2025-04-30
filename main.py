@@ -27,11 +27,20 @@ ANTHROPIC_MODEL_ID = os.getenv("ANTHROPIC_MODEL_ID")
 
 # ------------------- ENUMS & MODELS -------------------
 
-# Always resolve config/document_types.json relative to this script's directory
-CONFIG_DIR = Path(__file__).parent / "config"
-DOCUMENT_TYPES_PATH = CONFIG_DIR / "document_types.json"
-with open(DOCUMENT_TYPES_PATH, "r", encoding="utf-8") as f:
-    DOCUMENT_TYPES = json.load(f)
+import importlib.resources
+
+def load_document_types():
+    # Try to load from installed package data, fallback to local config directory
+    try:
+        with importlib.resources.files("config").joinpath("document_types.json").open("r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        # Fallback: try relative to this script (for development)
+        fallback_path = Path(__file__).parent / "config" / "document_types.json"
+        with open(fallback_path, "r", encoding="utf-8") as f:
+            return json.load(f)
+
+DOCUMENT_TYPES = load_document_types()
 
 def create_dynamic_enum(name, data):
     return Enum(name, dict([(k, k) for k in data]), type=str)
