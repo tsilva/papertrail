@@ -17,12 +17,8 @@ Documentor uses Claude AI to analyze PDF documents, extract key metadata (dates,
 git clone https://github.com/tsilva/documentor.git
 cd documentor
 
-# Install dependencies
-pip install -r requirements.txt
-
-# Set up environment variables
-cp .env.example .env
-# Edit .env with your Anthropic API key
+# Install globally with pipx
+pipx install . --force
 ```
 
 ## 🛠️ Usage
@@ -32,25 +28,25 @@ Documentor offers several commands for document management:
 ### Extract metadata from PDFs
 
 ```bash
-python main.py extract /path/to/pdfs --target_path ./output/
+documentor extract /path/to/output --raw_path /path/to/pdfs
 ```
 
 ### Rename existing files based on metadata
 
 ```bash
-python main.py rename /path/to/output/directory
+documentor rename /path/to/output
 ```
 
 ### Validate metadata consistency
 
 ```bash
-python main.py validate /path/to/output/directory
+documentor validate /path/to/output
 ```
 
-### Export metadata to CSV
+### Export metadata to Excel
 
 ```bash
-python main.py csv /path/to/output/directory
+documentor excel /path/to/output --excel_output_path ./output.xlsx
 ```
 
 ## 🔍 How It Works
