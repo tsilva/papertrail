@@ -14,6 +14,7 @@ from enum import Enum
 from pathlib import Path
 from typing import Optional
 
+import sys
 import anthropic
 import fitz
 import pandas as pd
@@ -30,15 +31,20 @@ ANTHROPIC_MODEL_ID = os.getenv("ANTHROPIC_MODEL_ID")
 import importlib.resources
 
 def load_document_types():
-    # Try to load from installed package data, fallback to local config directory
-    try:
-        with importlib.resources.files("config").joinpath("document_types.json").open("r", encoding="utf-8") as f:
-            return json.load(f)
-    except Exception:
-        # Fallback: try relative to this script (for development)
-        fallback_path = Path(__file__).parent / "config" / "document_types.json"
-        with open(fallback_path, "r", encoding="utf-8") as f:
-            return json.load(f)
+    # Try to load from config/document_types.json relative to the script location (works for both pipx and dev)
+    candidates = [
+        Path(__file__).parent / "config" / "document_types.json",  # dev and editable install
+        Path(sys.argv[0]).parent / "config" / "document_types.json",  # pipx global bin
+        Path.cwd() / "config" / "document_types.json",  # user runs from project root
+    ]
+    for path in candidates:
+        if path.exists():
+            with open(path, "r", encoding="utf-8") as f:
+                return json.load(f)
+    raise FileNotFoundError(
+        "Could not find 'config/document_types.json'. "
+        "Make sure the config directory is present next to the script or in your working directory."
+    )
 
 DOCUMENT_TYPES = load_document_types()
 
