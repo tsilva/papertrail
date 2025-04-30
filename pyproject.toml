@@ -24,4 +24,7 @@ requires-python = ">=3.7"
 documentor = "main:main"
 
 [tool.hatch.build.targets.wheel]
-include = ["main.py"]
+include = [
+    "main.py",
+    "config/**"
+]
