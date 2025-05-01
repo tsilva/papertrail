@@ -21,6 +21,7 @@
     "notification",
     "iban",
     "transaction-note",
+    "salary-receipt",
     "vacation-pay-slip",
     "unknown"
 ]
