@@ -31,6 +31,7 @@
     "irc-tax-payment-slip",
     "irc-tax-settlement-statement",
     "iuc-tax-payment-slip",
+    "irs-irc-tax-withholding-declaration",
     "labour-compensation-fund-payment-slip",
     "unknown"
 ]
