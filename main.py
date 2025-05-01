@@ -343,18 +343,18 @@ def export_metadata_to_excel(processed_path: Path, excel_output_path: str):
         df = pd.DataFrame(metadata_list)
         # Set column order as requested
         ordered_cols = [
-            "hash",
-            "filename",
-            "filename_length",
+            "confidence",
             "issue_date",
             "year",
             "month",
+            "hash",
+            "filename",
+            "filename_length",
             "document_type",
             "issuing_party",
             "service_name",
             "total_amount",
-            "total_amount_currency",
-            "confidence"
+            "total_amount_currency"
         ]
  
         # Add any extra columns at the end (if present)
@@ -382,7 +382,15 @@ def export_metadata_to_excel(processed_path: Path, excel_output_path: str):
                     max_len = max(
                         [len(str(val)) if val is not None else 0 for val in df[col].values] + [len(col)]
                     )
+                    max_len = min(max_len, 100)  # Truncate to max 100
                     worksheet.column_dimensions[chr(64 + col_idx)].width = max_len + 2
+
+            # Hide specified columns by default
+            hidden_cols = ["year", "month", "filename_length"]
+            for col in hidden_cols:
+                if col in df.columns:
+                    col_idx = df.columns.get_loc(col) + 1  # openpyxl is 1-based
+                    worksheet.column_dimensions[chr(64 + col_idx)].hidden = True
 
         print(f"\nExported {len(df)} entries to {excel_output_path}")
     else:
