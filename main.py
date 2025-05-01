@@ -419,9 +419,47 @@ def copy_matching_files(processed_path: Path, regex_pattern: str, dest_folder: P
 
     print(f"Copied {files_copied} files matching '{regex_pattern}' to {dest_folder}")
 
+def check_files_exist(target_folder: Path, validation_schema_path: Path):
+    """
+    For each entry in the validation schema, check if there is at least one .json file in the target folder
+    whose contents match all key/value pairs in the entry.
+    """
+    # Load validation schema
+    with open(validation_schema_path, "r", encoding="utf-8") as f:
+        checks = json.load(f)
+
+    # Load all .json files in target_folder
+    json_files = list(target_folder.glob("*.json"))
+    file_data = []
+    for json_path in json_files:
+        try:
+            with open(json_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            file_data.append((json_path, data))
+        except Exception as e:
+            print(f"Skipping {json_path.name}: {e}")
+
+    all_passed = True
+    for idx, check in enumerate(checks):
+        found = False
+        for json_path, data in file_data:
+            if all(str(data.get(k, "")).strip() == str(v).strip() for k, v in check.items()):
+                found = True
+                break
+        if found:
+            print(f"✅ Check {idx+1}: {check} -- FOUND")
+        else:
+            print(f"❌ Check {idx+1}: {check} -- NOT FOUND")
+            all_passed = False
+
+    if all_passed:
+        print("\nAll file existence checks passed.")
+    else:
+        print("\nSome file existence checks failed.")
+
 # ------------------- MAIN -------------------
 
-def process_folder(task: str, processed_path: str, raw_path: str = None, excel_output_path: str = None, regex_pattern: str = None, copy_dest_folder: str = None):
+def process_folder(task: str, processed_path: str, raw_path: str = None, excel_output_path: str = None, regex_pattern: str = None, copy_dest_folder: str = None, check_target_folder: str = None, check_schema_path: str = None):
     if raw_path is not None: raw_path = Path(raw_path)
     processed_path = Path(processed_path)
     processed_path.mkdir(parents=True, exist_ok=True)
@@ -463,17 +501,26 @@ def process_folder(task: str, processed_path: str, raw_path: str = None, excel_o
         copy_matching_files(processed_path, regex_pattern, Path(copy_dest_folder))
         print("Copy-matching complete.")
 
+    elif task == "check_files_exist":
+        if not check_target_folder or not check_schema_path:
+            print("For 'check_files_exist', --check_target_folder and --check_schema_path are required.")
+            return
+        check_files_exist(Path(check_target_folder), Path(check_schema_path))
+        print("File existence check complete.")
+
     else:
-        print("Invalid task specified. Use 'extract', 'rename', 'validate', 'excel', or 'copy-matching'.")
+        print("Invalid task specified. Use 'extract', 'rename', 'validate', 'excel', 'copy-matching', or 'check_files_exist'.")
 
 def main():
     parser = argparse.ArgumentParser(description="Process a folder of PDF files.")
-    parser.add_argument("task", type=str, choices=['extract', 'rename', 'validate', 'excel', 'copy-matching'], help="Specify task: 'extract', 'rename', 'validate', 'excel', or 'copy-matching'.")
+    parser.add_argument("task", type=str, choices=['extract', 'rename', 'validate', 'excel', 'copy-matching', 'check_files_exist'], help="Specify task: 'extract', 'rename', 'validate', 'excel', 'copy-matching', or 'check_files_exist'.")
     parser.add_argument("processed_path", type=str, help="Path to output folder.")
     parser.add_argument("--raw_path", type=str, help="Path to documents folder (required for 'extract' task).")
     parser.add_argument("--excel_output_path", type=str, help="Path to output Excel file (for 'excel' task).")
     parser.add_argument("--regex_pattern", type=str, help="Regex pattern for matching filenames (for 'copy-matching' task).")
     parser.add_argument("--copy_dest_folder", type=str, help="Destination folder for copied files (for 'copy-matching' task).")
+    parser.add_argument("--check_target_folder", type=str, help="Target folder for file existence check (for 'check_files_exist' task).")
+    parser.add_argument("--check_schema_path", type=str, help="Validation schema path (for 'check_files_exist' task).")
     args = parser.parse_args()
 
     if not os.path.exists(args.processed_path): parser.error(f"The processed_path '{args.processed_path}' does not exist.")
@@ -495,13 +542,22 @@ def main():
             os.makedirs(args.copy_dest_folder, exist_ok=True)
         if not os.path.isdir(args.copy_dest_folder): parser.error(f"The copy_dest_folder '{args.copy_dest_folder}' is not a directory.")
 
+    if args.task == "check_files_exist":
+        if not args.check_target_folder: parser.error("the --check_target_folder argument is required when task is 'check_files_exist'.")
+        if not args.check_schema_path: parser.error("the --check_schema_path argument is required when task is 'check_files_exist'.")
+        if not os.path.exists(args.check_target_folder): parser.error(f"The check_target_folder '{args.check_target_folder}' does not exist.")
+        if not os.path.isdir(args.check_target_folder): parser.error(f"The check_target_folder '{args.check_target_folder}' is not a directory.")
+        if not os.path.exists(args.check_schema_path): parser.error(f"The check_schema_path '{args.check_schema_path}' does not exist.")
+
     process_folder(
         args.task,
         args.processed_path,
         raw_path=args.raw_path,
         excel_output_path=args.excel_output_path,
         regex_pattern=args.regex_pattern,
-        copy_dest_folder=args.copy_dest_folder
+        copy_dest_folder=args.copy_dest_folder,
+        check_target_folder=args.check_target_folder,
+        check_schema_path=args.check_schema_path
     )
 
 if __name__ == "__main__":

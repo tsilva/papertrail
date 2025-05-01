@@ -1,0 +1,20 @@
+[
+  {
+    "document_type": "invoice",
+    "service_name": "ChatGPT Plus",
+    "issuing_party": "OpenAI"
+  },
+  {
+    "document_type": "invoice",
+    "service_name": "Google One",
+    "issuing_party": "Google"
+  },
+  { "document_type": "invoice", "issuing_party": "Vodafone" },
+  { "document_type": "invoice", "issuing_party": "Fidelidade" },
+  { "document_type": "salary-slip" },
+  { "document_type": "vacation-pay-slip" },
+  { "document_type": "salary-receipt" },
+  { "document_type": "social-security-extract" },
+  { "document_type": "bank-transfer-list", "issuing_party": "MilleniumBCP" },
+  { "document_type": "bank-transfer-list", "issuing_party": "BPI" }
+]
