@@ -346,9 +346,9 @@ def export_metadata_to_excel(processed_path: Path, excel_output_path: str):
             "hash",
             "filename",
             "filename_length",
+            "issue_date",
             "year",
             "month",
-            "issue_date",
             "document_type",
             "issuing_party",
             "service_name",
@@ -356,6 +356,7 @@ def export_metadata_to_excel(processed_path: Path, excel_output_path: str):
             "total_amount_currency",
             "confidence"
         ]
+ 
         # Add any extra columns at the end (if present)
         extra_cols = [col for col in df.columns if col not in ordered_cols]
         df = df[ordered_cols + extra_cols]
@@ -374,13 +375,14 @@ def export_metadata_to_excel(processed_path: Path, excel_output_path: str):
             # Freeze the top row (row 1)
             worksheet.freeze_panes = 'A2'
 
-            # Snap issue_date column width to content width
-            if "issue_date" in df.columns:
-                col_idx = df.columns.get_loc("issue_date") + 1  # openpyxl is 1-based
-                max_len = max(
-                    [len(str(val)) for val in df["issue_date"].values] + [len("issue_date")]
-                )
-                worksheet.column_dimensions[chr(64 + col_idx)].width = max_len + 2
+            # Snap requested columns' width to content width
+            for col in ordered_cols:
+                if col in df.columns:
+                    col_idx = df.columns.get_loc(col) + 1  # openpyxl is 1-based
+                    max_len = max(
+                        [len(str(val)) if val is not None else 0 for val in df[col].values] + [len(col)]
+                    )
+                    worksheet.column_dimensions[chr(64 + col_idx)].width = max_len + 2
 
         print(f"\nExported {len(df)} entries to {excel_output_path}")
     else:
