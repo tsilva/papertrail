@@ -31,7 +31,8 @@ if not ENV_PATH.exists():
     if example_env.exists():
         shutil.copy(example_env, ENV_PATH)
     else:
-        ENV_PATH.write_text("# Place your ANTHROPIC_MODEL_ID=... here\n")
+        # fallback: create a blank file if .env.example is missing
+        ENV_PATH.touch()
     print(f"✅ Created .env at {ENV_PATH}. Edit this file before rerunning.")
     sys.exit(0)
 
