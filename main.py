@@ -208,6 +208,7 @@ def rename_single_pdf(pdf_path: Path, file_hash: str, processed_path: Path, know
         known_hashes.add(file_hash)
         print(f"Processed: {pdf_path.name} → {filename}")
     except Exception as e:
+        print(e)
         print(f"Failed to process {pdf_path.name}: {e}")
 
 def rename_pdf_files(pdf_paths, file_hash_map, known_hashes, processed_path, max_workers=4):
