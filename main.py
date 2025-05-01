@@ -181,15 +181,20 @@ def classify_pdf_document(pdf_path: Path, file_hash: str) -> DocumentMetadata:
             }],
             tools=TOOLS
         )
-
+        
+        print("1")
         tool_result = next((c.input for c in response.content if hasattr(c, "input")), None)
         if not tool_result:
             raise ValueError("Claude did not return structured classification.")
-
+        
+        print("2")
         metadata = DocumentMetadata.model_validate(tool_result)
         metadata.hash = file_hash
+        
+        print("3")
         return metadata
     except Exception as e:
+        print(e)
         raise RuntimeError(f"Classification failed for: {pdf_path}") from e
 
 # ------------------- RENAMING & PROCESSING -------------------
