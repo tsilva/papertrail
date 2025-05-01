@@ -435,7 +435,6 @@ def process_folder(task: str, processed_path: str, raw_path: str = None, excel_o
         
         print(f"Calculating hashes for {len(pdf_paths)} PDFs...")
         file_hash_map = {pdf: hash_file(pdf) for pdf in tqdm(pdf_paths, desc="Hashing files")}
-        print(file_hash_map)
         files_to_process = [pdf for pdf in pdf_paths if file_hash_map[pdf] not in known_hashes]
 
         print(f"Found {len(files_to_process)} new PDFs.")
