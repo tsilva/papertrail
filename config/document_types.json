@@ -23,5 +23,7 @@
     "transaction-note",
     "salary-receipt",
     "vacation-pay-slip",
+    "trial-balance",
+    "income-statement",
     "unknown"
 ]
