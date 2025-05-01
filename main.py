@@ -157,7 +157,10 @@ def find_pdf_files(folder_path: Path):
     return [
         Path(root) / file
         for root, _, files in os.walk(folder_path)
-        for file in files if file.lower().endswith('.pdf')
+        for file in files
+        if file.lower().endswith('.pdf')
+        and not file.startswith('.')
+        and (Path(root) / file).stat().st_size > 0
     ]
 
 # ------------------- CLASSIFICATION -------------------
