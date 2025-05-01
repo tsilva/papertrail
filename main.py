@@ -1,6 +1,3 @@
-from dotenv import load_dotenv
-load_dotenv(override=True)
-
 import os
 import re
 import io
@@ -23,6 +20,23 @@ from pydantic import BaseModel, Field, field_validator
 from concurrent.futures import ThreadPoolExecutor
 
 # ------------------- CONFIG -------------------
+
+# Always load .env from ~/.documentor/.env, create if missing
+CONFIG_DIR = Path.home() / ".documentor"
+ENV_PATH = CONFIG_DIR / ".env"
+CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+if not ENV_PATH.exists():
+    # Try to copy from a template in the package, or create a blank one
+    example_env = Path(__file__).parent / "config" / ".env.example"
+    if example_env.exists():
+        shutil.copy(example_env, ENV_PATH)
+    else:
+        ENV_PATH.write_text("# Place your ANTHROPIC_MODEL_ID=... here\n")
+    print(f"✅ Created .env at {ENV_PATH}. Edit this file before rerunning.")
+    sys.exit(0)
+
+from dotenv import load_dotenv
+load_dotenv(dotenv_path=ENV_PATH, override=True)
 
 ANTHROPIC_MODEL_ID = os.getenv("ANTHROPIC_MODEL_ID")
 
