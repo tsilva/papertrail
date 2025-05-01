@@ -27,5 +27,6 @@
     "trial-balance",
     "income-statement",
     "social-security-extract",
+    "irs-monthly-tax-statement",
     "unknown"
 ]
