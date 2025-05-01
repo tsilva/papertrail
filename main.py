@@ -341,10 +341,28 @@ def export_metadata_to_excel(processed_path: Path, excel_output_path: str):
 
     if metadata_list:
         df = pd.DataFrame(metadata_list)
-        # Optional: Reorder to put filename, length, year, month first
-        base_cols = ["filename", "filename_length", "year", "month"]
-        other_cols = [col for col in df.columns if col not in base_cols]
-        df = df[base_cols + other_cols]
+        # Set column order as requested
+        ordered_cols = [
+            "hash",
+            "filename",
+            "filename_length",
+            "year",
+            "month",
+            "issue_date",
+            "document_type",
+            "issuing_party",
+            "service_name",
+            "total_amount",
+            "total_amount_currency",
+            "confidence"
+        ]
+        # Add any extra columns at the end (if present)
+        extra_cols = [col for col in df.columns if col not in ordered_cols]
+        df = df[ordered_cols + extra_cols]
+
+        # Sort by issue_date descending (most recent first)
+        if "issue_date" in df.columns:
+            df = df.sort_values(by="issue_date", ascending=False)
 
         # Use ExcelWriter to gain access to the worksheet object
         with pd.ExcelWriter(excel_output_path, engine='openpyxl') as writer:
