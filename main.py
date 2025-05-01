@@ -374,6 +374,14 @@ def export_metadata_to_excel(processed_path: Path, excel_output_path: str):
             # Freeze the top row (row 1)
             worksheet.freeze_panes = 'A2'
 
+            # Snap issue_date column width to content width
+            if "issue_date" in df.columns:
+                col_idx = df.columns.get_loc("issue_date") + 1  # openpyxl is 1-based
+                max_len = max(
+                    [len(str(val)) for val in df["issue_date"].values] + [len("issue_date")]
+                )
+                worksheet.column_dimensions[chr(64 + col_idx)].width = max_len + 2
+
         print(f"\nExported {len(df)} entries to {excel_output_path}")
     else:
         print("\nNo valid metadata found to export.")
