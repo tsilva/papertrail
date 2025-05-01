@@ -28,5 +28,6 @@
     "income-statement",
     "social-security-extract",
     "irs-monthly-tax-statement",
+    "irc-tax-payment-slip",
     "unknown"
 ]
