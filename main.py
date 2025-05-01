@@ -459,7 +459,7 @@ def check_files_exist(target_folder: Path, validation_schema_path: Path):
 
 # ------------------- MAIN -------------------
 
-def process_folder(task: str, processed_path: str, raw_path: str = None, excel_output_path: str = None, regex_pattern: str = None, copy_dest_folder: str = None, check_target_folder: str = None, check_schema_path: str = None):
+def process_folder(task: str, processed_path: str, raw_path: str = None, excel_output_path: str = None, regex_pattern: str = None, copy_dest_folder: str = None, check_schema_path: str = None):
     if raw_path is not None: raw_path = Path(raw_path)
     processed_path = Path(processed_path)
     processed_path.mkdir(parents=True, exist_ok=True)
@@ -502,10 +502,13 @@ def process_folder(task: str, processed_path: str, raw_path: str = None, excel_o
         print("Copy-matching complete.")
 
     elif task == "check_files_exist":
-        if not check_target_folder or not check_schema_path:
-            print("For 'check_files_exist', --check_target_folder and --check_schema_path are required.")
+        if not check_schema_path:
+            print("For 'check_files_exist', --check_schema_path is required.")
             return
-        check_files_exist(Path(check_target_folder), Path(check_schema_path))
+        if not os.path.exists(check_schema_path): 
+            print(f"The check_schema_path '{check_schema_path}' does not exist.")
+            return
+        check_files_exist(processed_path, Path(check_schema_path))
         print("File existence check complete.")
 
     else:
@@ -519,7 +522,6 @@ def main():
     parser.add_argument("--excel_output_path", type=str, help="Path to output Excel file (for 'excel' task).")
     parser.add_argument("--regex_pattern", type=str, help="Regex pattern for matching filenames (for 'copy-matching' task).")
     parser.add_argument("--copy_dest_folder", type=str, help="Destination folder for copied files (for 'copy-matching' task).")
-    parser.add_argument("--check_target_folder", type=str, help="Target folder for file existence check (for 'check_files_exist' task).")
     parser.add_argument("--check_schema_path", type=str, help="Validation schema path (for 'check_files_exist' task).")
     args = parser.parse_args()
 
@@ -543,10 +545,7 @@ def main():
         if not os.path.isdir(args.copy_dest_folder): parser.error(f"The copy_dest_folder '{args.copy_dest_folder}' is not a directory.")
 
     if args.task == "check_files_exist":
-        if not args.check_target_folder: parser.error("the --check_target_folder argument is required when task is 'check_files_exist'.")
         if not args.check_schema_path: parser.error("the --check_schema_path argument is required when task is 'check_files_exist'.")
-        if not os.path.exists(args.check_target_folder): parser.error(f"The check_target_folder '{args.check_target_folder}' does not exist.")
-        if not os.path.isdir(args.check_target_folder): parser.error(f"The check_target_folder '{args.check_target_folder}' is not a directory.")
         if not os.path.exists(args.check_schema_path): parser.error(f"The check_schema_path '{args.check_schema_path}' does not exist.")
 
     process_folder(
@@ -556,7 +555,6 @@ def main():
         excel_output_path=args.excel_output_path,
         regex_pattern=args.regex_pattern,
         copy_dest_folder=args.copy_dest_folder,
-        check_target_folder=args.check_target_folder,
         check_schema_path=args.check_schema_path
     )
 
