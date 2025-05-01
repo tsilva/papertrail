@@ -35,5 +35,7 @@
     "irs-irc-tax-withholding-declaration",
     "labour-compensation-fund-payment-slip",
     "bank-transaction-list",
+    "bank-commision-statement",
+    "bank-investment-statement",
     "unknown"
 ]
