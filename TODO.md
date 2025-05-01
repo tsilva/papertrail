@@ -1,3 +1,0 @@
-- Convert to command-line tool installable with pipx
-- Add ability to run validation checks (eg: expected recurring documents)
-- Add support for unzipping protected zip files
