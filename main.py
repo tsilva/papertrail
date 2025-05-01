@@ -331,9 +331,17 @@ def export_metadata_to_excel(processed_path: Path, excel_output_path: str):
                 metadata_dict["year"] = int(date_parts[0])
                 metadata_dict["month"] = int(date_parts[1])
             except (IndexError, ValueError, AttributeError):
-                # Handle cases where date is missing or malformed
                 metadata_dict["year"] = None
                 metadata_dict["month"] = None
+
+            # Ensure document_type is just the value, not Enum repr
+            if isinstance(metadata_dict.get("document_type"), Enum):
+                metadata_dict["document_type"] = metadata_dict["document_type"].value
+            elif (
+                isinstance(metadata_dict.get("document_type"), str)
+                and metadata_dict["document_type"].startswith("DocumentType.")
+            ):
+                metadata_dict["document_type"] = metadata_dict["document_type"].split(".", 1)[-1]
 
             metadata_list.append(metadata_dict)
         except Exception as e:
@@ -356,7 +364,6 @@ def export_metadata_to_excel(processed_path: Path, excel_output_path: str):
             "total_amount",
             "total_amount_currency"
         ]
- 
         # Add any extra columns at the end (if present)
         extra_cols = [col for col in df.columns if col not in ordered_cols]
         df = df[ordered_cols + extra_cols]
@@ -369,10 +376,7 @@ def export_metadata_to_excel(processed_path: Path, excel_output_path: str):
         with pd.ExcelWriter(excel_output_path, engine='openpyxl') as writer:
             df.to_excel(writer, index=False, sheet_name='Sheet1')
 
-            # Access the workbook and worksheet objects
             worksheet = writer.sheets['Sheet1']
-
-            # Freeze the top row (row 1)
             worksheet.freeze_panes = 'A2'
 
             # Snap requested columns' width to content width
