@@ -37,5 +37,7 @@
     "bank-transaction-list",
     "bank-commission-statement",
     "bank-investment-statement",
+    "insurance-contract-signup",
+    "insurance-premium-notice",
     "unknown"
 ]
