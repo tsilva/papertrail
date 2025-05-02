@@ -217,13 +217,22 @@ def classify_pdf_document(pdf_path: Path, file_hash: str) -> DocumentMetadata:
             temperature=0,
             system=[{
                 "type": "text",
-                "text": "You are a document classification assistant. Use layout, structure, and content to determine type.",
+                "text": (
+                    "You are an expert document classification and extraction assistant. "
+                    "Given a document image, your job is to extract structured metadata fields as accurately as possible. "
+                    "Use all available visual, textual, and layout cues. "
+                    "Be strict about field formats (e.g., dates as YYYY-MM-DD, currency as ISO code). "
+                    "If a field is missing or ambiguous, leave it blank or null. "
+                    "Do not guess or hallucinate values. "
+                    "For 'reasoning', briefly explain your choices and any uncertainties. "
+                    "Never fabricate information. "
+                    "Always return your answer using the provided structured tool."
+                ),
                 "cache_control": {"type": "ephemeral"}
             }],
             messages=[{
                 "role": "user",
                 "content": [
-                    {"type": "text", "text": "What type of document is this? Use the structured tool."},
                     {"type": "image", "source": {"type": "base64", "media_type": "image/jpeg", "data": img_b64}}
                 ]
             }],
