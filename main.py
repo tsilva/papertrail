@@ -649,7 +649,7 @@ def _task__validate_metadata(processed_path):
 
     for metadata_path in tqdm(json_files, desc="Validating metadata"):
         try:
-            with open(metadata_path, "r", encoding="utf-8") as f):
+            with open(metadata_path, "r", encoding="utf-8") as f:
                 data = json.load(f)
             metadata = DocumentMetadata.model_validate(data)
 
