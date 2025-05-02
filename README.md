@@ -23,31 +23,63 @@ pipx install . --force
 
 ## 🛠️ Usage
 
-Documentor offers several commands for document management:
-
-### Extract metadata from PDFs
-
-```bash
-documentor extract /path/to/output --raw_path /path/to/pdfs
-```
-
-### Rename existing files based on metadata
+Documentor offers several commands for document management.  
+The main CLI entrypoint is:
 
 ```bash
-documentor rename /path/to/output
+documentor <task> <processed_path> [--raw_path ...] [--excel_output_path ...] [--regex_pattern ...] [--copy_dest_folder ...] [--check_schema_path ...] [--export_date ...]
 ```
 
-### Validate metadata consistency
+### Available Tasks
 
-```bash
-documentor validate /path/to/output
-```
+- `extract_new`  
+  Extract metadata from new PDFs in a raw folder and copy them to the processed folder.  
+  **Usage:**  
+  ```bash
+  documentor extract_new <processed_path> --raw_path <raw_pdf_folder>
+  ```
 
-### Export metadata to Excel
+- `rename_files`  
+  Rename existing PDF and JSON files in the processed folder based on their metadata.  
+  **Usage:**  
+  ```bash
+  documentor rename_files <processed_path>
+  ```
 
-```bash
-documentor excel /path/to/output --excel_output_path ./output.xlsx
-```
+- `validate_metadata`  
+  Validate all metadata and PDF files in the processed folder for consistency.  
+  **Usage:**  
+  ```bash
+  documentor validate_metadata <processed_path>
+  ```
+
+- `export_excel`  
+  Export all metadata in the processed folder to an Excel file.  
+  **Usage:**  
+  ```bash
+  documentor export_excel <processed_path> --excel_output_path <output.xlsx>
+  ```
+
+- `copy_matching`  
+  Copy all PDF and JSON files whose filenames match a regex pattern to a destination folder.  
+  **Usage:**  
+  ```bash
+  documentor copy_matching <processed_path> --regex_pattern "<pattern>" --copy_dest_folder <dest_folder>
+  ```
+
+- `check_files_exist`  
+  For each entry in a validation schema, check if a matching JSON file exists in the processed folder.  
+  **Usage:**  
+  ```bash
+  documentor check_files_exist <processed_path> [--check_schema_path <schema.json>]
+  ```
+
+- `pipeline`  
+  Run the full document processing pipeline (extract, rename, export, copy, merge, validate).  
+  **Usage:**  
+  ```bash
+  documentor pipeline [--export_date YYYY-MM]
+  ```
 
 ## 🔍 How It Works
 
