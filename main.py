@@ -254,7 +254,7 @@ def rename_single_pdf(pdf_path: Path, file_hash: str, processed_path: Path, know
             json.dump(metadata.model_dump(), f, indent=4)
 
         known_hashes.add(file_hash)
-        print(f"Processed: {pdf_path.name} → {filename}")
+        print(f"Processed: {pdf_path.name} -> {filename}")
     except Exception as e:
         print(e)
         print(f"Failed to process {pdf_path.name}: {e}")
@@ -326,7 +326,7 @@ def rename_existing_files(output_path: Path):
             old_metadata_path = old_pdf_path.with_suffix(".json")
             shutil.move(old_pdf_path, new_pdf_path)
             shutil.move(old_metadata_path, new_metadata_path)
-            print(f"Renamed: {old_pdf_path.name} → {new_filename}")
+            print(f"Renamed: {old_pdf_path.name} -> {new_filename}")
         except Exception as e:
             print(f"Failed to rename {old_pdf_path.name}: {e}")
 
@@ -636,7 +636,7 @@ def _task__rename_files(processed_path):
             old_metadata_path = old_pdf_path.with_suffix(".json")
             shutil.move(old_pdf_path, new_pdf_path)
             shutil.move(old_metadata_path, new_metadata_path)
-            print(f"Renamed: {old_pdf_path.name} → {new_filename}")
+            print(f"Renamed: {old_pdf_path.name} -> {new_filename}")
         except Exception as e:
             print(f"Failed to rename {old_pdf_path.name}: {e}")
     print("Renaming complete.")
