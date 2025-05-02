@@ -493,7 +493,7 @@ def run_step(cmd, step_desc):
         sys.exit(result.returncode)
     print(f"### {step_desc}... Finished.")
 
-def pipeline():
+def pipeline(export_date_arg=None):
     from shutil import which
     from datetime import datetime
 
@@ -517,7 +517,14 @@ def pipeline():
             print(f"Required tool '{tool}' not found in PATH. Please install it and try again.")
             sys.exit(1)
 
-    export_date = datetime.now().strftime("%Y-%m")
+    # Use export_date_arg if provided, else default to current date
+    export_date = export_date_arg or datetime.now().strftime("%Y-%m")
+
+    # Validate export_date format here
+    if not re.match(r"^\d{4}-\d{2}$", export_date):
+        print("The export_date must be in YYYY-MM format.")
+        sys.exit(1)
+
     export_date_dir = os.path.join(EXPORT_FILES_DIR, export_date)
 
     zip_passwords_file_path = str(Path.home() / ".documentor/passwords.txt")
@@ -638,10 +645,15 @@ def main():
     parser.add_argument("--regex_pattern", type=str, help="Regex pattern for matching filenames (for 'copy-matching' task).")
     parser.add_argument("--copy_dest_folder", type=str, help="Destination folder for copied files (for 'copy-matching' task).")
     parser.add_argument("--check_schema_path", type=str, help="Validation schema path (for 'check_files_exist' task).")
+    parser.add_argument("--export_date", type=str, help="Export date in YYYY-MM format (for 'pipeline' task, optional).")
     args = parser.parse_args()
 
     if args.task == "pipeline":
-        pipeline()
+        if args.export_date:
+            import re
+            if not re.match(r"^\d{4}-\d{2}$", args.export_date):
+                parser.error("The --export_date argument must be in YYYY-MM format.")
+        pipeline(export_date_arg=args.export_date)
         return
 
     if not args.processed_path: parser.error("the processed_path argument is required.")
