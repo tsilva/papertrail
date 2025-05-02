@@ -58,14 +58,15 @@ def load_document_types():
         Path(__file__).parent / "config" / "document_types.json",  # dev and editable install
         Path(sys.argv[0]).parent / "config" / "document_types.json",  # pipx global bin
         Path.cwd() / "config" / "document_types.json",  # user runs from project root
+        Path.home() / ".documentor" / "document_types.json",  # home config dir
     ]
     for path in candidates:
         if path.exists():
             with open(path, "r", encoding="utf-8") as f:
                 return json.load(f)
     raise FileNotFoundError(
-        "Could not find 'config/document_types.json'. "
-        "Make sure the config directory is present next to the script or in your working directory."
+        "Could not find 'config/document_types.json' or '~/.documentor/document_types.json'. "
+        "Make sure the config directory is present next to the script, in your working directory, or in your home config folder."
     )
 
 DOCUMENT_TYPES = load_document_types()
