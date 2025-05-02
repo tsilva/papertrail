@@ -28,20 +28,28 @@ CONFIG_DIR.mkdir(parents=True, exist_ok=True)
 if not ENV_PATH.exists():
     # Try to copy all example files from config directory in the package
     config_example_dir = Path(__file__).parent / "config"
+    files_copied = []
     if config_example_dir.exists():
         for file in config_example_dir.iterdir():
-            if file.is_file():
-                # Remove '.example' suffix if present
-                dest_name = file.name[:-8] if file.name.endswith('.example') else file.name
+            if file.is_file() and file.name.endswith('.example'):
+                dest_name = file.name[:-8]  # Remove '.example'
                 dest = CONFIG_DIR / dest_name
                 if not dest.exists():
                     shutil.copy(file, dest)
-        print(f"✅ Created .env and copied example config files to {CONFIG_DIR}. Edit .env before rerunning.")
+                    files_copied.append(dest_name)
+        if files_copied:
+            print(f"✅ Copied example config files to {CONFIG_DIR}: {', '.join(files_copied)}.\nEdit these files before rerunning.")
+            sys.exit(0)
+        else:
+            # fallback: create a blank .env if config dir is missing .env.example
+            ENV_PATH.touch()
+            print(f"✅ Created .env at {ENV_PATH}. Edit this file before rerunning.")
+            sys.exit(0)
     else:
         # fallback: create a blank .env if config dir is missing
         ENV_PATH.touch()
         print(f"✅ Created .env at {ENV_PATH}. Edit this file before rerunning.")
-    sys.exit(0)
+        sys.exit(0)
 
 from dotenv import load_dotenv
 load_dotenv(dotenv_path=ENV_PATH, override=True)
