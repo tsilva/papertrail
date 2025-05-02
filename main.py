@@ -468,19 +468,24 @@ def check_files_exist(target_folder: Path, validation_schema_path: Path):
             print(f"Skipping {json_path.name}: {e}")
 
     all_passed = True
+    check_results = []
     for idx, check in enumerate(checks):
         found = False
         for json_path, data in file_data:
             if all(str(data.get(k, "")).strip() == str(v).strip() for k, v in check.items()):
                 found = True
                 break
-            
-        # Use ASCII-only output for compatibility with Windows consoles
-        if found:
-            print(f"[OK] Check {idx+1}: {check} -- FOUND")
-        else:
-            print(f"[FAIL] Check {idx+1}: {check} -- NOT FOUND")
+        check_results.append((found, idx, check))
+        if not found:
             all_passed = False
+
+    # Print OKs first, then FAILs
+    for found, idx, check in sorted(check_results, key=lambda x: (not x[0], x[1])):
+        if found:
+            print(f"[OK] {check} -- FOUND")
+    for found, idx, check in sorted(check_results, key=lambda x: (not x[0], x[1])):
+        if not found:
+            print(f"[FAIL] {check} -- NOT FOUND")
 
     if all_passed:
         print("\nAll file existence checks passed.")
@@ -638,7 +643,7 @@ def _task__validate_metadata(processed_path):
 
     for metadata_path in tqdm(json_files, desc="Validating metadata"):
         try:
-            with open(metadata_path, "r", encoding="utf-8") as f:
+            with open(metadata_path, "r", encoding="utf-8") as f):
                 data = json.load(f)
             metadata = DocumentMetadata.model_validate(data)
 
@@ -678,7 +683,7 @@ def _task__export_excel(processed_path, excel_output_path):
 
     for metadata_path in tqdm(json_files, desc="Collecting metadata"):
         try:
-            with open(metadata_path, "r", encoding="utf-8") as f:
+            with open(metadata_path, "r", encoding="utf-8") as f):
                 data = json.load(f)
             metadata = DocumentMetadata.model_validate(data)
             metadata_dict = metadata.model_dump()
@@ -807,24 +812,31 @@ def _task__check_files_exist(processed_path, check_schema_path):
     file_data = []
     for json_path in json_files:
         try:
-            with open(json_path, "r", encoding="utf-8") as f:
+            with open(json_path, "r", encoding="utf-8") as f):
                 data = json.load(f)
             file_data.append((json_path, data))
         except Exception as e:
             print(f"Skipping {json_path.name}: {e}")
 
     all_passed = True
+    check_results = []
     for idx, check in enumerate(checks):
         found = False
         for json_path, data in file_data:
             if all(str(data.get(k, "")).strip() == str(v).strip() for k, v in check.items()):
                 found = True
                 break
-        if found:
-            print(f"[OK] Check {idx+1}: {check} -- FOUND")
-        else:
-            print(f"[FAIL] Check {idx+1}: {check} -- NOT FOUND")
+        check_results.append((found, idx, check))
+        if not found:
             all_passed = False
+
+    # Print OKs first, then FAILs
+    for found, idx, check in sorted(check_results, key=lambda x: (not x[0], x[1])):
+        if found:
+            print(f"[OK] {check} -- FOUND")
+    for found, idx, check in sorted(check_results, key=lambda x: (not x[0], x[1])):
+        if not found:
+            print(f"[FAIL] {check} -- NOT FOUND")
 
     if all_passed:
         print("\nAll file existence checks passed.")
