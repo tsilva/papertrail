@@ -26,14 +26,21 @@ CONFIG_DIR = Path.home() / ".documentor"
 ENV_PATH = CONFIG_DIR / ".env"
 CONFIG_DIR.mkdir(parents=True, exist_ok=True)
 if not ENV_PATH.exists():
-    # Try to copy from a template in the package, or create a blank one
-    example_env = Path(__file__).parent / "config" / ".env.example"
-    if example_env.exists():
-        shutil.copy(example_env, ENV_PATH)
+    # Try to copy all example files from config directory in the package
+    config_example_dir = Path(__file__).parent / "config"
+    if config_example_dir.exists():
+        for file in config_example_dir.iterdir():
+            if file.is_file():
+                # Remove '.example' suffix if present
+                dest_name = file.name[:-8] if file.name.endswith('.example') else file.name
+                dest = CONFIG_DIR / dest_name
+                if not dest.exists():
+                    shutil.copy(file, dest)
+        print(f"✅ Created .env and copied example config files to {CONFIG_DIR}. Edit .env before rerunning.")
     else:
-        # fallback: create a blank file if .env.example is missing
+        # fallback: create a blank .env if config dir is missing
         ENV_PATH.touch()
-    print(f"✅ Created .env at {ENV_PATH}. Edit this file before rerunning.")
+        print(f"✅ Created .env at {ENV_PATH}. Edit this file before rerunning.")
     sys.exit(0)
 
 from dotenv import load_dotenv
