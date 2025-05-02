@@ -560,10 +560,13 @@ def main():
 
     if args.task == "check_files_exist":
         if not args.check_target_folder: parser.error("the --check_target_folder argument is required when task is 'check_files_exist'.")
-        if not args.check_schema_path: parser.error("the --check_schema_path argument is required when task is 'check_files_exist'.")
+        # Default check_schema_path if not provided
+        check_schema_path = args.check_schema_path
+        if not check_schema_path:
+            check_schema_path = str(Path.home() / ".documentor" / "file_check_validations.json")
         if not os.path.exists(args.check_target_folder): parser.error(f"The check_target_folder '{args.check_target_folder}' does not exist.")
         if not os.path.isdir(args.check_target_folder): parser.error(f"The check_target_folder '{args.check_target_folder}' is not a directory.")
-        if not os.path.exists(args.check_schema_path): parser.error(f"The check_schema_path '{args.check_schema_path}' does not exist.")
+        if not os.path.exists(check_schema_path): parser.error(f"The check_schema_path '{check_schema_path}' does not exist.")
 
     process_folder(
         args.task,
@@ -573,7 +576,7 @@ def main():
         regex_pattern=args.regex_pattern,
         copy_dest_folder=args.copy_dest_folder,
         check_target_folder=args.check_target_folder,
-        check_schema_path=args.check_schema_path
+        check_schema_path=check_schema_path if args.task == "check_files_exist" else args.check_schema_path
     )
 
 if __name__ == "__main__":
