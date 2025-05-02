@@ -205,27 +205,33 @@ def classify_pdf_document(pdf_path: Path, file_hash: str) -> DocumentMetadata:
     client = anthropic.Anthropic()
 
     try:
-        # Use PyMuPDF to render the first page as an image
+        # Use PyMuPDF to render the first two pages as images (if available)
         doc = fitz.open(str(pdf_path))
-        page = doc[0]  # First page
-        pix = page.get_pixmap()  # Render to pixmap
-
-        # --- Boost contrast using PIL ---
+        images_b64 = []
+        num_pages = min(2, len(doc))
         from PIL import Image, ImageEnhance
-        img = Image.open(io.BytesIO(pix.tobytes("jpeg")))
-        enhancer = ImageEnhance.Contrast(img)
-        img_enhanced = enhancer.enhance(2.0)  # 2.0 = double contrast, adjust as needed
-
-        img_buffer = io.BytesIO()
-        img_enhanced.save(img_buffer, format="JPEG")
-        img_b64 = base64.b64encode(img_buffer.getvalue()).decode("utf-8")
-        doc.close()  # Close the document
+        for i in range(num_pages):
+            page = doc[i]
+            pix = page.get_pixmap()
+            img = Image.open(io.BytesIO(pix.tobytes("jpeg")))
+            enhancer = ImageEnhance.Contrast(img)
+            img_enhanced = enhancer.enhance(2.0)
+            img_buffer = io.BytesIO()
+            img_enhanced.save(img_buffer, format="JPEG")
+            img_b64 = base64.b64encode(img_buffer.getvalue()).decode("utf-8")
+            images_b64.append(img_b64)
+        doc.close()
         # --- end contrast boost ---
     except Exception as e:
         print(e)
         raise RuntimeError(f"Failed to render PDF image: {pdf_path}") from e
 
     try:
+        # Prepare content with up to two images
+        content = [
+            {"type": "image", "source": {"type": "base64", "media_type": "image/jpeg", "data": img_b64}}
+            for img_b64 in images_b64
+        ]
         response = client.messages.create(
             model=ANTHROPIC_MODEL_ID,
             max_tokens=4096,
@@ -237,9 +243,7 @@ def classify_pdf_document(pdf_path: Path, file_hash: str) -> DocumentMetadata:
             }],
             messages=[{
                 "role": "user",
-                "content": [
-                    {"type": "image", "source": {"type": "base64", "media_type": "image/jpeg", "data": img_b64}}
-                ]
+                "content": content
             }],
             tools=TOOLS
         )
