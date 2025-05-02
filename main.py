@@ -510,7 +510,7 @@ def run_step(cmd, step_desc):
 
 def pipeline(export_date_arg=None):
     from shutil import which
-    from datetime import datetime
+    from datetime import datetime, timedelta
 
     # Validate required vars
     RAW_FILES_DIR = os.getenv("RAW_FILES_DIR")
@@ -532,8 +532,14 @@ def pipeline(export_date_arg=None):
             print(f"Required tool '{tool}' not found in PATH. Please install it and try again.")
             sys.exit(1)
 
-    # Use export_date_arg if provided, else default to current date
-    export_date = export_date_arg or datetime.now().strftime("%Y-%m")
+    # Use export_date_arg if provided, else default to previous month
+    if export_date_arg:
+        export_date = export_date_arg
+    else:
+        today = datetime.now()
+        first_of_this_month = today.replace(day=1)
+        last_month = first_of_this_month - timedelta(days=1)
+        export_date = last_month.strftime("%Y-%m")
 
     # Validate export_date format here
     if not re.match(r"^\d{4}-\d{2}$", export_date):
