@@ -518,7 +518,7 @@ def master_task():
     zip_passwords_file_path = str(Path.home() / ".documentor/passwords.txt")
     assert os.path.exists(zip_passwords_file_path), f"Missing zip passwords file: {zip_passwords_file_path}"
 
-    processed_files_excel_path = Path(PROCESSED_FILES_DIR) + "/processed_files.xlsx"
+    processed_files_excel_path = Path(PROCESSED_FILES_DIR) / "processed_files.xlsx"
 
     # Step 1: mbox-extractor
     run_step(
