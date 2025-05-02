@@ -818,7 +818,7 @@ def _task__check_files_exist(processed_path, check_schema_path):
     file_data = []
     for json_path in json_files:
         try:
-            with open(json_path, "r", encoding="utf-8") as f):
+            with open(json_path, "r", encoding="utf-8") as f:
                 data = json.load(f)
             file_data.append((json_path, data))
         except Exception as e:
