@@ -625,9 +625,7 @@ def process_folder(task: str, processed_path: str, raw_path: str = None, excel_o
 def main():
     parser = argparse.ArgumentParser(description="Process a folder of PDF files.")
     parser.add_argument("task", type=str, choices=[
-        'extract_new', 'rename_files', 'validate_metadata', 'export_excel', 'copy_matching', 'check_files_exist', 'pipeline',
-        # Accept old names for backward compatibility
-        'extract', 'rename', 'validate', 'excel', 'copy-matching'
+        'extract_new', 'rename_files', 'validate_metadata', 'export_excel', 'copy_matching', 'check_files_exist', 'pipeline'
     ], help="Specify task: 'extract_new', 'rename_files', 'validate_metadata', 'export_excel', 'copy_matching', 'check_files_exist', or 'pipeline'.")
     parser.add_argument("processed_path", type=str, nargs='?', help="Path to output folder.")
     parser.add_argument("--raw_path", type=str, help="Path to documents folder (required for 'extract' task).")
