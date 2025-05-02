@@ -474,10 +474,12 @@ def check_files_exist(target_folder: Path, validation_schema_path: Path):
             if all(str(data.get(k, "")).strip() == str(v).strip() for k, v in check.items()):
                 found = True
                 break
+            
+        # Use ASCII-only output for compatibility with Windows consoles
         if found:
-            print(f"✅ Check {idx+1}: {check} -- FOUND")
+            print(f"[OK] Check {idx+1}: {check} -- FOUND")
         else:
-            print(f"❌ Check {idx+1}: {check} -- NOT FOUND")
+            print(f"[FAIL] Check {idx+1}: {check} -- NOT FOUND")
             all_passed = False
 
     if all_passed:
