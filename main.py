@@ -496,7 +496,7 @@ def master_task():
     PROCESSED_FILES_DIR = os.getenv("PROCESSED_FILES_DIR")
     PROCESSED_FILES_EXCEL_PATH = os.getenv("PROCESSED_FILES_EXCEL_PATH")
     EXPORT_FILES_DIR = os.getenv("EXPORT_FILES_DIR")
-    ZIP_PASSWORDS_FILE = os.getenv("ZIP_PASSWORDS_FILE")
+    ZIP_PASSWORDS_FILE = str(Path.home() / "passwords.txt")
 
     # Validate required vars
     required_vars = [
@@ -505,7 +505,6 @@ def master_task():
         ("PROCESSED_FILES_DIR", PROCESSED_FILES_DIR),
         ("PROCESSED_FILES_EXCEL_PATH", PROCESSED_FILES_EXCEL_PATH),
         ("EXPORT_FILES_DIR", EXPORT_FILES_DIR),
-        ("ZIP_PASSWORDS_FILE", ZIP_PASSWORDS_FILE),
     ]
     missing = [name for name, val in required_vars if not val]
     if missing:
