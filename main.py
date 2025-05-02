@@ -25,31 +25,26 @@ from concurrent.futures import ThreadPoolExecutor
 CONFIG_DIR = Path.home() / ".documentor"
 ENV_PATH = CONFIG_DIR / ".env"
 CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+
+# Always ensure all config example files are present in home config dir
+config_example_dir = Path(__file__).parent / "config"
+files_copied = []
+if config_example_dir.exists():
+    for file in config_example_dir.iterdir():
+        if file.is_file() and file.name.endswith('.example'):
+            dest_name = file.name[:-8]  # Remove '.example'
+            dest = CONFIG_DIR / dest_name
+            if not dest.exists():
+                shutil.copy(file, dest)
+                files_copied.append(dest_name)
+if files_copied:
+    print(f"✅ Copied example config files to {CONFIG_DIR}: {', '.join(files_copied)}.\nEdit these files before rerunning.")
+    sys.exit(0)
+# Always ensure .env exists (even if not in example files)
 if not ENV_PATH.exists():
-    # Try to copy all example files from config directory in the package
-    config_example_dir = Path(__file__).parent / "config"
-    files_copied = []
-    if config_example_dir.exists():
-        for file in config_example_dir.iterdir():
-            if file.is_file() and file.name.endswith('.example'):
-                dest_name = file.name[:-8]  # Remove '.example'
-                dest = CONFIG_DIR / dest_name
-                if not dest.exists():
-                    shutil.copy(file, dest)
-                    files_copied.append(dest_name)
-        if files_copied:
-            print(f"✅ Copied example config files to {CONFIG_DIR}: {', '.join(files_copied)}.\nEdit these files before rerunning.")
-            sys.exit(0)
-        else:
-            # fallback: create a blank .env if config dir is missing .env.example
-            ENV_PATH.touch()
-            print(f"✅ Created .env at {ENV_PATH}. Edit this file before rerunning.")
-            sys.exit(0)
-    else:
-        # fallback: create a blank .env if config dir is missing
-        ENV_PATH.touch()
-        print(f"✅ Created .env at {ENV_PATH}. Edit this file before rerunning.")
-        sys.exit(0)
+    ENV_PATH.touch()
+    print(f"✅ Created .env at {ENV_PATH}. Edit this file before rerunning.")
+    sys.exit(0)
 
 from dotenv import load_dotenv
 load_dotenv(dotenv_path=ENV_PATH, override=True)
@@ -61,20 +56,20 @@ ANTHROPIC_MODEL_ID = os.getenv("ANTHROPIC_MODEL_ID")
 import importlib.resources
 
 def load_document_types():
-    # Try to load from config/document_types.json relative to the script location (works for both pipx and dev)
+    # Always check home config dir first, then fallback to other locations
     candidates = [
+        Path.home() / ".documentor" / "document_types.json",  # home config dir
         Path(__file__).parent / "config" / "document_types.json",  # dev and editable install
         Path(sys.argv[0]).parent / "config" / "document_types.json",  # pipx global bin
         Path.cwd() / "config" / "document_types.json",  # user runs from project root
-        Path.home() / ".documentor" / "document_types.json",  # home config dir
     ]
     for path in candidates:
         if path.exists():
             with open(path, "r", encoding="utf-8") as f:
                 return json.load(f)
     raise FileNotFoundError(
-        "Could not find 'config/document_types.json' or '~/.documentor/document_types.json'. "
-        "Make sure the config directory is present next to the script, in your working directory, or in your home config folder."
+        "Could not find 'document_types.json' in '~/.documentor', 'config', or working directory. "
+        "Make sure the config file exists in your home config folder or project."
     )
 
 DOCUMENT_TYPES = load_document_types()
