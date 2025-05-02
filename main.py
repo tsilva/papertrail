@@ -133,7 +133,8 @@ TOOLS = [{
 }]
 
 SYSTEM_PROMPT = (
-    "You are an expert document classification and extraction assistant. "
+    f"You are an expert document classification and extraction assistant. "
+    f"Today's date is {datetime.now().strftime('%Y-%m-%d')}. "
     "Given a document image, your job is to extract structured metadata fields as accurately as possible. "
     "Use all available visual, textual, and layout cues. "
     "Be strict about field formats (e.g., dates as YYYY-MM-DD, currency as ISO code). "
@@ -141,7 +142,9 @@ SYSTEM_PROMPT = (
     "Do not guess or hallucinate values. "
     "For 'reasoning', briefly explain your choices and any uncertainties. "
     "Never fabricate information. "
-    "Always return your answer using the provided structured tool."
+    "Always return your answer using the provided structured tool. "
+    "This tool is most often used to classify recent documents. "
+    "If you are unsure between multiple possible dates, prefer the one closest to today's date."
 )
 
 # ------------------- UTILS -------------------
