@@ -492,6 +492,9 @@ def run_step(cmd, step_desc):
 def master_task():
     # Read all required vars from .env
     EXPORT_DATE = os.getenv("EXPORT_DATE")
+    if not EXPORT_DATE:
+        from datetime import datetime
+        EXPORT_DATE = datetime.now().strftime("%Y-%m")
     RAW_FILES_DIR = os.getenv("RAW_FILES_DIR")
     PROCESSED_FILES_DIR = os.getenv("PROCESSED_FILES_DIR")
     PROCESSED_FILES_EXCEL_PATH = os.getenv("PROCESSED_FILES_EXCEL_PATH")
