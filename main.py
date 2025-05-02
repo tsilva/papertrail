@@ -489,7 +489,7 @@ def run_step(cmd, step_desc):
         sys.exit(result.returncode)
     print(f"### {step_desc}... Finished.")
 
-def master_task():
+def pipeline():
     from shutil import which
     from datetime import datetime
 
@@ -534,25 +534,25 @@ def master_task():
 
     # Step 3: documentor extract
     run_step(
-        f'"{sys.executable}" extract "{PROCESSED_FILES_DIR}" --raw_path "{RAW_FILES_DIR}"',
+        f'"{sys.executable}" {sys.argv[0]} extract "{PROCESSED_FILES_DIR}" --raw_path "{RAW_FILES_DIR}"',
         "Step 3: Extracting documents from Google Takeout"
     )
 
     # Step 5: documentor rename
     run_step(
-        f'"{sys.executable}" rename "{PROCESSED_FILES_DIR}"',
+        f'"{sys.executable}" {sys.argv[0]} rename "{PROCESSED_FILES_DIR}"',
         "Step 5: Renaming documents"
     )
 
     # Step 6: documentor excel
     run_step(
-        f'"{sys.executable}" excel "{PROCESSED_FILES_DIR}" --excel_output_path "{processed_files_excel_path}"',
+        f'"{sys.executable}" {sys.argv[0]} excel "{PROCESSED_FILES_DIR}" --excel_output_path "{processed_files_excel_path}"',
         "Step 6: Exporting documents to Excel"
     )
 
     # Step 7: documentor copy-matching
     run_step(
-        f'"{sys.executable}" copy-matching "{PROCESSED_FILES_DIR}" --regex_pattern "{export_date}" --copy_dest_folder "{EXPORT_FILES_DIR}"',
+        f'"{sys.executable}" {sys.argv[0]} copy-matching "{PROCESSED_FILES_DIR}" --regex_pattern "{export_date}" --copy_dest_folder "{EXPORT_FILES_DIR}"',
         "Step 7: Copying matching documents"
     )
 
@@ -564,7 +564,7 @@ def master_task():
 
     # Step 9: documentor check_files_exist
     run_step(
-        f'"{sys.executable}" check_files_exist "{EXPORT_FILES_DIR}"',
+        f'"{sys.executable}" {sys.argv[0]} check_files_exist "{EXPORT_FILES_DIR}"',
         "Step 9: Validating documents"
     )
 
@@ -624,7 +624,7 @@ def process_folder(task: str, processed_path: str, raw_path: str = None, excel_o
 
 def main():
     parser = argparse.ArgumentParser(description="Process a folder of PDF files.")
-    parser.add_argument("task", type=str, choices=['extract', 'rename', 'validate', 'excel', 'copy-matching', 'check_files_exist', 'master'], help="Specify task: 'extract', 'rename', 'validate', 'excel', 'copy-matching', 'check_files_exist', or 'master'.")
+    parser.add_argument("task", type=str, choices=['extract', 'rename', 'validate', 'excel', 'copy-matching', 'check_files_exist', 'pipeline'], help="Specify task: 'extract', 'rename', 'validate', 'excel', 'copy-matching', 'check_files_exist', or 'pipeline'.")
     parser.add_argument("processed_path", type=str, nargs='?', help="Path to output folder.")
     parser.add_argument("--raw_path", type=str, help="Path to documents folder (required for 'extract' task).")
     parser.add_argument("--excel_output_path", type=str, help="Path to output Excel file (for 'excel' task).")
@@ -633,8 +633,8 @@ def main():
     parser.add_argument("--check_schema_path", type=str, help="Validation schema path (for 'check_files_exist' task).")
     args = parser.parse_args()
 
-    if args.task == "master":
-        master_task()
+    if args.task == "pipeline":
+        pipeline()
         return
 
     if not args.processed_path: parser.error("the processed_path argument is required.")
