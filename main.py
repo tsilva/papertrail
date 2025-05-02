@@ -479,6 +479,89 @@ def check_files_exist(target_folder: Path, validation_schema_path: Path):
 
 # ------------------- MAIN -------------------
 
+import subprocess
+
+def run_step(cmd, step_desc):
+    print(f"### {step_desc}...")
+    result = subprocess.run(cmd, shell=True)
+    if result.returncode != 0:
+        print(f"{step_desc} failed.")
+        sys.exit(result.returncode)
+    print(f"### {step_desc}... Finished.")
+
+def master_task():
+    # Read all required vars from .env
+    EXPORT_DATE = os.getenv("EXPORT_DATE")
+    RAW_FILES_DIR = os.getenv("RAW_FILES_DIR")
+    PROCESSED_FILES_DIR = os.getenv("PROCESSED_FILES_DIR")
+    PROCESSED_FILES_EXCEL_PATH = os.getenv("PROCESSED_FILES_EXCEL_PATH")
+    EXPORT_FILES_DIR = os.getenv("EXPORT_FILES_DIR")
+    ZIP_PASSWORDS_FILE = os.getenv("ZIP_PASSWORDS_FILE")
+
+    # Validate required vars
+    required_vars = [
+        ("EXPORT_DATE", EXPORT_DATE),
+        ("RAW_FILES_DIR", RAW_FILES_DIR),
+        ("PROCESSED_FILES_DIR", PROCESSED_FILES_DIR),
+        ("PROCESSED_FILES_EXCEL_PATH", PROCESSED_FILES_EXCEL_PATH),
+        ("EXPORT_FILES_DIR", EXPORT_FILES_DIR),
+        ("ZIP_PASSWORDS_FILE", ZIP_PASSWORDS_FILE),
+    ]
+    missing = [name for name, val in required_vars if not val]
+    if missing:
+        print(f"Missing required .env variables: {', '.join(missing)}")
+        sys.exit(1)
+
+    # Step 1: mbox-extractor
+    run_step(
+        f'mbox-extractor "{RAW_FILES_DIR}"',
+        "Step 1: Starting Google Takeout mbox extraction"
+    )
+
+    # Step 2: archive-extractor
+    run_step(
+        f'archive-extractor "{RAW_FILES_DIR}" --passwords "{ZIP_PASSWORDS_FILE}"',
+        "Step 2: Starting Google Takeout zip extraction"
+    )
+
+    # Step 3: documentor extract
+    run_step(
+        f'"{sys.executable}" "{sys.argv[0]}" extract "{PROCESSED_FILES_DIR}" --raw_path "{RAW_FILES_DIR}"',
+        "Step 3: Extracting documents from Google Takeout"
+    )
+
+    # Step 5: documentor rename
+    run_step(
+        f'"{sys.executable}" "{sys.argv[0]}" rename "{PROCESSED_FILES_DIR}"',
+        "Step 5: Renaming documents"
+    )
+
+    # Step 6: documentor excel
+    run_step(
+        f'"{sys.executable}" "{sys.argv[0]}" excel "{PROCESSED_FILES_DIR}" --excel_output_path "{PROCESSED_FILES_EXCEL_PATH}"',
+        "Step 6: Exporting documents to Excel"
+    )
+
+    # Step 7: documentor copy-matching
+    run_step(
+        f'"{sys.executable}" "{sys.argv[0]}" copy-matching "{PROCESSED_FILES_DIR}" --regex_pattern "{EXPORT_DATE}" --copy_dest_folder "{EXPORT_FILES_DIR}"',
+        "Step 7: Copying matching documents"
+    )
+
+    # Step 8: pdf-merger
+    run_step(
+        f'pdf-merger "{EXPORT_FILES_DIR}"',
+        "Step 8: Merging documents"
+    )
+
+    # Step 9: documentor check_files_exist
+    run_step(
+        f'"{sys.executable}" "{sys.argv[0]}" check_files_exist "{EXPORT_FILES_DIR}"',
+        "Step 9: Validating documents"
+    )
+
+    print("All steps completed successfully.")
+
 def process_folder(task: str, processed_path: str, raw_path: str = None, excel_output_path: str = None, regex_pattern: str = None, copy_dest_folder: str = None, check_schema_path: str = None):
     if raw_path is not None: raw_path = Path(raw_path)
     processed_path = Path(processed_path)
@@ -533,8 +616,8 @@ def process_folder(task: str, processed_path: str, raw_path: str = None, excel_o
 
 def main():
     parser = argparse.ArgumentParser(description="Process a folder of PDF files.")
-    parser.add_argument("task", type=str, choices=['extract', 'rename', 'validate', 'excel', 'copy-matching', 'check_files_exist'], help="Specify task: 'extract', 'rename', 'validate', 'excel', 'copy-matching', or 'check_files_exist'.")
-    parser.add_argument("processed_path", type=str, help="Path to output folder.")
+    parser.add_argument("task", type=str, choices=['extract', 'rename', 'validate', 'excel', 'copy-matching', 'check_files_exist', 'master'], help="Specify task: 'extract', 'rename', 'validate', 'excel', 'copy-matching', 'check_files_exist', or 'master'.")
+    parser.add_argument("processed_path", type=str, nargs='?', help="Path to output folder.")
     parser.add_argument("--raw_path", type=str, help="Path to documents folder (required for 'extract' task).")
     parser.add_argument("--excel_output_path", type=str, help="Path to output Excel file (for 'excel' task).")
     parser.add_argument("--regex_pattern", type=str, help="Regex pattern for matching filenames (for 'copy-matching' task).")
@@ -542,6 +625,11 @@ def main():
     parser.add_argument("--check_schema_path", type=str, help="Validation schema path (for 'check_files_exist' task).")
     args = parser.parse_args()
 
+    if args.task == "master":
+        master_task()
+        return
+
+    if not args.processed_path: parser.error("the processed_path argument is required.")
     if not os.path.exists(args.processed_path): parser.error(f"The processed_path '{args.processed_path}' does not exist.")
     if not os.path.isdir(args.processed_path): parser.error(f"The processed_path '{args.processed_path}' is not a directory.")
 
