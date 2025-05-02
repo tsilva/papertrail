@@ -575,7 +575,7 @@ def process_folder(task: str, processed_path: str, raw_path: str = None, excel_o
     processed_path = Path(processed_path)
     processed_path.mkdir(parents=True, exist_ok=True)
 
-    if task == "extract":
+    if task == "extract_new":
         print("Building hash index from metadata files...")
         known_hashes = set(build_output_hash_index(processed_path).keys())  # Convert to set for efficiency
         
@@ -590,24 +590,24 @@ def process_folder(task: str, processed_path: str, raw_path: str = None, excel_o
         rename_pdf_files(files_to_process, file_hash_map, known_hashes, processed_path)
         print("Extraction complete.")
 
-    elif task == "rename":
+    elif task == "rename_files":
         print("Renaming existing PDF files and metadata based on metadata...")
         rename_existing_files(processed_path)
         print("Renaming complete.")
 
-    elif task == "validate":
+    elif task == "validate_metadata":
         print("Validating existing metadata and PDFs...")
         _ = validate_metadata(processed_path)
         print("Validation complete.")
 
-    elif task == "excel":
+    elif task == "export_excel":
         print("Exporting metadata to Excel...")
         export_metadata_to_excel(processed_path, excel_output_path)
         print("Excel export complete.")
 
-    elif task == "copy-matching":
+    elif task == "copy_matching":
         if not regex_pattern or not copy_dest_folder:
-            print("For 'copy-matching', --regex_pattern and --copy_dest_folder are required.")
+            print("For 'copy_matching', --regex_pattern and --copy_dest_folder are required.")
             return
         copy_matching_files(processed_path, regex_pattern, Path(copy_dest_folder))
         print("Copy-matching complete.")
@@ -620,11 +620,15 @@ def process_folder(task: str, processed_path: str, raw_path: str = None, excel_o
         print("File existence check complete.")
 
     else:
-        print("Invalid task specified. Use 'extract', 'rename', 'validate', 'excel', 'copy-matching', or 'check_files_exist'.")
+        print("Invalid task specified. Use 'extract_new', 'rename_files', 'validate_metadata', 'export_excel', 'copy_matching', or 'check_files_exist'.")
 
 def main():
     parser = argparse.ArgumentParser(description="Process a folder of PDF files.")
-    parser.add_argument("task", type=str, choices=['extract', 'rename', 'validate', 'excel', 'copy-matching', 'check_files_exist', 'pipeline'], help="Specify task: 'extract', 'rename', 'validate', 'excel', 'copy-matching', 'check_files_exist', or 'pipeline'.")
+    parser.add_argument("task", type=str, choices=[
+        'extract_new', 'rename_files', 'validate_metadata', 'export_excel', 'copy_matching', 'check_files_exist', 'pipeline',
+        # Accept old names for backward compatibility
+        'extract', 'rename', 'validate', 'excel', 'copy-matching'
+    ], help="Specify task: 'extract_new', 'rename_files', 'validate_metadata', 'export_excel', 'copy_matching', 'check_files_exist', or 'pipeline'.")
     parser.add_argument("processed_path", type=str, nargs='?', help="Path to output folder.")
     parser.add_argument("--raw_path", type=str, help="Path to documents folder (required for 'extract' task).")
     parser.add_argument("--excel_output_path", type=str, help="Path to output Excel file (for 'excel' task).")
