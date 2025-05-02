@@ -21,30 +21,38 @@ from concurrent.futures import ThreadPoolExecutor
 
 # ------------------- CONFIG -------------------
 
-# Always load .env from ~/.documentor/.env, create if missing
-CONFIG_DIR = Path.home() / ".documentor"
-ENV_PATH = CONFIG_DIR / ".env"
-CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+def get_config_dir_and_env_path():
+    config_dir = Path.home() / ".documentor"
+    env_path = config_dir / ".env"
+    return config_dir, env_path
 
-# Always ensure all config example files are present in home config dir
-config_example_dir = Path(__file__).parent / "config"
-files_copied = []
-if config_example_dir.exists():
-    for file in config_example_dir.iterdir():
-        if file.is_file() and file.name.endswith('.example'):
-            dest_name = file.name[:-8]  # Remove '.example'
-            dest = CONFIG_DIR / dest_name
-            if not dest.exists():
-                shutil.copy(file, dest)
-                files_copied.append(dest_name)
-if files_copied:
-    print(f"✅ Copied example config files to {CONFIG_DIR}: {', '.join(files_copied)}.\nEdit these files before rerunning.")
-    sys.exit(0)
-# Always ensure .env exists (even if not in example files)
-if not ENV_PATH.exists():
-    ENV_PATH.touch()
-    print(f"✅ Created .env at {ENV_PATH}. Edit this file before rerunning.")
-    sys.exit(0)
+def ensure_home_config_and_env():
+    config_dir, env_path = get_config_dir_and_env_path()
+    config_dir.mkdir(parents=True, exist_ok=True)
+
+    # Ensure all config example files are present in home config dir
+    config_example_dir = Path(__file__).parent / "config"
+    files_copied = []
+    if config_example_dir.exists():
+        for file in config_example_dir.iterdir():
+            if file.is_file() and file.name.endswith('.example'):
+                dest_name = file.name[:-8]  # Remove '.example'
+                dest = config_dir / dest_name
+                if not dest.exists():
+                    shutil.copy(file, dest)
+                    files_copied.append(dest_name)
+    if files_copied:
+        print(f"✅ Copied example config files to {config_dir}: {', '.join(files_copied)}.\nEdit these files before rerunning.")
+        sys.exit(0)
+    # Always ensure .env exists (even if not in example files)
+    if not env_path.exists():
+        env_path.touch()
+        print(f"✅ Created .env at {env_path}. Edit this file before rerunning.")
+        sys.exit(0)
+    return config_dir, env_path
+
+# Always load .env from ~/.documentor/.env, create if missing
+CONFIG_DIR, ENV_PATH = ensure_home_config_and_env()
 
 from dotenv import load_dotenv
 load_dotenv(dotenv_path=ENV_PATH, override=True)
