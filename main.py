@@ -490,29 +490,35 @@ def run_step(cmd, step_desc):
     print(f"### {step_desc}... Finished.")
 
 def master_task():
-    # Read all required vars from .env
-    EXPORT_DATE = os.getenv("EXPORT_DATE")
-    if not EXPORT_DATE:
-        from datetime import datetime
-        EXPORT_DATE = datetime.now().strftime("%Y-%m")
-    RAW_FILES_DIR = os.getenv("RAW_FILES_DIR")
-    PROCESSED_FILES_DIR = os.getenv("PROCESSED_FILES_DIR")
-    PROCESSED_FILES_EXCEL_PATH = os.getenv("PROCESSED_FILES_EXCEL_PATH")
-    EXPORT_FILES_DIR = os.getenv("EXPORT_FILES_DIR")
-    ZIP_PASSWORDS_FILE = str(Path.home() / "passwords.txt")
+    from shutil import which
+    from datetime import datetime
 
     # Validate required vars
+    RAW_FILES_DIR = os.getenv("RAW_FILES_DIR")
+    PROCESSED_FILES_DIR = os.getenv("PROCESSED_FILES_DIR")
+    EXPORT_FILES_DIR = os.getenv("EXPORT_FILES_DIR")
     required_vars = [
-        ("EXPORT_DATE", EXPORT_DATE),
         ("RAW_FILES_DIR", RAW_FILES_DIR),
         ("PROCESSED_FILES_DIR", PROCESSED_FILES_DIR),
-        ("PROCESSED_FILES_EXCEL_PATH", PROCESSED_FILES_EXCEL_PATH),
         ("EXPORT_FILES_DIR", EXPORT_FILES_DIR),
     ]
     missing = [name for name, val in required_vars if not val]
     if missing:
         print(f"Missing required .env variables: {', '.join(missing)}")
         sys.exit(1)
+
+    # Assert required external commands are available
+    for tool in ["mbox-extractor", "archive-extractor", "pdf-merger"]:
+        if which(tool) is None:
+            print(f"Required tool '{tool}' not found in PATH. Please install it and try again.")
+            sys.exit(1)
+
+    export_date = datetime.now().strftime("%Y-%m")
+
+    zip_passwords_file_path = str(Path.home() / "passwords.txt")
+    assert os.path.exists(zip_passwords_file_path), f"Missing zip passwords file: {zip_passwords_file_path}"
+
+    processed_files_excel_path = Path(PROCESSED_FILES_DIR) + "/processed_files.xlsx"
 
     # Step 1: mbox-extractor
     run_step(
@@ -522,31 +528,31 @@ def master_task():
 
     # Step 2: archive-extractor
     run_step(
-        f'archive-extractor "{RAW_FILES_DIR}" --passwords "{ZIP_PASSWORDS_FILE}"',
+        f'archive-extractor "{RAW_FILES_DIR}" --passwords "{zip_passwords_file_path}"',
         "Step 2: Starting Google Takeout zip extraction"
     )
 
     # Step 3: documentor extract
     run_step(
-        f'"{sys.executable}" "{sys.argv[0]}" extract "{PROCESSED_FILES_DIR}" --raw_path "{RAW_FILES_DIR}"',
+        f'"{sys.executable}" extract "{PROCESSED_FILES_DIR}" --raw_path "{RAW_FILES_DIR}"',
         "Step 3: Extracting documents from Google Takeout"
     )
 
     # Step 5: documentor rename
     run_step(
-        f'"{sys.executable}" "{sys.argv[0]}" rename "{PROCESSED_FILES_DIR}"',
+        f'"{sys.executable}" rename "{PROCESSED_FILES_DIR}"',
         "Step 5: Renaming documents"
     )
 
     # Step 6: documentor excel
     run_step(
-        f'"{sys.executable}" "{sys.argv[0]}" excel "{PROCESSED_FILES_DIR}" --excel_output_path "{PROCESSED_FILES_EXCEL_PATH}"',
+        f'"{sys.executable}" excel "{PROCESSED_FILES_DIR}" --excel_output_path "{processed_files_excel_path}"',
         "Step 6: Exporting documents to Excel"
     )
 
     # Step 7: documentor copy-matching
     run_step(
-        f'"{sys.executable}" "{sys.argv[0]}" copy-matching "{PROCESSED_FILES_DIR}" --regex_pattern "{EXPORT_DATE}" --copy_dest_folder "{EXPORT_FILES_DIR}"',
+        f'"{sys.executable}" copy-matching "{PROCESSED_FILES_DIR}" --regex_pattern "{export_date}" --copy_dest_folder "{EXPORT_FILES_DIR}"',
         "Step 7: Copying matching documents"
     )
 
@@ -558,7 +564,7 @@ def master_task():
 
     # Step 9: documentor check_files_exist
     run_step(
-        f'"{sys.executable}" "{sys.argv[0]}" check_files_exist "{EXPORT_FILES_DIR}"',
+        f'"{sys.executable}" check_files_exist "{EXPORT_FILES_DIR}"',
         "Step 9: Validating documents"
     )
 
