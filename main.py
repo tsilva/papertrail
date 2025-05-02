@@ -98,7 +98,7 @@ class DocumentMetadata(BaseModel):
     confidence: float = Field(description="Confidence score between 0 and 1.")
     reasoning: str = Field(description="Why this classification was chosen.")
     hash: str = Field(description="SHA256 hash of the file (first 8 chars).", example="a1b2c3d4")
-    create_date: Optional[str] = Field(description="Date this metadata was created, format: YYYY-MM-DD.", example="2024-06-01")
+    create_date: Optional[str] = Field(default=None, description="Date this metadata was created, format: YYYY-MM-DD.", example="2024-06-01")
 
     @field_validator('total_amount', mode='before')
     @classmethod
