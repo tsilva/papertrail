@@ -689,7 +689,7 @@ def _task__export_excel(processed_path, excel_output_path):
 
     for metadata_path in tqdm(json_files, desc="Collecting metadata"):
         try:
-            with open(metadata_path, "r", encoding="utf-8") as f):
+            with open(metadata_path, "r", encoding="utf-8") as f:
                 data = json.load(f)
             metadata = DocumentMetadata.model_validate(data)
             metadata_dict = metadata.model_dump()
