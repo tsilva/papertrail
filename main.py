@@ -18,6 +18,7 @@ import pandas as pd
 from tqdm import tqdm
 from pydantic import BaseModel, Field, field_validator
 from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime
 
 # ------------------- CONFIG -------------------
 
@@ -36,7 +37,7 @@ def ensure_home_config_and_env():
     if config_example_dir.exists():
         for file in config_example_dir.iterdir():
             if file.is_file() and file.name.endswith('.example'):
-                dest_name = file.name[:-8]  # Remove '.example'
+                dest_name = file.name[:-8]
                 dest = config_dir / dest_name
                 if not dest.exists():
                     shutil.copy(file, dest)
@@ -97,6 +98,7 @@ class DocumentMetadata(BaseModel):
     confidence: float = Field(description="Confidence score between 0 and 1.")
     reasoning: str = Field(description="Why this classification was chosen.")
     hash: str = Field(description="SHA256 hash of the file (first 8 chars).", example="a1b2c3d4")
+    create_date: Optional[str] = Field(description="Date this metadata was created, format: YYYY-MM-DD.", example="2024-06-01")
 
     @field_validator('total_amount', mode='before')
     @classmethod
@@ -234,7 +236,7 @@ def classify_pdf_document(pdf_path: Path, file_hash: str) -> DocumentMetadata:
         
         metadata = DocumentMetadata.model_validate(tool_result)
         metadata.hash = file_hash
-        
+        metadata.create_date = datetime.now().strftime("%Y-%m-%d")
         return metadata
     except Exception as e:
         print(e)
