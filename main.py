@@ -582,55 +582,85 @@ def pipeline(export_date_arg=None):
 
     print("All steps completed successfully.")
 
+def _task__extract_new(processed_path, raw_path):
+    print("Building hash index from metadata files...")
+    known_hashes = set(build_output_hash_index(processed_path).keys())  # Convert to set for efficiency
+
+    print("Scanning for new PDFs...")
+    pdf_paths = find_pdf_files(raw_path)
+
+    print(f"Calculating hashes for {len(pdf_paths)} PDFs...")
+    file_hash_map = {pdf: hash_file(pdf) for pdf in tqdm(pdf_paths, desc="Hashing files")}
+    files_to_process = [pdf for pdf in pdf_paths if file_hash_map[pdf] not in known_hashes]
+
+    print(f"Found {len(files_to_process)} new PDFs.")
+    rename_pdf_files(files_to_process, file_hash_map, known_hashes, processed_path)
+    print("Extraction complete.")
+
+def _task__rename_files(processed_path):
+    print("Renaming existing PDF files and metadata based on metadata...")
+    valid_entries = validate_metadata(processed_path)
+
+    for old_pdf_path, metadata in valid_entries:
+        file_hash = metadata.hash
+        new_filename = file_name_from_metadata(metadata, file_hash)
+        new_pdf_path = processed_path / new_filename
+        new_metadata_path = new_pdf_path.with_suffix(".json")
+
+        # Skip if the filename hasn't changed
+        if old_pdf_path == new_pdf_path:
+            continue
+
+        try:
+            old_metadata_path = old_pdf_path.with_suffix(".json")
+            shutil.move(old_pdf_path, new_pdf_path)
+            shutil.move(old_metadata_path, new_metadata_path)
+            print(f"Renamed: {old_pdf_path.name} → {new_filename}")
+        except Exception as e:
+            print(f"Failed to rename {old_pdf_path.name}: {e}")
+    print("Renaming complete.")
+
+def _task__validate_metadata(processed_path):
+    print("Validating existing metadata and PDFs...")
+    _ = validate_metadata(processed_path)
+    print("Validation complete.")
+
+def _task__export_excel(processed_path, excel_output_path):
+    print("Exporting metadata to Excel...")
+    export_metadata_to_excel(processed_path, excel_output_path)
+    print("Excel export complete.")
+
+def _task__copy_matching(processed_path, regex_pattern, copy_dest_folder):
+    if not regex_pattern or not copy_dest_folder:
+        print("For 'copy_matching', --regex_pattern and --copy_dest_folder are required.")
+        return
+    copy_matching_files(processed_path, regex_pattern, Path(copy_dest_folder))
+    print("Copy-matching complete.")
+
+def _task__check_files_exist(processed_path, check_schema_path):
+    if not check_schema_path:
+        print("For 'check_files_exist', --check_schema_path is required.")
+        return
+    check_files_exist(processed_path, Path(check_schema_path))
+    print("File existence check complete.")
+
 def process_folder(task: str, processed_path: str, raw_path: str = None, excel_output_path: str = None, regex_pattern: str = None, copy_dest_folder: str = None, check_schema_path: str = None):
     if raw_path is not None: raw_path = Path(raw_path)
     processed_path = Path(processed_path)
     processed_path.mkdir(parents=True, exist_ok=True)
 
     if task == "extract_new":
-        print("Building hash index from metadata files...")
-        known_hashes = set(build_output_hash_index(processed_path).keys())  # Convert to set for efficiency
-        
-        print("Scanning for new PDFs...")
-        pdf_paths = find_pdf_files(raw_path)
-        
-        print(f"Calculating hashes for {len(pdf_paths)} PDFs...")
-        file_hash_map = {pdf: hash_file(pdf) for pdf in tqdm(pdf_paths, desc="Hashing files")}
-        files_to_process = [pdf for pdf in pdf_paths if file_hash_map[pdf] not in known_hashes]
-
-        print(f"Found {len(files_to_process)} new PDFs.")
-        rename_pdf_files(files_to_process, file_hash_map, known_hashes, processed_path)
-        print("Extraction complete.")
-
+        _task__extract_new(processed_path, raw_path)
     elif task == "rename_files":
-        print("Renaming existing PDF files and metadata based on metadata...")
-        rename_existing_files(processed_path)
-        print("Renaming complete.")
-
+        _task__rename_files(processed_path)
     elif task == "validate_metadata":
-        print("Validating existing metadata and PDFs...")
-        _ = validate_metadata(processed_path)
-        print("Validation complete.")
-
+        _task__validate_metadata(processed_path)
     elif task == "export_excel":
-        print("Exporting metadata to Excel...")
-        export_metadata_to_excel(processed_path, excel_output_path)
-        print("Excel export complete.")
-
+        _task__export_excel(processed_path, excel_output_path)
     elif task == "copy_matching":
-        if not regex_pattern or not copy_dest_folder:
-            print("For 'copy_matching', --regex_pattern and --copy_dest_folder are required.")
-            return
-        copy_matching_files(processed_path, regex_pattern, Path(copy_dest_folder))
-        print("Copy-matching complete.")
-
+        _task__copy_matching(processed_path, regex_pattern, copy_dest_folder)
     elif task == "check_files_exist":
-        if not check_schema_path:
-            print("For 'check_files_exist', --check_schema_path is required.")
-            return
-        check_files_exist(processed_path, Path(check_schema_path))
-        print("File existence check complete.")
-
+        _task__check_files_exist(processed_path, check_schema_path)
     else:
         print("Invalid task specified. Use 'extract_new', 'rename_files', 'validate_metadata', 'export_excel', 'copy_matching', or 'check_files_exist'.")
 
