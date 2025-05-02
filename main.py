@@ -483,9 +483,13 @@ import subprocess
 
 def run_step(cmd, step_desc):
     print(f"### {step_desc}...")
-    result = subprocess.run(cmd, shell=True)
+    result = subprocess.run(cmd, shell=True, capture_output=True, text=True)
+    if result.stdout:
+        print(result.stdout)
+    if result.stderr:
+        print(result.stderr)
     if result.returncode != 0:
-        print(f"{step_desc} failed.")
+        print(f"{step_desc} failed with exit code {result.returncode}.")
         sys.exit(result.returncode)
     print(f"### {step_desc}... Finished.")
 
@@ -535,25 +539,25 @@ def pipeline():
 
     # Step 3: documentor extract_new
     run_step(
-        f'"{sys.executable}" {sys.argv[0]} extract_new "{PROCESSED_FILES_DIR}" --raw_path "{RAW_FILES_DIR}"',
+        f'"{sys.executable}" "{__file__}" extract_new "{PROCESSED_FILES_DIR}" --raw_path "{RAW_FILES_DIR}"',
         "Step 3: Extract new documents"
     )
 
     # Step 4: documentor rename_files
     run_step(
-        f'"{sys.executable}" {sys.argv[0]} rename_files "{PROCESSED_FILES_DIR}"',
+        f'"{sys.executable}" "{__file__}" rename_files "{PROCESSED_FILES_DIR}"',
         "Step 4: Rename files and metadata"
     )
 
     # Step 5: documentor export_excel
     run_step(
-        f'"{sys.executable}" {sys.argv[0]} export_excel "{PROCESSED_FILES_DIR}" --excel_output_path "{processed_files_excel_path}"',
+        f'"{sys.executable}" "{__file__}" export_excel "{PROCESSED_FILES_DIR}" --excel_output_path "{processed_files_excel_path}"',
         "Step 5: Export metadata to Excel"
     )
 
     # Step 6: documentor copy_matching
     run_step(
-        f'"{sys.executable}" {sys.argv[0]} copy_matching "{PROCESSED_FILES_DIR}" --regex_pattern "{export_date}" --copy_dest_folder "{export_date_dir}"',
+        f'"{sys.executable}" "{__file__}" copy_matching "{PROCESSED_FILES_DIR}" --regex_pattern "{export_date}" --copy_dest_folder "{export_date_dir}"',
         "Step 6: Copy matching documents"
     )
 
@@ -565,7 +569,7 @@ def pipeline():
 
     # Step 8: documentor check_files_exist
     run_step(
-        f'"{sys.executable}" {sys.argv[0]} check_files_exist "{export_date_dir}"',
+        f'"{sys.executable}" "{__file__}" check_files_exist "{export_date_dir}"',
         "Step 8: Validate exported files"
     )
 
