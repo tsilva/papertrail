@@ -182,7 +182,6 @@ def classify_pdf_document(pdf_path: Path, file_hash: str) -> DocumentMetadata:
 
         img_buffer = io.BytesIO()
         img_enhanced.save(img_buffer, format="JPEG")
-        img_enhanced.save("debug_enhanced.jpg", format="JPEG")
         img_b64 = base64.b64encode(img_buffer.getvalue()).decode("utf-8")
         doc.close()  # Close the document
         # --- end contrast boost ---
@@ -478,13 +477,12 @@ def process_folder(task: str, processed_path: str, raw_path: str = None, excel_o
         print("Building hash index from metadata files...")
         known_hashes = set(build_output_hash_index(processed_path).keys())  # Convert to set for efficiency
         
-
         print("Scanning for new PDFs...")
         pdf_paths = find_pdf_files(raw_path)
         
         print(f"Calculating hashes for {len(pdf_paths)} PDFs...")
         file_hash_map = {pdf: hash_file(pdf) for pdf in tqdm(pdf_paths, desc="Hashing files")}
-        files_to_process = [pdf for pdf in pdf_paths if file_hash_map[pdf]]# not in known_hashes]
+        files_to_process = [pdf for pdf in pdf_paths if file_hash_map[pdf] not in known_hashes]
 
         print(f"Found {len(files_to_process)} new PDFs.")
         rename_pdf_files(files_to_process, file_hash_map, known_hashes, processed_path)
