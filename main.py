@@ -132,6 +132,18 @@ TOOLS = [{
     "input_schema": DocumentMetadata.model_json_schema()
 }]
 
+SYSTEM_PROMPT = (
+    "You are an expert document classification and extraction assistant. "
+    "Given a document image, your job is to extract structured metadata fields as accurately as possible. "
+    "Use all available visual, textual, and layout cues. "
+    "Be strict about field formats (e.g., dates as YYYY-MM-DD, currency as ISO code). "
+    "If a field is missing or ambiguous, leave it blank or null. "
+    "Do not guess or hallucinate values. "
+    "For 'reasoning', briefly explain your choices and any uncertainties. "
+    "Never fabricate information. "
+    "Always return your answer using the provided structured tool."
+)
+
 # ------------------- UTILS -------------------
 
 def hash_file(path: Path) -> str:
@@ -217,17 +229,7 @@ def classify_pdf_document(pdf_path: Path, file_hash: str) -> DocumentMetadata:
             temperature=0,
             system=[{
                 "type": "text",
-                "text": (
-                    "You are an expert document classification and extraction assistant. "
-                    "Given a document image, your job is to extract structured metadata fields as accurately as possible. "
-                    "Use all available visual, textual, and layout cues. "
-                    "Be strict about field formats (e.g., dates as YYYY-MM-DD, currency as ISO code). "
-                    "If a field is missing or ambiguous, leave it blank or null. "
-                    "Do not guess or hallucinate values. "
-                    "For 'reasoning', briefly explain your choices and any uncertainties. "
-                    "Never fabricate information. "
-                    "Always return your answer using the provided structured tool."
-                ),
+                "text": SYSTEM_PROMPT,
                 "cache_control": {"type": "ephemeral"}
             }],
             messages=[{
