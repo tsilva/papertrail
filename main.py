@@ -514,6 +514,7 @@ def pipeline():
             sys.exit(1)
 
     export_date = datetime.now().strftime("%Y-%m")
+    export_date_dir = os.path.join(EXPORT_FILES_DIR, export_date)
 
     zip_passwords_file_path = str(Path.home() / ".documentor/passwords.txt")
     assert os.path.exists(zip_passwords_file_path), f"Missing zip passwords file: {zip_passwords_file_path}"
@@ -552,19 +553,19 @@ def pipeline():
 
     # Step 7: documentor copy-matching
     run_step(
-        f'"{sys.executable}" {sys.argv[0]} copy-matching "{PROCESSED_FILES_DIR}" --regex_pattern "{export_date}" --copy_dest_folder "{EXPORT_FILES_DIR}"',
+        f'"{sys.executable}" {sys.argv[0]} copy-matching "{PROCESSED_FILES_DIR}" --regex_pattern "{export_date}" --copy_dest_folder "{export_date_dir}"',
         "Step 7: Copying matching documents"
     )
 
     # Step 8: pdf-merger
     run_step(
-        f'pdf-merger "{EXPORT_FILES_DIR}"',
+        f'pdf-merger "{export_date_dir}"',
         "Step 8: Merging documents"
     )
 
     # Step 9: documentor check_files_exist
     run_step(
-        f'"{sys.executable}" {sys.argv[0]} check_files_exist "{EXPORT_FILES_DIR}"',
+        f'"{sys.executable}" {sys.argv[0]} check_files_exist "{export_date_dir}"',
         "Step 9: Validating documents"
     )
 
