@@ -864,10 +864,10 @@ def main():
         'extract_new', 'rename_files', 'validate_metadata', 'export_excel', 'copy_matching', 'check_files_exist', 'pipeline'
     ], help="Specify task: 'extract_new', 'rename_files', 'validate_metadata', 'export_excel', 'copy_matching', 'check_files_exist', or 'pipeline'.")
     parser.add_argument("processed_path", type=str, nargs='?', help="Path to output folder.")
-    parser.add_argument("--raw_path", type=str, help="Path to documents folder (required for 'extract' task).")
-    parser.add_argument("--excel_output_path", type=str, help="Path to output Excel file (for 'excel' task).")
-    parser.add_argument("--regex_pattern", type=str, help="Regex pattern for matching filenames (for 'copy-matching' task).")
-    parser.add_argument("--copy_dest_folder", type=str, help="Destination folder for copied files (for 'copy-matching' task).")
+    parser.add_argument("--raw_path", type=str, help="Path to documents folder (required for 'extract_new' task).")
+    parser.add_argument("--excel_output_path", type=str, help="Path to output Excel file (for 'export_excel' task).")
+    parser.add_argument("--regex_pattern", type=str, help="Regex pattern for matching filenames (for 'copy_matching' task).")
+    parser.add_argument("--copy_dest_folder", type=str, help="Destination folder for copied files (for 'copy_matching' task).")
     parser.add_argument("--check_schema_path", type=str, help="Validation schema path (for 'check_files_exist' task).")
     parser.add_argument("--export_date", type=str, help="Export date in YYYY-MM format (for 'pipeline' task, optional).")
     args = parser.parse_args()
@@ -884,18 +884,18 @@ def main():
     if not os.path.exists(args.processed_path): parser.error(f"The processed_path '{args.processed_path}' does not exist.")
     if not os.path.isdir(args.processed_path): parser.error(f"The processed_path '{args.processed_path}' is not a directory.")
 
-    if args.task == "extract":
-        if not args.raw_path: parser.error("the --raw_path argument is required when task is 'extract'.")
+    if args.task == "extract_new":
+        if not args.raw_path: parser.error("the --raw_path argument is required when task is 'extract_new'.")
         if not os.path.exists(args.raw_path): parser.error(f"The raw_path '{args.raw_path}' does not exist.")
         if not os.path.isdir(args.raw_path): parser.error(f"The raw_path '{args.raw_path}' is not a directory.")
 
-    if args.task == "excel":
-        if not args.excel_output_path: parser.error("the --excel_output_path argument is required when task is 'excel'.")
+    if args.task == "export_excel":
+        if not args.excel_output_path: parser.error("the --excel_output_path argument is required when task is 'export_excel'.")
         if not args.excel_output_path.endswith(".xlsx"): parser.error("the --excel_output_path argument must end with '.xlsx'.")
 
-    if args.task == "copy-matching":
-        if not args.regex_pattern: parser.error("the --regex_pattern argument is required when task is 'copy-matching'.")
-        if not args.copy_dest_folder: parser.error("the --copy_dest_folder argument is required when task is 'copy-matching'.")
+    if args.task == "copy_matching":
+        if not args.regex_pattern: parser.error("the --regex_pattern argument is required when task is 'copy_matching'.")
+        if not args.copy_dest_folder: parser.error("the --copy_dest_folder argument is required when task is 'copy_matching'.")
         if not os.path.exists(args.copy_dest_folder):
             os.makedirs(args.copy_dest_folder, exist_ok=True)
         if not os.path.isdir(args.copy_dest_folder): parser.error(f"The copy_dest_folder '{args.copy_dest_folder}' is not a directory.")
