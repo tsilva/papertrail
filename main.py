@@ -524,49 +524,49 @@ def pipeline():
     # Step 1: mbox-extractor
     run_step(
         f'mbox-extractor "{RAW_FILES_DIR}"',
-        "Step 1: Starting Google Takeout mbox extraction"
+        "Step 1: Google Takeout mbox extraction"
     )
 
     # Step 2: archive-extractor
     run_step(
         f'archive-extractor "{RAW_FILES_DIR}" --passwords "{zip_passwords_file_path}"',
-        "Step 2: Starting Google Takeout zip extraction"
+        "Step 2: Google Takeout zip extraction"
     )
 
-    # Step 3: documentor extract
+    # Step 3: documentor extract_new
     run_step(
-        f'"{sys.executable}" {sys.argv[0]} extract "{PROCESSED_FILES_DIR}" --raw_path "{RAW_FILES_DIR}"',
-        "Step 3: Extracting documents from Google Takeout"
+        f'"{sys.executable}" {sys.argv[0]} extract_new "{PROCESSED_FILES_DIR}" --raw_path "{RAW_FILES_DIR}"',
+        "Step 3: Extract new documents"
     )
 
-    # Step 5: documentor rename
+    # Step 4: documentor rename_files
     run_step(
-        f'"{sys.executable}" {sys.argv[0]} rename "{PROCESSED_FILES_DIR}"',
-        "Step 5: Renaming documents"
+        f'"{sys.executable}" {sys.argv[0]} rename_files "{PROCESSED_FILES_DIR}"',
+        "Step 4: Rename files and metadata"
     )
 
-    # Step 6: documentor excel
+    # Step 5: documentor export_excel
     run_step(
-        f'"{sys.executable}" {sys.argv[0]} excel "{PROCESSED_FILES_DIR}" --excel_output_path "{processed_files_excel_path}"',
-        "Step 6: Exporting documents to Excel"
+        f'"{sys.executable}" {sys.argv[0]} export_excel "{PROCESSED_FILES_DIR}" --excel_output_path "{processed_files_excel_path}"',
+        "Step 5: Export metadata to Excel"
     )
 
-    # Step 7: documentor copy-matching
+    # Step 6: documentor copy_matching
     run_step(
-        f'"{sys.executable}" {sys.argv[0]} copy-matching "{PROCESSED_FILES_DIR}" --regex_pattern "{export_date}" --copy_dest_folder "{export_date_dir}"',
-        "Step 7: Copying matching documents"
+        f'"{sys.executable}" {sys.argv[0]} copy_matching "{PROCESSED_FILES_DIR}" --regex_pattern "{export_date}" --copy_dest_folder "{export_date_dir}"',
+        "Step 6: Copy matching documents"
     )
 
-    # Step 8: pdf-merger
+    # Step 7: pdf-merger
     run_step(
         f'pdf-merger "{export_date_dir}"',
-        "Step 8: Merging documents"
+        "Step 7: Merge PDFs"
     )
 
-    # Step 9: documentor check_files_exist
+    # Step 8: documentor check_files_exist
     run_step(
         f'"{sys.executable}" {sys.argv[0]} check_files_exist "{export_date_dir}"',
-        "Step 9: Validating documents"
+        "Step 8: Validate exported files"
     )
 
     print("All steps completed successfully.")
