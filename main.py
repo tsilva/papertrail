@@ -837,18 +837,12 @@ def process_folder(task: str, processed_path: str, raw_path: str = None, excel_o
     processed_path = Path(processed_path)
     processed_path.mkdir(parents=True, exist_ok=True)
 
-    if task == "extract_new":
-        _task__extract_new(processed_path, raw_path)
-    elif task == "rename_files":
-        _task__rename_files(processed_path)
-    elif task == "validate_metadata":
-        _task__validate_metadata(processed_path)
-    elif task == "export_excel":
-        _task__export_excel(processed_path, excel_output_path)
-    elif task == "copy_matching":
-        _task__copy_matching(processed_path, regex_pattern, copy_dest_folder)
-    elif task == "check_files_exist":
-        _task__check_files_exist(processed_path, check_schema_path)
+    if task == "extract_new": _task__extract_new(processed_path, raw_path)
+    elif task == "rename_files": _task__rename_files(processed_path)
+    elif task == "validate_metadata": _task__validate_metadata(processed_path)
+    elif task == "export_excel": _task__export_excel(processed_path, excel_output_path)
+    elif task == "copy_matching": _task__copy_matching(processed_path, regex_pattern, copy_dest_folder)
+    elif task == "check_files_exist": _task__check_files_exist(processed_path, check_schema_path)
     else:
         print("Invalid task specified. Use 'extract_new', 'rename_files', 'validate_metadata', 'export_excel', 'copy_matching', or 'check_files_exist'.")
 
