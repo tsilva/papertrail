@@ -632,7 +632,7 @@ def _task__extract_new(processed_path, raw_path):
 
     print(f"Calculating hashes for {len(pdf_paths)} PDFs...")
     file_hash_map = {pdf: hash_file(pdf) for pdf in tqdm(pdf_paths, desc="Hashing files")}
-    files_to_process = [pdf for pdf in pdf_paths if file_hash_map[pdf]]# not in known_hashes]
+    files_to_process = [pdf for pdf in pdf_paths if file_hash_map[pdf] not in known_hashes]
 
     print(f"Found {len(files_to_process)} new PDFs.")
     rename_pdf_files(files_to_process, file_hash_map, known_hashes, processed_path)
