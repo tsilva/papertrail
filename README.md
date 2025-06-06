@@ -17,8 +17,17 @@ Documentor uses Claude AI to analyze PDF documents, extract key metadata (dates,
 git clone https://github.com/tsilva/documentor.git
 cd documentor
 
-# Install globally with pipx
+# Option A: Install globally with pipx
 pipx install . --force
+
+# Option B: Use uv to create a local environment
+uv venv
+uv pip install -r pyproject.toml
+# No need to activate the venv; `uv run` handles that
+uv run python main.py --help  # run the CLI directly from the repo
+
+# (Optional) install the package locally to use the `documentor` command
+uv pip install -e .
 ```
 
 ## 🛠️ Usage
