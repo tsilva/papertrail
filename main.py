@@ -201,15 +201,25 @@ def file_name_from_metadata(metadata: DocumentMetadata, file_hash: str) -> str:
     parts.append(f"{file_hash}.pdf")
     return " - ".join(parts).lower()
 
-def find_pdf_files(folder_path: Path):
-    return [
-        Path(root) / file
-        for root, _, files in os.walk(folder_path)
-        for file in files
-        if file.lower().endswith('.pdf')
-        and not file.startswith('.')
-        and (Path(root) / file).stat().st_size > 0
-    ]
+def find_pdf_files(folder_paths):
+    """Return all PDF files within one or multiple folders."""
+    if isinstance(folder_paths, (str, Path)):
+        folder_paths = [folder_paths]
+
+    pdfs = []
+    for folder_path in folder_paths:
+        folder_path = Path(folder_path)
+        if not folder_path.exists():
+            continue
+        for root, _, files in os.walk(folder_path):
+            for file in files:
+                if (
+                    file.lower().endswith('.pdf')
+                    and not file.startswith('.')
+                    and (Path(root) / file).stat().st_size > 0
+                ):
+                    pdfs.append(Path(root) / file)
+    return pdfs
 
 # ------------------- CLASSIFICATION -------------------
 
@@ -589,21 +599,23 @@ def pipeline(export_date_arg=None):
 
     processed_files_excel_path = Path(PROCESSED_FILES_DIR) / "processed_files.xlsx"
 
-    # Step 1: mbox-extractor
-    run_step(
-        f'mbox-extractor "{RAW_FILES_DIR}"',
-        "Step 1: Google Takeout mbox extraction"
-    )
+    raw_dirs = [p for p in RAW_FILES_DIR.split(';') if p]
 
-    # Step 2: archive-extractor
-    run_step(
-        f'archive-extractor "{RAW_FILES_DIR}" --passwords "{zip_passwords_file_path}"',
-        "Step 2: Google Takeout zip extraction"
-    )
+    # Step 1 & 2 for each raw dir
+    for rd in raw_dirs:
+        run_step(
+            f'mbox-extractor "{rd}"',
+            "Step 1: Google Takeout mbox extraction"
+        )
+        run_step(
+            f'archive-extractor "{rd}" --passwords "{zip_passwords_file_path}"',
+            "Step 2: Google Takeout zip extraction"
+        )
 
     # Step 3: documentor extract_new
+    raw_dirs_arg = ";".join(raw_dirs)
     run_step(
-        f'"{sys.executable}" "{__file__}" extract_new "{PROCESSED_FILES_DIR}" --raw_path "{RAW_FILES_DIR}"',
+        f'"{sys.executable}" "{__file__}" extract_new "{PROCESSED_FILES_DIR}" --raw_path "{raw_dirs_arg}"',
         "Step 3: Extract new documents"
     )
 
@@ -639,12 +651,12 @@ def pipeline(export_date_arg=None):
 
     print("All steps completed successfully.")
 
-def _task__extract_new(processed_path, raw_path):
+def _task__extract_new(processed_path, raw_paths):
     print("Building hash index from metadata files...")
     known_hashes = set(build_output_hash_index(processed_path).keys())  # Convert to set for efficiency
 
     print("Scanning for new PDFs...")
-    pdf_paths = find_pdf_files(raw_path)
+    pdf_paths = find_pdf_files(raw_paths)
 
     print(f"Calculating hashes for {len(pdf_paths)} PDFs...")
     file_hash_map = {pdf: hash_file(pdf) for pdf in tqdm(pdf_paths, desc="Hashing files")}
@@ -886,12 +898,13 @@ def _task__check_files_exist(processed_path, check_schema_path):
         print("\nSome file existence checks failed.")
     print("File existence check complete.")
 
-def process_folder(task: str, processed_path: str, raw_path: str = None, excel_output_path: str = None, regex_pattern: str = None, copy_dest_folder: str = None, check_schema_path: str = None):
-    if raw_path is not None: raw_path = Path(raw_path)
+def process_folder(task: str, processed_path: str, raw_paths=None, excel_output_path: str = None, regex_pattern: str = None, copy_dest_folder: str = None, check_schema_path: str = None):
+    if raw_paths is not None:
+        raw_paths = [Path(p) for p in raw_paths]
     processed_path = Path(processed_path)
     processed_path.mkdir(parents=True, exist_ok=True)
 
-    if task == "extract_new": _task__extract_new(processed_path, raw_path)
+    if task == "extract_new": _task__extract_new(processed_path, raw_paths)
     elif task == "rename_files": _task__rename_files(processed_path)
     elif task == "validate_metadata": _task__validate_metadata(processed_path)
     elif task == "export_excel": _task__export_excel(processed_path, excel_output_path)
@@ -906,7 +919,7 @@ def main():
         'extract_new', 'rename_files', 'validate_metadata', 'export_excel', 'copy_matching', 'check_files_exist', 'pipeline'
     ], help="Specify task: 'extract_new', 'rename_files', 'validate_metadata', 'export_excel', 'copy_matching', 'check_files_exist', or 'pipeline'.")
     parser.add_argument("processed_path", type=str, nargs='?', help="Path to output folder.")
-    parser.add_argument("--raw_path", type=str, help="Path to documents folder (required for 'extract_new' task).")
+    parser.add_argument("--raw_path", type=str, help="Path to documents folder(s). Use ';' to separate multiple paths (required for 'extract_new' task).")
     parser.add_argument("--excel_output_path", type=str, help="Path to output Excel file (for 'export_excel' task).")
     parser.add_argument("--regex_pattern", type=str, help="Regex pattern for matching filenames (for 'copy_matching' task).")
     parser.add_argument("--copy_dest_folder", type=str, help="Destination folder for copied files (for 'copy_matching' task).")
@@ -926,10 +939,18 @@ def main():
     if not os.path.exists(args.processed_path): parser.error(f"The processed_path '{args.processed_path}' does not exist.")
     if not os.path.isdir(args.processed_path): parser.error(f"The processed_path '{args.processed_path}' is not a directory.")
 
+    raw_paths = None
     if args.task == "extract_new":
-        if not args.raw_path: parser.error("the --raw_path argument is required when task is 'extract_new'.")
-        if not os.path.exists(args.raw_path): parser.error(f"The raw_path '{args.raw_path}' does not exist.")
-        if not os.path.isdir(args.raw_path): parser.error(f"The raw_path '{args.raw_path}' is not a directory.")
+        if not args.raw_path:
+            parser.error("the --raw_path argument is required when task is 'extract_new'.")
+        raw_paths = [p for p in args.raw_path.split(';') if p]
+        if not raw_paths:
+            parser.error("the --raw_path argument must contain at least one path.")
+        for rp in raw_paths:
+            if not os.path.exists(rp):
+                parser.error(f"The raw_path '{rp}' does not exist.")
+            if not os.path.isdir(rp):
+                parser.error(f"The raw_path '{rp}' is not a directory.")
 
     if args.task == "export_excel":
         if not args.excel_output_path: parser.error("the --excel_output_path argument is required when task is 'export_excel'.")
@@ -952,7 +973,7 @@ def main():
     process_folder(
         args.task,
         args.processed_path,
-        raw_path=args.raw_path,
+        raw_paths=raw_paths if args.task == "extract_new" else None,
         excel_output_path=args.excel_output_path,
         regex_pattern=args.regex_pattern,
         copy_dest_folder=args.copy_dest_folder,

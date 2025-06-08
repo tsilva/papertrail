@@ -45,7 +45,7 @@ documentor <task> <processed_path> [--raw_path ...] [--excel_output_path ...] [-
   Extract metadata from new PDFs in a raw folder and copy them to the processed folder.  
   **Usage:**  
   ```bash
-  documentor extract_new <processed_path> --raw_path <raw_pdf_folder>
+  documentor extract_new <processed_path> --raw_path <raw_folder1;raw_folder2>
   ```
 
 - `rename_files`  
