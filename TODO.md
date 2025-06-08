@@ -1,1 +1,2 @@
-- try mounting gdrive with rclone
+- add descriptions to document types (to maximize likelihood of finding the right document type)
+- FEAT: deal with documents that are the same but have different hashes (eg: openrouter), eg: add duplicate detection through pixel hashing

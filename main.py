@@ -92,7 +92,7 @@ def create_dynamic_enum(name, data):
 
 DocumentType = create_dynamic_enum('DocumentType', DOCUMENT_TYPES)
 
-class DocumentMetadata(BaseModel):
+class DocumentMetadataInput(BaseModel):
     issue_date: str = Field(description="Date issued, format: YYYY-MM-DD.", example="2025-01-02")
     document_type: DocumentType = Field(description="Type of document.", example="invoice")
     issuing_party: str = Field(description="Issuer name, one word if possible.", example="Amazon")
@@ -101,8 +101,11 @@ class DocumentMetadata(BaseModel):
     total_amount_currency: Optional[str] = Field(description="Currency of the total amount.", example="EUR")
     confidence: float = Field(description="Confidence score between 0 and 1.")
     reasoning: str = Field(description="Why this classification was chosen.")
+
+class DocumentMetadata(DocumentMetadataInput):
     hash: str = Field(description="SHA256 hash of the file (first 8 chars).", example="a1b2c3d4")
     create_date: Optional[str] = Field(default=None, description="Date this metadata was created, format: YYYY-MM-DD.", example="2024-06-01")
+    update_date: Optional[str] = Field(default=None, description="Date this metadata was last updated, format: YYYY-MM-DD.", example="2024-06-01")
 
     @field_validator('total_amount', mode='before')
     @classmethod
@@ -265,7 +268,9 @@ def classify_pdf_document(pdf_path: Path, file_hash: str) -> DocumentMetadata:
         args = tool_calls[0].function.arguments
         metadata = DocumentMetadata.model_validate_json(args)
         metadata.hash = file_hash
-        metadata.create_date = datetime.now().strftime("%Y-%m-%d")
+        now = datetime.now().strftime("%Y-%m-%d")
+        metadata.create_date = now
+        metadata.update_date = now
         return metadata
     except Exception as e:
         print(e)
