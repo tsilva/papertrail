@@ -96,7 +96,7 @@ documentor <task> <processed_path> [--raw_path ...] [--excel_output_path ...] [-
 2. The first page is rendered as an image and sent to Claude AI
 3. Claude extracts structured metadata (dates, amounts, document types)
 4. Files are renamed using a consistent format: `date - type - issuer - [service] - [amount] - hash.pdf`
-5. Metadata is stored alongside each PDF as a JSON file
+5. Metadata is stored alongside each PDF as a JSON file. The `create_date` and `update_date` fields are added automatically when metadata is generated
 
 Document types are defined in `config/document_types.json`, which determines valid classification categories.
 
