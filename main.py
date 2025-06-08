@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Optional
 
 import sys
-import anthropic
+import openai
 import fitz
 import pandas as pd
 from tqdm import tqdm
@@ -58,7 +58,11 @@ CONFIG_DIR, ENV_PATH = ensure_home_config_and_env()
 from dotenv import load_dotenv
 load_dotenv(dotenv_path=ENV_PATH, override=True)
 
-ANTHROPIC_MODEL_ID = os.getenv("ANTHROPIC_MODEL_ID")
+OPENROUTER_MODEL_ID = os.getenv("OPENROUTER_MODEL_ID")
+OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
+OPENROUTER_BASE_URL = os.getenv("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1")
+
+openai_client = openai.OpenAI(api_key=OPENROUTER_API_KEY, base_url=OPENROUTER_BASE_URL)
 
 # ------------------- ENUMS & MODELS -------------------
 
@@ -124,13 +128,18 @@ class DocumentMetadata(BaseModel):
             '£': 'GBP'
         }.get(value, value)
 
-# ------------------- CLAUDE TOOL SETUP -------------------
+# ------------------- LLM TOOL SETUP -------------------
 
-TOOLS = [{
-    "name": "extract_document_metadata",
-    "description": "Extract metadata from a document.",
-    "input_schema": DocumentMetadata.model_json_schema()
-}]
+TOOLS = [
+    {
+        "type": "function",
+        "function": {
+            "name": "extract_document_metadata",
+            "description": "Extract metadata from a document.",
+            "parameters": DocumentMetadata.model_json_schema(),
+        },
+    }
+]
 
 SYSTEM_PROMPT = (
     f"You are an expert document classification and extraction assistant. "
@@ -202,7 +211,7 @@ def find_pdf_files(folder_path: Path):
 # ------------------- CLASSIFICATION -------------------
 
 def classify_pdf_document(pdf_path: Path, file_hash: str) -> DocumentMetadata:
-    client = anthropic.Anthropic()
+    client = openai_client
 
     try:
         # Use PyMuPDF to render the first two pages as images (if available)
@@ -227,32 +236,34 @@ def classify_pdf_document(pdf_path: Path, file_hash: str) -> DocumentMetadata:
         raise RuntimeError(f"Failed to render PDF image: {pdf_path}") from e
 
     try:
-        # Prepare content with up to two images
-        content = [
-            {"type": "image", "source": {"type": "base64", "media_type": "image/jpeg", "data": img_b64}}
+        # Prepare messages with up to two images
+        user_content = [
+            {
+                "type": "image_url",
+                "image_url": {"url": f"data:image/jpeg;base64,{img_b64}"}
+            }
             for img_b64 in images_b64
         ]
-        response = client.messages.create(
-            model=ANTHROPIC_MODEL_ID,
+
+        messages = [
+            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "user", "content": user_content},
+        ]
+
+        response = client.chat.completions.create(
+            model=OPENROUTER_MODEL_ID,
             max_tokens=4096,
             temperature=0,
-            system=[{
-                "type": "text",
-                "text": SYSTEM_PROMPT,
-                "cache_control": {"type": "ephemeral"}
-            }],
-            messages=[{
-                "role": "user",
-                "content": content
-            }],
-            tools=TOOLS
+            messages=messages,
+            tools=TOOLS,
         )
-        
-        tool_result = next((c.input for c in response.content if hasattr(c, "input")), None)
-        if not tool_result:
-            raise ValueError("Claude did not return structured classification.")
-        
-        metadata = DocumentMetadata.model_validate(tool_result)
+
+        tool_calls = response.choices[0].message.tool_calls
+        if not tool_calls:
+            raise ValueError("OpenRouter did not return structured classification.")
+
+        args = tool_calls[0].function.arguments
+        metadata = DocumentMetadata.model_validate_json(args)
         metadata.hash = file_hash
         metadata.create_date = datetime.now().strftime("%Y-%m-%d")
         return metadata

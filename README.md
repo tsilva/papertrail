@@ -8,7 +8,7 @@
 
 ## 📖 Overview
 
-Documentor uses Claude AI to analyze PDF documents, extract key metadata (dates, amounts, issuers), and organize them with consistent, descriptive filenames. It helps you manage document collections by automatically classifying document types, preventing duplicates through file hashing, and creating structured metadata that can be exported to CSV for analysis.
+Documentor uses OpenRouter with OpenAI's GPT-4.1 model to analyze PDF documents, extract key metadata (dates, amounts, issuers), and organize them with consistent, descriptive filenames. It helps you manage document collections by automatically classifying document types, preventing duplicates through file hashing, and creating structured metadata that can be exported to CSV for analysis.
 
 ## 🚀 Installation
 
@@ -93,8 +93,8 @@ documentor <task> <processed_path> [--raw_path ...] [--excel_output_path ...] [-
 ## 🔍 How It Works
 
 1. PDFs are scanned and hashed to identify unique documents
-2. The first page is rendered as an image and sent to Claude AI
-3. Claude extracts structured metadata (dates, amounts, document types)
+2. The first page is rendered as an image and sent to GPT-4.1 via OpenRouter
+3. GPT-4.1 extracts structured metadata (dates, amounts, document types)
 4. Files are renamed using a consistent format: `date - type - issuer - [service] - [amount] - hash.pdf`
 5. Metadata is stored alongside each PDF as a JSON file
 
