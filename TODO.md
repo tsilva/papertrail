@@ -1,2 +1,4 @@
 - add descriptions to document types (to maximize likelihood of finding the right document type)
-- FEAT: deal with documents that are the same but have different hashes (eg: openrouter), eg: add duplicate detection through pixel hashing
+- deal with documents that are the same but have different hashes (eg: openrouter), eg: add duplicate detection through pixel hashing
+- add support for locking providers / services for more accurate extraction
+- provide details on how to interpret dates in current locale
