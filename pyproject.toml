@@ -12,7 +12,7 @@ authors = [
 dependencies = [
     "tqdm",
     "python-dotenv",
-    "anthropic",
+    "openai",
     "PyMuPDF",
     "pandas",
     "pydantic",
