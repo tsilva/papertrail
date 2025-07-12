@@ -1,3 +1,5 @@
+- Duplicates are making it into merged_all.pdf
+- In order to maximize matches, run each value against all existing values using fuzzy matching.
 - add descriptions to document types (to maximize likelihood of finding the right document type)
 - deal with documents that are the same but have different hashes (eg: openrouter), eg: add duplicate detection through pixel hashing
 - add support for locking providers / services for more accurate extraction
