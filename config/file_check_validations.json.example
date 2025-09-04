@@ -17,6 +17,6 @@
   { "document_type": "vacation-pay-slip" },
   { "document_type": "salary-receipt" },
   { "document_type": "social-security-extract" },
-  { "document_type": "bank-transaction-list", "issuing_party": "MilleniumBCP" },
-  { "document_type": "bank-transaction-list", "issuing_party": "BPI" }
+  { "document_type": "bank-account-statement", "issuing_party": "MilleniumBCP" },
+  { "document_type": "bank-account-statement", "issuing_party": "BPI" }
 ]
