@@ -69,21 +69,109 @@ openai_client = openai.OpenAI(api_key=OPENROUTER_API_KEY, base_url=OPENROUTER_BA
 import importlib.resources
 
 def load_document_types():
-    # Always check home config dir first, then fallback to other locations
-    candidates = [
-        Path.home() / ".documentor" / "document_types.json",  # home config dir
-        Path(__file__).parent / "config" / "document_types.json",  # dev and editable install
-        Path(sys.argv[0]).parent / "config" / "document_types.json",  # pipx global bin
-        Path.cwd() / "config" / "document_types.json",  # user runs from project root
+    """Load document types from processed files directory by scanning metadata .json files."""
+    processed_files_dir = os.getenv("PROCESSED_FILES_DIR")
+
+    # Fallback list if env var not set or directory doesn't exist
+    fallback_types = [
+        "$UNKNOWN$", "bill", "certificate", "contract", "declaration", "email", "extract",
+        "invoice", "letter", "notification", "other", "receipt", "report", "statement", "ticket"
     ]
-    for path in candidates:
-        if path.exists():
-            with open(path, "r", encoding="utf-8") as f:
-                return json.load(f)
-    raise FileNotFoundError(
-        "Could not find 'document_types.json' in '~/.documentor', 'config', or working directory. "
-        "Make sure the config file exists in your home config folder or project."
-    )
+
+    if not processed_files_dir or not Path(processed_files_dir).exists():
+        return fallback_types
+
+    document_types_set = set()
+    processed_path = Path(processed_files_dir)
+
+    # Scan all .json files in the processed directory
+    for json_file in processed_path.rglob("*.json"):
+        try:
+            with open(json_file, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                document_type = data.get("document_type")
+                if document_type:
+                    # Handle both string and enum-like string formats
+                    if isinstance(document_type, str):
+                        if document_type.startswith("DocumentType."):
+                            document_type = document_type.split(".", 1)[-1]
+                        document_types_set.add(document_type)
+        except Exception:
+            # Silently skip files that can't be read or parsed
+            continue
+
+    # If no types found, use fallback
+    if not document_types_set:
+        document_types_set = set(fallback_types)
+
+    # Always ensure "$UNKNOWN$" is in the list
+    document_types_set.add("$UNKNOWN$")
+
+    # Return sorted list for consistency
+    return sorted(document_types_set)
+
+def load_issuing_parties():
+    """Load issuing parties from processed files directory by scanning metadata .json files."""
+    processed_files_dir = os.getenv("PROCESSED_FILES_DIR")
+
+    # Fallback list if env var not set or directory doesn't exist
+    fallback_parties = [
+        "$UNKNOWN$", "ActivoBank", "Allianz", "Amazon", "Anthropic", "Antonio Martins & Filhos",
+        "Apple", "Armando", "Ascendi", "AT", "Auchan", "Banco BEST", "Banco Invest",
+        "Bandicam", "BIG", "Bitwarden", "BlackRock", "BP", "BPI", "Caetano Formula",
+        "Carrefour", "CEPSA", "Cleverbridge", "Codota", "Cohere", "Coinbase",
+        "Consensus", "Continente", "CTT", "Dacia", "DEGIRO", "Digital River",
+        "DigitalOcean", "DOKKER", "E.Leclerc", "EUROPA", "ExpressVPN", "FGCT",
+        "Fidelidade", "Fluxe", "Fundo de Compensação do Trabalho", "Galp", "GESPOST",
+        "GitHub", "GONCALTEAM", "Google", "Google Commerce Limited", "Government",
+        "GRUPO", "HONG KONG USGREEN LIMITED", "INE", "Intermarché", "International",
+        "IRN", "IRS", "iServices", "iShares", "justETF", "Justica",
+        "La Maison", "Leroy", "LuLuComfort", "LusoAloja", "M2030",
+        "MANUEL ALVES DIAS, LDA", "MB WAY", "Melo, Nadais & Associados", "Microsoft",
+        "MillenniumBCP", "Mini Soninha", "Ministério das Finanças", "Mobatek",
+        "MONTEPIO", "Multibanco", "Multicare", "MyCommerce", "MyFactoryHub", "NordVPN",
+        "NOS", "Notario", "NTI", "OCC", "OpenAI", "OpenRouter", "OUYINEN", "Paddle",
+        "Parallels", "PayPal", "PCDIGA", "Pinecone", "PLIMAT", "Pluxee", "PRIO",
+        "PRISMXR", "Puzzle Message, Unipessoal Lda.", "Quindi", "Redunicre",
+        "RegistoLEI", "Renault", "República Portuguesa", "RescueTime", "Restaurant",
+        "Securitas", "Segurança Social", "SEGURANÇA SOCIAL", "Shenzhen", "Sierra",
+        "Sodexo", "Solred", "SONAE", "SRS Acquiom", "Swappie", "Sweatcoin",
+        "Tesouraria", "TIAGO", "Tilda", "Together.ai", "TopazLabs", "Universal",
+        "Universo", "$UNKNOWN$", "Vanguard", "Via Verde", "VIDRIO PAIS PORTUGAL",
+        "VITALOPE", "Vodafone", "WisdomTree", "Worten", "xAI"
+    ]
+
+    if not processed_files_dir or not Path(processed_files_dir).exists():
+        return fallback_parties
+
+    issuing_parties_set = set()
+    processed_path = Path(processed_files_dir)
+
+    # Scan all .json files in the processed directory
+    for json_file in processed_path.rglob("*.json"):
+        try:
+            with open(json_file, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                issuing_party = data.get("issuing_party")
+                if issuing_party:
+                    # Handle both string and enum-like string formats
+                    if isinstance(issuing_party, str):
+                        if issuing_party.startswith("IssuingParty."):
+                            issuing_party = issuing_party.split(".", 1)[-1]
+                        issuing_parties_set.add(issuing_party)
+        except Exception:
+            # Silently skip files that can't be read or parsed
+            continue
+
+    # If no parties found, use fallback
+    if not issuing_parties_set:
+        issuing_parties_set = set(fallback_parties)
+
+    # Always ensure "$UNKNOWN$" is in the list
+    issuing_parties_set.add("$UNKNOWN$")
+
+    # Return sorted list for consistency
+    return sorted(issuing_parties_set)
 
 DOCUMENT_TYPES = load_document_types()
 
@@ -92,10 +180,13 @@ def create_dynamic_enum(name, data):
 
 DocumentType = create_dynamic_enum('DocumentType', DOCUMENT_TYPES)
 
+ISSUING_PARTIES = load_issuing_parties()
+IssuingParty = create_dynamic_enum('IssuingParty', ISSUING_PARTIES)
+
 class DocumentMetadataInput(BaseModel):
     issue_date: str = Field(description="Date issued, format: YYYY-MM-DD.", example="2025-01-02")
     document_type: DocumentType = Field(description="Type of document.", example="invoice")
-    issuing_party: str = Field(description="Issuer name, one word if possible.", example="Amazon")
+    issuing_party: IssuingParty = Field(description="Issuer name, must be one of the predefined issuing parties.", example="Amazon")
     service_name: Optional[str] = Field(description="Product/service name if applicable (as short as possible).", example="Youtube Premium")
     total_amount: Optional[float] = Field(default=None, description="Total currency amount.")
     total_amount_currency: Optional[str] = Field(description="Currency of the total amount.", example="EUR")
@@ -106,6 +197,41 @@ class DocumentMetadata(DocumentMetadataInput):
     hash: str = Field(description="SHA256 hash of the file (first 8 chars).", example="a1b2c3d4")
     create_date: Optional[str] = Field(default=None, description="Date this metadata was created, format: YYYY-MM-DD.", example="2024-06-01")
     update_date: Optional[str] = Field(default=None, description="Date this metadata was last updated, format: YYYY-MM-DD.", example="2024-06-01")
+
+    @field_validator('issue_date', mode='before')
+    @classmethod
+    def validate_issue_date(cls, value):
+        if value is None or (isinstance(value, str) and value.strip() == ""):
+            return "$UNKNOWN$"
+        return value
+
+    @field_validator('issuing_party', mode='before')
+    @classmethod
+    def validate_issuing_party(cls, value):
+        if value is None or (isinstance(value, str) and value.strip() == ""):
+            return "$UNKNOWN$"
+        if isinstance(value, str):
+            # Clean up enum-formatted strings
+            if value.startswith("IssuingParty."):
+                value = value.split(".", 1)[-1]
+            # Check if value is in the valid enum values
+            if value not in [party for party in ISSUING_PARTIES]:
+                return "$UNKNOWN$"
+        return value
+
+    @field_validator('document_type', mode='before')
+    @classmethod
+    def validate_document_type(cls, value):
+        if value is None or (isinstance(value, str) and value.strip() == ""):
+            return "$UNKNOWN$"
+        if isinstance(value, str):
+            # Clean up enum-formatted strings
+            if value.startswith("DocumentType."):
+                value = value.split(".", 1)[-1]
+            # Check if value is in the valid enum values
+            if value not in [dt for dt in DOCUMENT_TYPES]:
+                return "$UNKNOWN$"
+        return value
 
     @field_validator('total_amount', mode='before')
     @classmethod
@@ -150,7 +276,9 @@ SYSTEM_PROMPT = (
     "Given a document image, your job is to extract structured metadata fields as accurately as possible. "
     "Use all available visual, textual, and layout cues. "
     "Be strict about field formats (e.g., dates as YYYY-MM-DD, currency as ISO code). "
-    "If a field is missing or ambiguous, leave it blank or null. "
+    "For any mandatory string field (issue_date, document_type, issuing_party), if the value cannot be extracted, "
+    "is empty, or does not match the allowed constraints (e.g., not in the predefined enum list), "
+    "you MUST use the value '$UNKNOWN$' for that field. "
     "Do not guess or hallucinate values. "
     "For 'reasoning', briefly explain your choices and any uncertainties. "
     "Never fabricate information. "
@@ -187,7 +315,7 @@ def file_name_from_metadata(metadata: DocumentMetadata, file_hash: str) -> str:
     parts = [
         sanitize_filename_component(metadata.issue_date),
         sanitize_filename_component(metadata.document_type.value),
-        sanitize_filename_component(metadata.issuing_party)
+        sanitize_filename_component(metadata.issuing_party.value)
     ]
 
     if metadata.service_name:
@@ -417,6 +545,15 @@ def export_metadata_to_excel(processed_path: Path, excel_output_path: str):
             ):
                 metadata_dict["document_type"] = metadata_dict["document_type"].split(".", 1)[-1]
 
+            # Ensure issuing_party is just the value, not Enum repr
+            if isinstance(metadata_dict.get("issuing_party"), Enum):
+                metadata_dict["issuing_party"] = metadata_dict["issuing_party"].value
+            elif (
+                isinstance(metadata_dict.get("issuing_party"), str)
+                and metadata_dict["issuing_party"].startswith("IssuingParty.")
+            ):
+                metadata_dict["issuing_party"] = metadata_dict["issuing_party"].split(".", 1)[-1]
+
             metadata_list.append(metadata_dict)
         except Exception as e:
             print(f"Skipping {metadata_path.name}: {e}")
@@ -528,10 +665,10 @@ def check_files_exist(target_folder: Path, validation_schema_path: Path):
     # Print OKs first, then FAILs
     for found, idx, check in sorted(check_results, key=lambda x: (not x[0], x[1])):
         if found:
-            print(f"[OK] {check} -- FOUND")
+            print(f"✅ {check} -- FOUND")
     for found, idx, check in sorted(check_results, key=lambda x: (not x[0], x[1])):
         if not found:
-            print(f"[FAIL] {check} -- NOT FOUND")
+            print(f"🛑 {check} -- NOT FOUND")
 
     if all_passed:
         print("\nAll file existence checks passed.")
@@ -772,6 +909,15 @@ def _task__export_excel(processed_path, excel_output_path):
             ):
                 metadata_dict["document_type"] = metadata_dict["document_type"].split(".", 1)[-1]
 
+            # Ensure issuing_party is just the value, not Enum repr
+            if isinstance(metadata_dict.get("issuing_party"), Enum):
+                metadata_dict["issuing_party"] = metadata_dict["issuing_party"].value
+            elif (
+                isinstance(metadata_dict.get("issuing_party"), str)
+                and metadata_dict["issuing_party"].startswith("IssuingParty.")
+            ):
+                metadata_dict["issuing_party"] = metadata_dict["issuing_party"].split(".", 1)[-1]
+
             metadata_list.append(metadata_dict)
         except Exception as e:
             print(f"Skipping {metadata_path.name}: {e}")
@@ -887,10 +1033,10 @@ def _task__check_files_exist(processed_path, check_schema_path):
     # Print OKs first, then FAILs
     for found, idx, check in sorted(check_results, key=lambda x: (not x[0], x[1])):
         if found:
-            print(f"[OK] {check} -- FOUND")
+            print(f"✅ {check} -- FOUND")
     for found, idx, check in sorted(check_results, key=lambda x: (not x[0], x[1])):
         if not found:
-            print(f"[FAIL] {check} -- NOT FOUND")
+            print(f"🛑 {check} -- NOT FOUND")
 
     if all_passed:
         print("\nAll file existence checks passed.")
