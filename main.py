@@ -43,12 +43,12 @@ def ensure_home_config_and_env():
                     shutil.copy(file, dest)
                     files_copied.append(dest_name)
     if files_copied:
-        print(f"✅ Copied example config files to {config_dir}: {', '.join(files_copied)}.\nEdit these files before rerunning.")
+        print(f"[OK] Copied example config files to {config_dir}: {', '.join(files_copied)}.\nEdit these files before rerunning.")
         sys.exit(0)
     # Always ensure .env exists (even if not in example files)
     if not env_path.exists():
         env_path.touch()
-        print(f"✅ Created .env at {env_path}. Edit this file before rerunning.")
+        print(f"[OK] Created .env at {env_path}. Edit this file before rerunning.")
         sys.exit(0)
     return config_dir, env_path
 
@@ -665,10 +665,10 @@ def check_files_exist(target_folder: Path, validation_schema_path: Path):
     # Print OKs first, then FAILs
     for found, idx, check in sorted(check_results, key=lambda x: (not x[0], x[1])):
         if found:
-            print(f"✅ {check} -- FOUND")
+            print(f"[OK] {check} -- FOUND")
     for found, idx, check in sorted(check_results, key=lambda x: (not x[0], x[1])):
         if not found:
-            print(f"🛑 {check} -- NOT FOUND")
+            print(f"[FAIL] {check} -- NOT FOUND")
 
     if all_passed:
         print("\nAll file existence checks passed.")
@@ -1033,10 +1033,10 @@ def _task__check_files_exist(processed_path, check_schema_path):
     # Print OKs first, then FAILs
     for found, idx, check in sorted(check_results, key=lambda x: (not x[0], x[1])):
         if found:
-            print(f"✅ {check} -- FOUND")
+            print(f"[OK] {check} -- FOUND")
     for found, idx, check in sorted(check_results, key=lambda x: (not x[0], x[1])):
         if not found:
-            print(f"🛑 {check} -- NOT FOUND")
+            print(f"[FAIL] {check} -- NOT FOUND")
 
     if all_passed:
         print("\nAll file existence checks passed.")
