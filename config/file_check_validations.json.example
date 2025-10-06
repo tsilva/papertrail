@@ -9,14 +9,13 @@
     "service_name": "Google One",
     "issuing_party": "Google"
   },
-  { "document_type": "irs-monthly-tax-statement"},
+  { "document_type": "tax-irs-monthly-statement"},
   { "document_type": "social-security-extract"},
   { "document_type": "invoice", "issuing_party": "Vodafone" },
-  { "document_type": "invoice", "issuing_party": "Fidelidade" },
+  { "document_type": "invoice-receipt", "issuing_party": "Fidelidade" },
   { "document_type": "salary-slip" },
   { "document_type": "vacation-pay-slip" },
-  { "document_type": "salary-receipt" },
   { "document_type": "social-security-extract" },
-  { "document_type": "bank-account-statement", "issuing_party": "MilleniumBCP" },
-  { "document_type": "bank-account-statement", "issuing_party": "BPI" }
+  { "document_type": "bank-statement", "issuing_party": "MillenniumBCP" },
+  { "document_type": "bank-statement", "issuing_party": "BPI" }
 ]
