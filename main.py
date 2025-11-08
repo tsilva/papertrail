@@ -802,11 +802,7 @@ import subprocess
 
 def run_step(cmd, step_desc):
     print(f"### {step_desc}...")
-    result = subprocess.run(cmd, shell=True, capture_output=True, text=True)
-    if result.stdout:
-        print(result.stdout)
-    if result.stderr:
-        print(result.stderr)
+    result = subprocess.run(cmd, shell=True, text=True)
     if result.returncode != 0:
         print(f"{step_desc} failed with exit code {result.returncode}.")
         sys.exit(result.returncode)
