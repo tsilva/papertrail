@@ -11,7 +11,8 @@
       "Bash(done)",
       "Bash(xargs -I {} sh -c 'echo \"\"\"\"=== {} ===\"\"\"\" && cat \"\"\"\"{}\"\"\"\" | grep -E \"\"\"\"hash\"\"\"\"')",
       "Bash(cat:*)",
-      "Bash(timeout 120 python:*)"
+      "Bash(timeout 120 python:*)",
+      "Bash(find:*)"
     ],
     "deny": [],
     "ask": []
