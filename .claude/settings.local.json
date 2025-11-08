@@ -12,7 +12,9 @@
       "Bash(xargs -I {} sh -c 'echo \"\"\"\"=== {} ===\"\"\"\" && cat \"\"\"\"{}\"\"\"\" | grep -E \"\"\"\"hash\"\"\"\"')",
       "Bash(cat:*)",
       "Bash(timeout 120 python:*)",
-      "Bash(find:*)"
+      "Bash(find:*)",
+      "Bash(source ~/.documentor/.env)",
+      "Bash(echo:*)"
     ],
     "deny": [],
     "ask": []

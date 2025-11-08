@@ -820,6 +820,123 @@ def export_metadata_to_excel(processed_path: Path, excel_output_path: str):
     else:
         print("\nNo valid metadata found to export.")
 
+def get_all_unique_dates(processed_path: Path) -> list:
+    """
+    Scan all JSON metadata files and extract unique YYYY-MM dates.
+    Returns sorted list of dates (most recent first).
+    """
+    dates_set = set()
+    json_files = list(processed_path.rglob("*.json"))
+
+    for json_file in json_files:
+        try:
+            with open(json_file, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            issue_date = data.get("issue_date", "")
+            if issue_date and issue_date != "$UNKNOWN$":
+                # Extract YYYY-MM portion
+                match = re.match(r"^(\d{4}-\d{2})", issue_date)
+                if match:
+                    dates_set.add(match.group(1))
+        except Exception:
+            continue
+
+    # Sort dates in descending order (most recent first)
+    return sorted(dates_set, reverse=True)
+
+def copy_files_incremental(processed_path: Path, regex_pattern: str, dest_folder: Path) -> dict:
+    """
+    Incrementally copy files matching regex_pattern to dest_folder.
+    Only copies files that don't exist or have changed.
+
+    Returns:
+        dict with keys: 'copied', 'skipped', 'total'
+    """
+    dest_folder.mkdir(parents=True, exist_ok=True)
+    pattern = re.compile(regex_pattern)
+
+    stats = {'copied': 0, 'skipped': 0, 'total': 0}
+
+    for file in processed_path.iterdir():
+        if not file.is_file():
+            continue
+        if not (file.suffix.lower() in [".pdf", ".json"]):
+            continue
+        if not pattern.search(file.name):
+            continue
+
+        stats['total'] += 1
+        dest_file = dest_folder / file.name
+
+        # Check if file exists and compare hashes
+        should_copy = True
+        if dest_file.exists():
+            # Compare file sizes first (quick check)
+            if file.stat().st_size == dest_file.stat().st_size:
+                # Same size, compare fast hashes
+                src_hash = hash_file_fast(file)
+                dst_hash = hash_file_fast(dest_file)
+                if src_hash == dst_hash:
+                    should_copy = False
+                    stats['skipped'] += 1
+
+        if should_copy:
+            shutil.copy2(file, dest_file)
+            stats['copied'] += 1
+
+    return stats
+
+def calculate_directory_hash(directory: Path) -> str:
+    """
+    Calculate a hash representing all PDF files in the directory.
+    Returns a hash of all PDF file hashes combined (sorted for consistency).
+    """
+    pdf_files = sorted(directory.glob("*.pdf"))  # Sort for consistency
+    if not pdf_files:
+        return ""
+
+    # Create a combined hash from all PDF file hashes
+    combined = []
+    for pdf_file in pdf_files:
+        file_hash = hash_file_fast(pdf_file)
+        combined.append(f"{pdf_file.name}:{file_hash}")
+
+    combined_str = "\n".join(combined)
+    directory_hash = hashlib.sha256(combined_str.encode()).hexdigest()[:16]
+    return directory_hash
+
+def directory_has_changed(directory: Path) -> bool:
+    """
+    Check if directory contents have changed since last check.
+    Uses a hidden .directory_hash file to track state.
+
+    Returns:
+        True if directory changed or first check, False if unchanged
+    """
+    hash_file_path = directory / ".directory_hash"
+    current_hash = calculate_directory_hash(directory)
+
+    if not current_hash:  # No PDF files
+        return False
+
+    if not hash_file_path.exists():
+        # First time - store hash and return True (changed)
+        with open(hash_file_path, "w") as f:
+            f.write(current_hash)
+        return True
+
+    # Compare with stored hash
+    with open(hash_file_path, "r") as f:
+        stored_hash = f.read().strip()
+
+    if current_hash != stored_hash:
+        # Directory changed - update hash
+        with open(hash_file_path, "w") as f:
+            f.write(current_hash)
+        return True
+
+    return False
+
 def copy_matching_files(processed_path: Path, regex_pattern: str, dest_folder: Path):
     """
     Copy all PDF and JSON files in processed_path whose filenames match regex_pattern to dest_folder.
@@ -1260,6 +1377,82 @@ def _task__copy_matching(processed_path, regex_pattern, copy_dest_folder):
     print(f"Copied {files_copied} files matching '{regex_pattern}' to {dest_folder}")
     print("Copy-matching complete.")
 
+def _task__export_all_dates(processed_path, export_base_dir, run_merge=False):
+    """
+    Export files for all unique dates found in processed files.
+    Only copies files that are new or changed (incremental).
+
+    Args:
+        processed_path: Path to processed files directory
+        export_base_dir: Base export directory (e.g., /path/to/export)
+        run_merge: If True, also run PDF merger on changed directories
+    """
+    processed_path = Path(processed_path)
+    export_base_dir = Path(export_base_dir)
+
+    print("Scanning for unique dates in processed files...")
+    all_dates = get_all_unique_dates(processed_path)
+
+    if not all_dates:
+        print("No dates found in processed files.")
+        return
+
+    print(f"Found {len(all_dates)} unique dates: {', '.join(all_dates[:10])}{' ...' if len(all_dates) > 10 else ''}")
+
+    total_copied = 0
+    total_skipped = 0
+    changed_directories = []
+
+    for date in all_dates:
+        export_date_dir = export_base_dir / date
+        print(f"\n[{date}] Processing...")
+
+        # Incrementally copy files for this date
+        stats = copy_files_incremental(processed_path, date, export_date_dir)
+
+        total_copied += stats['copied']
+        total_skipped += stats['skipped']
+
+        if stats['total'] == 0:
+            print(f"  No files match date pattern '{date}'")
+        else:
+            print(f"  Copied: {stats['copied']}, Skipped: {stats['skipped']}, Total: {stats['total']}")
+
+        # Check if directory changed (for merge step)
+        if stats['copied'] > 0:
+            # Files were copied, so directory definitely changed
+            changed_directories.append(export_date_dir)
+        elif stats['total'] > 0:
+            # No files copied, but check if directory exists and has changed
+            if export_date_dir.exists() and directory_has_changed(export_date_dir):
+                changed_directories.append(export_date_dir)
+
+    print(f"\n=== Summary ===")
+    print(f"Processed {len(all_dates)} date(s)")
+    print(f"Total files copied: {total_copied}")
+    print(f"Total files skipped (unchanged): {total_skipped}")
+    print(f"Directories with changes: {len(changed_directories)}")
+
+    if run_merge and changed_directories:
+        print(f"\n=== Running PDF Merge ===")
+        from shutil import which
+        if which("pdf-merger") is None:
+            print("WARNING: pdf-merger tool not found in PATH. Skipping merge step.")
+        else:
+            for export_dir in changed_directories:
+                print(f"\nMerging PDFs in {export_dir}...")
+                result = subprocess.run(
+                    f'pdf-merger "{export_dir}"',
+                    shell=True,
+                    text=True
+                )
+                if result.returncode == 0:
+                    print(f"  ✓ Merge completed successfully")
+                else:
+                    print(f"  ✗ Merge failed with exit code {result.returncode}")
+
+    print("\nExport all dates complete.")
+
 def _task__check_files_exist(processed_path, check_schema_path):
     if not check_schema_path:
         print("For 'check_files_exist', --check_schema_path is required.")
@@ -1307,7 +1500,7 @@ def _task__check_files_exist(processed_path, check_schema_path):
         print("\nSome file existence checks failed.")
     print("File existence check complete.")
 
-def process_folder(task: str, processed_path: str, raw_paths=None, excel_output_path: str = None, regex_pattern: str = None, copy_dest_folder: str = None, check_schema_path: str = None):
+def process_folder(task: str, processed_path: str, raw_paths=None, excel_output_path: str = None, regex_pattern: str = None, copy_dest_folder: str = None, check_schema_path: str = None, export_base_dir: str = None, run_merge: bool = False):
     if raw_paths is not None:
         raw_paths = [Path(p) for p in raw_paths]
     processed_path = Path(processed_path)
@@ -1318,20 +1511,23 @@ def process_folder(task: str, processed_path: str, raw_paths=None, excel_output_
     elif task == "validate_metadata": _task__validate_metadata(processed_path)
     elif task == "export_excel": _task__export_excel(processed_path, excel_output_path)
     elif task == "copy_matching": _task__copy_matching(processed_path, regex_pattern, copy_dest_folder)
+    elif task == "export_all_dates": _task__export_all_dates(processed_path, export_base_dir, run_merge)
     elif task == "check_files_exist": _task__check_files_exist(processed_path, check_schema_path)
     else:
-        print("Invalid task specified. Use 'extract_new', 'rename_files', 'validate_metadata', 'export_excel', 'copy_matching', or 'check_files_exist'.")
+        print("Invalid task specified. Use 'extract_new', 'rename_files', 'validate_metadata', 'export_excel', 'copy_matching', 'export_all_dates', or 'check_files_exist'.")
 
 def main():
     parser = argparse.ArgumentParser(description="Process a folder of PDF files.")
     parser.add_argument("task", type=str, choices=[
-        'extract_new', 'rename_files', 'validate_metadata', 'export_excel', 'copy_matching', 'check_files_exist', 'pipeline'
-    ], help="Specify task: 'extract_new', 'rename_files', 'validate_metadata', 'export_excel', 'copy_matching', 'check_files_exist', or 'pipeline'.")
+        'extract_new', 'rename_files', 'validate_metadata', 'export_excel', 'copy_matching', 'export_all_dates', 'check_files_exist', 'pipeline'
+    ], help="Specify task: 'extract_new', 'rename_files', 'validate_metadata', 'export_excel', 'copy_matching', 'export_all_dates', 'check_files_exist', or 'pipeline'.")
     parser.add_argument("processed_path", type=str, nargs='?', help="Path to output folder.")
     parser.add_argument("--raw_path", type=str, help="Path to documents folder(s). Use ';' to separate multiple paths (required for 'extract_new' task).")
     parser.add_argument("--excel_output_path", type=str, help="Path to output Excel file (for 'export_excel' task).")
     parser.add_argument("--regex_pattern", type=str, help="Regex pattern for matching filenames (for 'copy_matching' task).")
     parser.add_argument("--copy_dest_folder", type=str, help="Destination folder for copied files (for 'copy_matching' task).")
+    parser.add_argument("--export_base_dir", type=str, help="Base export directory (for 'export_all_dates' task).")
+    parser.add_argument("--run_merge", action="store_true", help="Run PDF merge for changed directories (for 'export_all_dates' task).")
     parser.add_argument("--check_schema_path", type=str, help="Validation schema path (for 'check_files_exist' task).")
     parser.add_argument("--export_date", type=str, help="Export date in YYYY-MM format (for 'pipeline' task, optional).")
     args = parser.parse_args()
@@ -1372,6 +1568,23 @@ def main():
             os.makedirs(args.copy_dest_folder, exist_ok=True)
         if not os.path.isdir(args.copy_dest_folder): parser.error(f"The copy_dest_folder '{args.copy_dest_folder}' is not a directory.")
 
+    if args.task == "export_all_dates":
+        if not args.export_base_dir:
+            # Default to EXPORT_FILES_DIR from environment
+            export_base_dir = os.getenv("EXPORT_FILES_DIR")
+            if not export_base_dir:
+                parser.error("the --export_base_dir argument is required when task is 'export_all_dates' (or set EXPORT_FILES_DIR in .env).")
+        else:
+            export_base_dir = args.export_base_dir
+
+        # Create export_base_dir if it doesn't exist
+        if not os.path.exists(export_base_dir):
+            os.makedirs(export_base_dir, exist_ok=True)
+        if not os.path.isdir(export_base_dir):
+            parser.error(f"The export_base_dir '{export_base_dir}' is not a directory.")
+    else:
+        export_base_dir = args.export_base_dir
+
     if args.task == "check_files_exist":
         # Default check_schema_path if not provided
         check_schema_path = args.check_schema_path
@@ -1386,6 +1599,8 @@ def main():
         excel_output_path=args.excel_output_path,
         regex_pattern=args.regex_pattern,
         copy_dest_folder=args.copy_dest_folder,
+        export_base_dir=export_base_dir,
+        run_merge=args.run_merge if hasattr(args, 'run_merge') else False,
         check_schema_path=check_schema_path if args.task == "check_files_exist" else args.check_schema_path
     )
 
