@@ -8,7 +8,8 @@
       "Bash(tee:*)",
       "Bash(for group in 1 5 10 25 50 100 200 300 400 500 600 700)",
       "Bash(do echo \"=== GROUP $group ===\")",
-      "Bash(done)"
+      "Bash(done)",
+      "Bash(xargs -I {} sh -c 'echo \"\"\"\"=== {} ===\"\"\"\" && cat \"\"\"\"{}\"\"\"\" | grep -E \"\"\"\"hash\"\"\"\"')"
     ],
     "deny": [],
     "ask": []

@@ -205,12 +205,16 @@ class DocumentMetadataInput(BaseModel):
     reasoning: str = Field(description="Why this classification was chosen.")
 
 class DocumentMetadata(DocumentMetadataInput):
-    hash: str = Field(description="SHA256 hash of the file (first 8 chars).", example="a1b2c3d4")
+    hash: str = Field(description="Content-based SHA256 hash (first 8 chars).", example="a1b2c3d4")
+    old_hash: Optional[str] = Field(default=None, description="File-based SHA256 hash for quick filtering (first 8 chars).", example="b2c3d4e5", alias="_old_hash")
     create_date: Optional[str] = Field(default=None, description="Date this metadata was created, format: YYYY-MM-DD.", example="2024-06-01")
     update_date: Optional[str] = Field(default=None, description="Date this metadata was last updated, format: YYYY-MM-DD.", example="2024-06-01")
     # Raw extracted values before normalization (suffix _raw to indicate raw value)
     document_type_raw: Optional[str] = Field(default=None, description="Original document type as extracted from document.")
     issuing_party_raw: Optional[str] = Field(default=None, description="Original issuing party name as extracted from document.")
+
+    class Config:
+        populate_by_name = True  # Allow both field name and alias
 
     @field_validator('issue_date', mode='before')
     @classmethod
@@ -310,13 +314,80 @@ SYSTEM_PROMPT_RAW_EXTRACTION = (
 
 # ------------------- UTILS -------------------
 
-def hash_file(path: Path) -> str:
+def hash_file_fast(path: Path) -> str:
+    """
+    Fast file-based hash for quick duplicate detection.
+    Uses raw file bytes - much faster than content-based hashing.
+    """
     h = hashlib.sha256()
     with open(path, "rb") as f:
-        for chunk in iter(lambda: f.read(8192), b''): h.update(chunk)
+        for chunk in iter(lambda: f.read(8192), b''):
+            h.update(chunk)
     return h.hexdigest()[:8]
 
+def hash_file(path: Path) -> str:
+    """
+    Generate content-based hash by rendering PDF pages as images.
+    This detects true content duplicates even if PDF metadata differs.
+
+    Args:
+        path: Path to the PDF file
+
+    Returns:
+        First 8 characters of SHA256 digest of rendered page content
+    """
+    try:
+        doc = fitz.open(str(path))
+        page_hashes = []
+
+        # Use deterministic rendering settings for consistency
+        # 150 DPI provides good quality while being reasonably fast
+        zoom = 150 / 72  # 72 is the default DPI
+        mat = fitz.Matrix(zoom, zoom)
+
+        # Iterate through all pages and render each as an image
+        for page_num in range(len(doc)):
+            page = doc[page_num]
+
+            try:
+                # Render page as pixmap (image) with deterministic settings
+                # alpha=False ensures no transparency channel for consistency
+                pix = page.get_pixmap(matrix=mat, alpha=False, colorspace=fitz.csRGB)
+
+                # Get the raw pixel data
+                img_data = pix.samples
+
+                # Hash the pixel data
+                page_hash = hashlib.sha256(img_data).hexdigest()
+                page_hashes.append(page_hash)
+
+            except Exception as e:
+                # Skip pages that fail to render but continue with others
+                continue
+
+        doc.close()
+
+        # Create a digest of all page hashes combined (in order)
+        if page_hashes:
+            combined = "".join(page_hashes)
+            content_digest = hashlib.sha256(combined.encode()).hexdigest()
+            return content_digest[:8]
+        else:
+            # No pages could be rendered - fall back to file hash
+            h = hashlib.sha256()
+            with open(path, "rb") as f:
+                for chunk in iter(lambda: f.read(8192), b''): h.update(chunk)
+            return h.hexdigest()[:8]
+
+    except Exception as e:
+        # If content-based hashing fails entirely, fall back to file hash
+        h = hashlib.sha256()
+        with open(path, "rb") as f:
+            for chunk in iter(lambda: f.read(8192), b''): h.update(chunk)
+        return h.hexdigest()[:8]
+
 def build_output_hash_index(output_path: Path) -> dict:
+    """Build index of both content hashes and old file hashes."""
     hash_index = {}
     for root, _, files in os.walk(output_path):
         for file in files:
@@ -324,7 +395,14 @@ def build_output_hash_index(output_path: Path) -> dict:
                 continue
             with open(Path(root) / file, "r", encoding="utf-8") as f:
                 metadata = json.load(f)
-                hash_index[metadata.get('hash')] = Path(root) / file.replace(".json", ".pdf")
+                # Index by content hash (primary)
+                content_hash = metadata.get('hash')
+                if content_hash:
+                    hash_index[content_hash] = Path(root) / file.replace(".json", ".pdf")
+                # Also index by old file hash (for quick filtering)
+                old_hash = metadata.get('_old_hash')
+                if old_hash:
+                    hash_index[old_hash] = Path(root) / file.replace(".json", ".pdf")
     return hash_index
 
 def sanitize_filename_component(s: str) -> str:
@@ -537,7 +615,14 @@ def classify_pdf_document(pdf_path: Path, file_hash: str) -> DocumentMetadata:
 
 def rename_single_pdf(pdf_path: Path, file_hash: str, processed_path: Path, known_hashes: set):
     try:
+        # Calculate fast file-based hash for old_hash field
+        old_hash = hash_file_fast(pdf_path)
+
         metadata = classify_pdf_document(pdf_path, file_hash)
+
+        # Add the old hash to metadata
+        metadata.old_hash = old_hash
+
         filename = file_name_from_metadata(metadata, file_hash)
         new_pdf_path = processed_path / filename
 
@@ -547,6 +632,7 @@ def rename_single_pdf(pdf_path: Path, file_hash: str, processed_path: Path, know
             json.dump(metadata.model_dump(), f, indent=4)
 
         known_hashes.add(file_hash)
+        known_hashes.add(old_hash)  # Also add old hash to prevent re-processing
         print(f"Processed: {pdf_path.name} -> {filename}")
     except Exception as e:
         print(e)
@@ -907,23 +993,80 @@ def pipeline(export_date_arg=None):
 
 def _task__extract_new(processed_path, raw_paths):
     print("Building hash index from metadata files...")
-    known_hashes = set(build_output_hash_index(processed_path).keys())  # Convert to set for efficiency
+    known_hashes = set(build_output_hash_index(processed_path).keys())
 
     print("Scanning for new PDFs...")
     pdf_paths = find_pdf_files(raw_paths)
+    print(f"Found {len(pdf_paths)} PDFs in raw directories")
 
-    print(f"Calculating hashes for {len(pdf_paths)} PDFs...")
-    file_hash_map = {pdf: hash_file(pdf) for pdf in tqdm(pdf_paths, desc="Hashing files")}
-    files_to_process = [pdf for pdf in pdf_paths if file_hash_map[pdf] not in known_hashes]
+    # STAGE 1: Fast file-based hash to quickly filter likely duplicates
+    print(f"Stage 1: Quick filtering using fast file hashes...")
+    fast_hash_map = {pdf: hash_file_fast(pdf) for pdf in tqdm(pdf_paths, desc="Fast hashing")}
+    potentially_new = [pdf for pdf in pdf_paths if fast_hash_map[pdf] not in known_hashes]
 
-    print(f"Found {len(files_to_process)} new PDFs.")
-    rename_pdf_files(files_to_process, file_hash_map, known_hashes, processed_path)
+    already_processed = len(pdf_paths) - len(potentially_new)
+    print(f"  → Skipped {already_processed} already-processed files")
+    print(f"  → {len(potentially_new)} files need content-based hashing")
+
+    if not potentially_new:
+        print("No new PDFs to process.")
+        return
+
+    # STAGE 2: Slow content-based hash only for potentially new files
+    print(f"Stage 2: Content-based hashing for {len(potentially_new)} new files...")
+    content_hash_map = {}
+
+    # Parallelize content hashing for speed
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+    with ThreadPoolExecutor(max_workers=4) as executor:
+        future_to_pdf = {executor.submit(hash_file, pdf): pdf for pdf in potentially_new}
+
+        with tqdm(total=len(potentially_new), desc="Content hashing") as pbar:
+            for future in as_completed(future_to_pdf):
+                pdf = future_to_pdf[future]
+                try:
+                    content_hash = future.result()
+                    content_hash_map[pdf] = content_hash
+                except Exception as e:
+                    print(f"\n  Error hashing {pdf.name}: {e}")
+                pbar.update(1)
+
+    # Final filter: only process files with truly new content hashes
+    files_to_process = [pdf for pdf in potentially_new if content_hash_map.get(pdf) not in known_hashes]
+
+    print(f"Found {len(files_to_process)} truly new PDFs to process.")
+
+    if files_to_process:
+        rename_pdf_files(files_to_process, content_hash_map, known_hashes, processed_path)
+
     print("Extraction complete.")
 
 def _task__rename_files(processed_path):
     print("Renaming existing PDF files and metadata based on metadata...")
-    valid_entries = validate_metadata(processed_path)
 
+    # Custom validation that skips filename check (since we're about to rename them)
+    json_files = list(processed_path.rglob("*.json"))
+    valid_entries = []
+
+    for metadata_path in tqdm(json_files, desc="Validating metadata"):
+        try:
+            with open(metadata_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            metadata = DocumentMetadata.model_validate(data)
+
+            pdf_path = metadata_path.with_suffix(".pdf")
+            if not pdf_path.exists():
+                print(f"Skipping {metadata_path.name}: PDF file not found")
+                continue
+
+            # Skip hash recalculation - trust the metadata
+            valid_entries.append((pdf_path, metadata))
+        except Exception as e:
+            print(f"Skipping {metadata_path.name}: {e}")
+
+    print(f"Found {len(valid_entries)} files to rename")
+
+    renamed_count = 0
     for old_pdf_path, metadata in valid_entries:
         file_hash = metadata.hash
         new_filename = file_name_from_metadata(metadata, file_hash)
@@ -938,10 +1081,14 @@ def _task__rename_files(processed_path):
             old_metadata_path = old_pdf_path.with_suffix(".json")
             shutil.move(old_pdf_path, new_pdf_path)
             shutil.move(old_metadata_path, new_metadata_path)
-            print(f"Renamed: {old_pdf_path.name} -> {new_filename}")
+            renamed_count += 1
+            if renamed_count <= 10 or renamed_count % 100 == 0:
+                print(f"[{renamed_count}] Renamed: {old_pdf_path.name} -> {new_filename}")
         except Exception as e:
             print(f"Failed to rename {old_pdf_path.name}: {e}")
-    print("Renaming complete.")
+
+    print(f"Renaming complete. Renamed {renamed_count} files.")
+
 
 def _task__validate_metadata(processed_path):
     print("Validating existing metadata and PDFs...")
