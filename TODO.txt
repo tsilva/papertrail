@@ -1,5 +1,0 @@
-- make sure duplicates are actual duplicates
-- zip that folder and store it away as backup
-- zip all old documents and store them away as backup
-- update hash method
-- update hashes of current documents, update metadata, store old hash and then update document names
