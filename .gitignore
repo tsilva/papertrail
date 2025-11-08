@@ -174,3 +174,7 @@ cython_debug/
 output/
 
 _helpers.md
+
+# Generated output files
+duplicates_report.txt
+migration_dry_run*.txt

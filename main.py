@@ -66,8 +66,6 @@ openai_client = openai.OpenAI(api_key=OPENROUTER_API_KEY, base_url=OPENROUTER_BA
 
 # ------------------- ENUMS & MODELS -------------------
 
-import importlib.resources
-
 def load_document_types():
     """Load document types from processed files directory by scanning metadata .json files."""
     processed_files_dir = os.getenv("PROCESSED_FILES_DIR")
