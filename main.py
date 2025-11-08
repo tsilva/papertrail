@@ -183,6 +183,17 @@ DocumentType = create_dynamic_enum('DocumentType', DOCUMENT_TYPES)
 ISSUING_PARTIES = load_issuing_parties()
 IssuingParty = create_dynamic_enum('IssuingParty', ISSUING_PARTIES)
 
+class DocumentMetadataRaw(BaseModel):
+    """Raw extracted metadata without enum constraints - first phase extraction."""
+    issue_date: str = Field(description="Date issued, format: YYYY-MM-DD.", example="2025-01-02")
+    document_type: str = Field(description="Type of document (as seen on document).", example="Invoice")
+    issuing_party: str = Field(description="Issuer name (exactly as it appears on document).", example="Anthropic, PBC")
+    service_name: Optional[str] = Field(description="Product/service name if applicable (as short as possible).", example="Youtube Premium")
+    total_amount: Optional[float] = Field(default=None, description="Total currency amount.")
+    total_amount_currency: Optional[str] = Field(description="Currency of the total amount.", example="EUR")
+    confidence: float = Field(description="Confidence score between 0 and 1.")
+    reasoning: str = Field(description="Why this classification was chosen.")
+
 class DocumentMetadataInput(BaseModel):
     issue_date: str = Field(description="Date issued, format: YYYY-MM-DD.", example="2025-01-02")
     document_type: DocumentType = Field(description="Type of document.", example="invoice")
@@ -197,6 +208,9 @@ class DocumentMetadata(DocumentMetadataInput):
     hash: str = Field(description="SHA256 hash of the file (first 8 chars).", example="a1b2c3d4")
     create_date: Optional[str] = Field(default=None, description="Date this metadata was created, format: YYYY-MM-DD.", example="2024-06-01")
     update_date: Optional[str] = Field(default=None, description="Date this metadata was last updated, format: YYYY-MM-DD.", example="2024-06-01")
+    # Raw extracted values before normalization (suffix _raw to indicate raw value)
+    document_type_raw: Optional[str] = Field(default=None, description="Original document type as extracted from document.")
+    issuing_party_raw: Optional[str] = Field(default=None, description="Original issuing party name as extracted from document.")
 
     @field_validator('issue_date', mode='before')
     @classmethod
@@ -259,30 +273,37 @@ class DocumentMetadata(DocumentMetadataInput):
 
 # ------------------- LLM TOOL SETUP -------------------
 
-TOOLS = [
+TOOLS_RAW_EXTRACTION = [
     {
         "type": "function",
         "function": {
             "name": "extract_document_metadata",
-            "description": "Extract metadata from a document.",
-            "parameters": DocumentMetadata.model_json_schema(),
+            "description": "Extract metadata from a document exactly as it appears.",
+            "parameters": DocumentMetadataRaw.model_json_schema(),
         },
     }
 ]
 
-SYSTEM_PROMPT = (
-    f"You are an expert document classification and extraction assistant. "
+SYSTEM_PROMPT_RAW_EXTRACTION = (
+    f"You are an expert document extraction assistant. "
     f"Today's date is {datetime.now().strftime('%Y-%m-%d')}. "
-    "Given a document image, your job is to extract structured metadata fields as accurately as possible. "
+    "Given a document image, extract metadata fields EXACTLY as they appear on the document. "
     "Use all available visual, textual, and layout cues. "
     "Be strict about field formats (e.g., dates as YYYY-MM-DD, currency as ISO code). "
-    "For any mandatory string field (issue_date, document_type, issuing_party), if the value cannot be extracted, "
-    "is empty, or does not match the allowed constraints (e.g., not in the predefined enum list), "
-    "you MUST use the value '$UNKNOWN$' for that field. "
+    "\n\n"
+    "For issuing_party and document_type, extract the EXACT text as it appears - do NOT try to normalize or standardize it. "
+    "Examples: 'Anthropic, PBC' not 'Anthropic', 'Invoice' not 'invoice', 'Amazon Web Services' not 'Amazon'. "
+    "\n\n"
+    "For your orientation, here are the typical canonical values we work with:\n"
+    f"- Document types: {', '.join(DOCUMENT_TYPES[:20])}{'...' if len(DOCUMENT_TYPES) > 20 else ''}\n"
+    f"- Issuing parties: {', '.join(ISSUING_PARTIES[:30])}{'...' if len(ISSUING_PARTIES) > 30 else ''}\n"
+    "\n"
+    "NOTE: These lists are just for orientation. Always extract the EXACT text as it appears on the document, "
+    "even if it doesn't match these canonical values. The raw text will be normalized in a later step.\n"
+    "\n"
+    "If a value cannot be extracted, use '$UNKNOWN$' for that field. "
     "Do not guess or hallucinate values. "
     "For 'reasoning', briefly explain your choices and any uncertainties. "
-    "Never fabricate information. "
-    "Always return your answer using the provided structured tool. "
     "This tool is most often used to classify recent documents. "
     "If you are unsure between multiple possible dates, prefer the one closest to today's date."
 )
@@ -351,6 +372,86 @@ def find_pdf_files(folder_paths):
 
 # ------------------- CLASSIFICATION -------------------
 
+def normalize_metadata(raw_metadata: DocumentMetadataRaw) -> tuple[str, str]:
+    """
+    Phase 2: Use LLM to intelligently map raw extracted values to canonical enum values.
+    Returns: (normalized_document_type, normalized_issuing_party)
+    """
+    client = openai_client
+
+    normalization_prompt = f"""You are a metadata normalization assistant. Your job is to map extracted document values to their canonical forms.
+
+Given:
+- Raw document_type: "{raw_metadata.document_type}"
+- Raw issuing_party: "{raw_metadata.issuing_party}"
+
+Available canonical document types:
+{', '.join(DOCUMENT_TYPES)}
+
+Available canonical issuing parties:
+{', '.join(ISSUING_PARTIES)}
+
+Task:
+1. Map the raw document_type to the MOST APPROPRIATE canonical document type from the list
+2. Map the raw issuing_party to the MOST APPROPRIATE canonical issuing party from the list
+
+Rules:
+- If no good match exists, use "$UNKNOWN$"
+- Be flexible with variations (e.g., "Anthropic, PBC" → "Anthropic", "Invoice" → "invoice")
+- Consider common abbreviations and full names
+- Preserve the EXACT canonical value (case-sensitive)
+
+Respond in JSON format:
+{{
+    "document_type": "canonical_value",
+    "issuing_party": "canonical_value",
+    "reasoning": "Brief explanation of mappings"
+}}
+"""
+
+    try:
+        response = client.chat.completions.create(
+            model=OPENROUTER_MODEL_ID,
+            max_tokens=1024,
+            temperature=0,
+            messages=[{"role": "user", "content": normalization_prompt}]
+        )
+
+        content = response.choices[0].message.content
+
+        # Debug output
+        if not content:
+            print(f"DEBUG: Empty response from normalization LLM")
+            print(f"DEBUG: Full response: {response}")
+            return "$UNKNOWN$", "$UNKNOWN$"
+
+        # Try to extract JSON from the response
+        # Handle cases where the response might be wrapped in markdown code blocks
+        if "```json" in content:
+            content = content.split("```json")[1].split("```")[0].strip()
+        elif "```" in content:
+            content = content.split("```")[1].split("```")[0].strip()
+
+        result = json.loads(content)
+        doc_type = result.get("document_type", "$UNKNOWN$")
+        issuing_party = result.get("issuing_party", "$UNKNOWN$")
+
+        # Validate that the returned values are actually in the canonical lists
+        if doc_type not in DOCUMENT_TYPES:
+            print(f"DEBUG: Normalized doc_type '{doc_type}' not in canonical list, using $UNKNOWN$")
+            doc_type = "$UNKNOWN$"
+        if issuing_party not in ISSUING_PARTIES:
+            print(f"DEBUG: Normalized issuing_party '{issuing_party}' not in canonical list, using $UNKNOWN$")
+            issuing_party = "$UNKNOWN$"
+
+        return doc_type, issuing_party
+
+    except Exception as e:
+        print(f"Normalization failed: {e}, using $UNKNOWN$ for both fields")
+        import traceback
+        traceback.print_exc()
+        return "$UNKNOWN$", "$UNKNOWN$"
+
 def classify_pdf_document(pdf_path: Path, file_hash: str) -> DocumentMetadata:
     client = openai_client
 
@@ -377,7 +478,7 @@ def classify_pdf_document(pdf_path: Path, file_hash: str) -> DocumentMetadata:
         raise RuntimeError(f"Failed to render PDF image: {pdf_path}") from e
 
     try:
-        # Prepare messages with up to two images
+        # PHASE 1: Raw Extraction
         user_content = [
             {
                 "type": "image_url",
@@ -387,7 +488,7 @@ def classify_pdf_document(pdf_path: Path, file_hash: str) -> DocumentMetadata:
         ]
 
         messages = [
-            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "system", "content": SYSTEM_PROMPT_RAW_EXTRACTION},
             {"role": "user", "content": user_content},
         ]
 
@@ -396,7 +497,7 @@ def classify_pdf_document(pdf_path: Path, file_hash: str) -> DocumentMetadata:
             max_tokens=4096,
             temperature=0,
             messages=messages,
-            tools=TOOLS,
+            tools=TOOLS_RAW_EXTRACTION,
         )
 
         tool_calls = response.choices[0].message.tool_calls
@@ -404,8 +505,26 @@ def classify_pdf_document(pdf_path: Path, file_hash: str) -> DocumentMetadata:
             raise ValueError("OpenRouter did not return structured classification.")
 
         args = tool_calls[0].function.arguments
-        metadata = DocumentMetadata.model_validate_json(args)
-        metadata.hash = file_hash
+        raw_metadata = DocumentMetadataRaw.model_validate_json(args)
+
+        # PHASE 2: Normalization
+        normalized_doc_type, normalized_issuing_party = normalize_metadata(raw_metadata)
+
+        # Create final metadata with both raw and normalized values
+        metadata = DocumentMetadata(
+            issue_date=raw_metadata.issue_date,
+            document_type=normalized_doc_type,
+            issuing_party=normalized_issuing_party,
+            service_name=raw_metadata.service_name,
+            total_amount=raw_metadata.total_amount,
+            total_amount_currency=raw_metadata.total_amount_currency,
+            confidence=raw_metadata.confidence,
+            reasoning=raw_metadata.reasoning,
+            hash=file_hash,
+            document_type_raw=raw_metadata.document_type,
+            issuing_party_raw=raw_metadata.issuing_party,
+        )
+
         now = datetime.now().strftime("%Y-%m-%d")
         metadata.create_date = now
         metadata.update_date = now
@@ -570,7 +689,9 @@ def export_metadata_to_excel(processed_path: Path, excel_output_path: str):
             "filename",
             "filename_length",
             "document_type",
+            "document_type_raw",
             "issuing_party",
+            "issuing_party_raw",
             "service_name",
             "total_amount",
             "total_amount_currency"
@@ -934,7 +1055,9 @@ def _task__export_excel(processed_path, excel_output_path):
             "filename",
             "filename_length",
             "document_type",
+            "document_type_raw",
             "issuing_party",
+            "issuing_party_raw",
             "service_name",
             "total_amount",
             "total_amount_currency"
