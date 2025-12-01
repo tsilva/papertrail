@@ -7,6 +7,8 @@ import shutil
 import hashlib
 import unicodedata
 import argparse
+import logging
+import traceback
 from enum import Enum
 from pathlib import Path
 from typing import Optional
@@ -18,6 +20,38 @@ import pandas as pd
 from tqdm import tqdm
 from pydantic import BaseModel, Field, field_validator
 from datetime import datetime
+
+# ------------------- LOGGING SETUP -------------------
+
+def setup_failure_logger(log_path: Path = None) -> logging.Logger:
+    """Setup a logger for classification failures with full traceback."""
+    logger = logging.getLogger("documentor.failures")
+    logger.setLevel(logging.ERROR)
+    
+    # Clear existing handlers
+    logger.handlers.clear()
+    
+    if log_path is None:
+        log_path = Path.cwd() / "classification_failures.log"
+    
+    # File handler with detailed format
+    file_handler = logging.FileHandler(log_path, mode='a', encoding='utf-8')
+    file_handler.setLevel(logging.ERROR)
+    formatter = logging.Formatter(
+        '\n' + '='*80 + '\n'
+        'TIMESTAMP: %(asctime)s\n'
+        'FILE: %(pdf_path)s\n'
+        'ERROR TYPE: %(error_type)s\n'
+        'ERROR MESSAGE: %(message)s\n'
+        'TRACEBACK:\n%(traceback)s\n'
+        '='*80
+    )
+    file_handler.setFormatter(formatter)
+    logger.addHandler(file_handler)
+    
+    return logger
+
+failure_logger = None
 
 # ------------------- CONFIG -------------------
 
@@ -531,6 +565,7 @@ Respond in JSON format:
         return "$UNKNOWN$", "$UNKNOWN$"
 
 def classify_pdf_document(pdf_path: Path, file_hash: str) -> DocumentMetadata:
+    global failure_logger
     client = openai_client
 
     try:
@@ -552,7 +587,15 @@ def classify_pdf_document(pdf_path: Path, file_hash: str) -> DocumentMetadata:
         doc.close()
         # --- end contrast boost ---
     except Exception as e:
-        print(e)
+        if failure_logger:
+            failure_logger.error(
+                str(e),
+                extra={
+                    'pdf_path': str(pdf_path),
+                    'error_type': type(e).__name__,
+                    'traceback': traceback.format_exc()
+                }
+            )
         raise RuntimeError(f"Failed to render PDF image: {pdf_path}") from e
 
     try:
@@ -576,6 +619,7 @@ def classify_pdf_document(pdf_path: Path, file_hash: str) -> DocumentMetadata:
             temperature=0,
             messages=messages,
             tools=TOOLS_RAW_EXTRACTION,
+            tool_choice={"type": "function", "function": {"name": "extract_document_metadata"}},
         )
 
         tool_calls = response.choices[0].message.tool_calls
@@ -608,12 +652,21 @@ def classify_pdf_document(pdf_path: Path, file_hash: str) -> DocumentMetadata:
         metadata.update_date = now
         return metadata
     except Exception as e:
-        print(e)
+        if failure_logger:
+            failure_logger.error(
+                str(e),
+                extra={
+                    'pdf_path': str(pdf_path),
+                    'error_type': type(e).__name__,
+                    'traceback': traceback.format_exc()
+                }
+            )
         raise RuntimeError(f"Classification failed for: {pdf_path}") from e
 
 # ------------------- RENAMING & PROCESSING -------------------
 
 def rename_single_pdf(pdf_path: Path, content_hash: str, processed_path: Path, known_hashes: set):
+    global failure_logger
     try:
         # Calculate fast file-based hash
         file_hash = hash_file_fast(pdf_path)
@@ -635,7 +688,15 @@ def rename_single_pdf(pdf_path: Path, content_hash: str, processed_path: Path, k
         known_hashes.add(file_hash)  # Also add file hash to prevent re-processing
         print(f"Processed: {pdf_path.name} -> {filename}")
     except Exception as e:
-        print(e)
+        if failure_logger:
+            failure_logger.error(
+                str(e),
+                extra={
+                    'pdf_path': str(pdf_path),
+                    'error_type': type(e).__name__,
+                    'traceback': traceback.format_exc()
+                }
+            )
         print(f"Failed to process {pdf_path.name}: {e}")
 
 def rename_pdf_files(pdf_paths, file_hash_map, known_hashes, processed_path):
@@ -1104,6 +1165,11 @@ def pipeline(export_date_arg=None):
     print("All steps completed successfully.")
 
 def _task__extract_new(processed_path, raw_paths):
+    global failure_logger
+    log_path = processed_path / "classification_failures.log"
+    failure_logger = setup_failure_logger(log_path)
+    print(f"Logging failures to: {log_path}")
+    
     print("Building hash index from metadata files...")
     known_hashes = set(build_output_hash_index(processed_path).keys())
 

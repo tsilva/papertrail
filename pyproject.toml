@@ -23,9 +23,11 @@ requires-python = ">=3.7"
 
 [project.scripts]
 documentor = "main:main"
+check-hash = "scripts.check_hash:main"
 
 [tool.hatch.build.targets.wheel]
 include = [
     "main.py",
-    "config/**"
+    "config/**",
+    "scripts/**"
 ]
