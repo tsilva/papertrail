@@ -17,7 +17,6 @@ import fitz
 import pandas as pd
 from tqdm import tqdm
 from pydantic import BaseModel, Field, field_validator
-from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 
 # ------------------- CONFIG -------------------
@@ -639,15 +638,9 @@ def rename_single_pdf(pdf_path: Path, content_hash: str, processed_path: Path, k
         print(e)
         print(f"Failed to process {pdf_path.name}: {e}")
 
-def rename_pdf_files(pdf_paths, file_hash_map, known_hashes, processed_path, max_workers=4):
-    with ThreadPoolExecutor(max_workers=max_workers) as executor:
-        list(tqdm(
-            executor.map(
-                lambda p: rename_single_pdf(p, file_hash_map[p], processed_path, known_hashes),
-                pdf_paths
-            ),
-            total=len(pdf_paths)
-        ))
+def rename_pdf_files(pdf_paths, file_hash_map, known_hashes, processed_path):
+    for pdf_path in tqdm(pdf_paths):
+        rename_single_pdf(pdf_path, file_hash_map[pdf_path], processed_path, known_hashes)
 
 def validate_metadata(output_path: Path):
     valid_entries = []
