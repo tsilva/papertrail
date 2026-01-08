@@ -1264,176 +1264,19 @@ def _task__rename_files(processed_path):
 
 def _task__validate_metadata(processed_path):
     print("Validating existing metadata and PDFs...")
-    valid_entries = []
-    errors = []
-    json_files = list(processed_path.rglob("*.json"))
-
-    for metadata_path in tqdm(json_files, desc="Validating metadata"):
-        try:
-            with open(metadata_path, "r", encoding="utf-8") as f:
-                data = json.load(f)
-            metadata = DocumentMetadata.model_validate(data)
-
-            content_hash = metadata.content_hash
-            if not content_hash:
-                raise ValueError("Missing 'content_hash' in metadata.")
-
-            pdf_path = metadata_path.with_suffix(".pdf")
-            if not pdf_path.exists():
-                raise FileNotFoundError(f"Missing PDF for metadata: {pdf_path.name}")
-
-            actual_hash = hash_file(pdf_path)
-            if content_hash != actual_hash:
-                raise ValueError(f"Hash mismatch: metadata content_hash is '{content_hash}', actual is '{actual_hash}'.")
-
-            if content_hash not in pdf_path.name:
-                raise ValueError(f"Filename '{pdf_path.name}' does not include the expected hash '{content_hash}'.")
-
-            valid_entries.append((pdf_path, metadata))
-
-        except Exception as e:
-            errors.append((metadata_path, str(e)))
-
-    if errors:
-        print("\nValidation errors found:")
-        for meta_path, err in errors:
-            print(f"- {meta_path}: {err}")
-    else:
-        print("\nAll metadata files passed validation.")
-
+    validate_metadata(processed_path)
     print("Validation complete.")
 
 def _task__export_excel(processed_path, excel_output_path):
     print("Exporting metadata to Excel...")
-    metadata_list = []
-    json_files = list(processed_path.rglob("*.json"))
-
-    for metadata_path in tqdm(json_files, desc="Collecting metadata"):
-        try:
-            with open(metadata_path, "r", encoding="utf-8") as f:
-                data = json.load(f)
-            metadata = DocumentMetadata.model_validate(data)
-            metadata_dict = metadata.model_dump()
-
-            # Remove 'reasoning' field
-            metadata_dict.pop("reasoning", None)
-
-            # Add filename (corresponding PDF)
-            pdf_path = metadata_path.with_suffix(".pdf")
-            filename = pdf_path.name if pdf_path.exists() else ""
-            metadata_dict["filename"] = filename
-
-            # Add filename length
-            metadata_dict["filename_length"] = len(filename)
-
-            # Extract year and month from issue_date
-            try:
-                # Assuming YYYY-MM-DD format
-                date_parts = metadata.issue_date.split('-')
-                metadata_dict["year"] = int(date_parts[0])
-                metadata_dict["month"] = int(date_parts[1])
-            except (IndexError, ValueError, AttributeError):
-                metadata_dict["year"] = None
-                metadata_dict["month"] = None
-
-            # Ensure document_type is just the value, not Enum repr
-            if isinstance(metadata_dict.get("document_type"), Enum):
-                metadata_dict["document_type"] = metadata_dict["document_type"].value
-            elif (
-                isinstance(metadata_dict.get("document_type"), str)
-                and metadata_dict["document_type"].startswith("DocumentType.")
-            ):
-                metadata_dict["document_type"] = metadata_dict["document_type"].split(".", 1)[-1]
-
-            # Ensure issuing_party is just the value, not Enum repr
-            if isinstance(metadata_dict.get("issuing_party"), Enum):
-                metadata_dict["issuing_party"] = metadata_dict["issuing_party"].value
-            elif (
-                isinstance(metadata_dict.get("issuing_party"), str)
-                and metadata_dict["issuing_party"].startswith("IssuingParty.")
-            ):
-                metadata_dict["issuing_party"] = metadata_dict["issuing_party"].split(".", 1)[-1]
-
-            metadata_list.append(metadata_dict)
-        except Exception as e:
-            print(f"Skipping {metadata_path.name}: {e}")
-
-    if metadata_list:
-        df = pd.DataFrame(metadata_list)
-        # Set column order as requested
-        ordered_cols = [
-            "confidence",
-            "issue_date",
-            "year",
-            "month",
-            "content_hash",
-            "file_hash",
-            "filename",
-            "filename_length",
-            "document_type",
-            "document_type_raw",
-            "issuing_party",
-            "issuing_party_raw",
-            "service_name",
-            "total_amount",
-            "total_amount_currency"
-        ]
-        # Add any extra columns at the end (if present)
-        extra_cols = [col for col in df.columns if col not in ordered_cols]
-        df = df[ordered_cols + extra_cols]
-
-        # Sort by issue_date descending (most recent first)
-        if "issue_date" in df.columns:
-            df = df.sort_values(by="issue_date", ascending=False)
-
-        # Use ExcelWriter to gain access to the worksheet object
-        with pd.ExcelWriter(excel_output_path, engine='openpyxl') as writer:
-            df.to_excel(writer, index=False, sheet_name='Sheet1')
-
-            worksheet = writer.sheets['Sheet1']
-            worksheet.freeze_panes = 'A2'
-
-            # Snap requested columns' width to content width
-            for col in ordered_cols:
-                if col in df.columns:
-                    col_idx = df.columns.get_loc(col) + 1  # openpyxl is 1-based
-                    max_len = max(
-                        [len(str(val)) if val is not None else 0 for val in df[col].values] + [len(col)]
-                    )
-                    max_len = min(max_len, 100)  # Truncate to max 100
-                    worksheet.column_dimensions[chr(64 + col_idx)].width = max_len + 2
-
-            # Hide specified columns by default
-            hidden_cols = ["year", "month", "filename_length"]
-            for col in hidden_cols:
-                if col in df.columns:
-                    col_idx = df.columns.get_loc(col) + 1  # openpyxl is 1-based
-                    worksheet.column_dimensions[chr(64 + col_idx)].hidden = True
-
-        print(f"\nExported {len(df)} entries to {excel_output_path}")
-    else:
-        print("\nNo valid metadata found to export.")
+    export_metadata_to_excel(processed_path, excel_output_path)
     print("Excel export complete.")
 
 def _task__copy_matching(processed_path, regex_pattern, copy_dest_folder):
     if not regex_pattern or not copy_dest_folder:
         print("For 'copy_matching', --regex_pattern and --copy_dest_folder are required.")
         return
-    dest_folder = Path(copy_dest_folder)
-    dest_folder.mkdir(parents=True, exist_ok=True)
-    pattern = re.compile(regex_pattern)
-    files_copied = 0
-
-    for file in processed_path.iterdir():
-        if not file.is_file():
-            continue
-        if not (file.suffix.lower() in [".pdf", ".json"]):
-            continue
-        if pattern.search(file.name):
-            shutil.copy2(file, dest_folder / file.name)
-            files_copied += 1
-
-    print(f"Copied {files_copied} files matching '{regex_pattern}' to {dest_folder}")
+    copy_matching_files(processed_path, regex_pattern, Path(copy_dest_folder))
     print("Copy-matching complete.")
 
 def _task__export_all_dates(processed_path, export_base_dir, run_merge=False):
@@ -1516,47 +1359,7 @@ def _task__check_files_exist(processed_path, check_schema_path):
     if not check_schema_path:
         print("For 'check_files_exist', --check_schema_path is required.")
         return
-    target_folder = processed_path
-    validation_schema_path = Path(check_schema_path)
-    # ...existing code for check_files_exist...
-    # Inline the logic from check_files_exist
-    with open(validation_schema_path, "r", encoding="utf-8") as f:
-        checks = json.load(f)
-
-    json_files = list(target_folder.glob("*.json"))
-    file_data = []
-    for json_path in json_files:
-        try:
-            with open(json_path, "r", encoding="utf-8") as f:
-                data = json.load(f)
-            file_data.append((json_path, data))
-        except Exception as e:
-            print(f"Skipping {json_path.name}: {e}")
-
-    all_passed = True
-    check_results = []
-    for idx, check in enumerate(checks):
-        found = False
-        for json_path, data in file_data:
-            if all(str(data.get(k, "")).strip() == str(v).strip() for k, v in check.items()):
-                found = True
-                break
-        check_results.append((found, idx, check))
-        if not found:
-            all_passed = False
-
-    # Print OKs first, then FAILs
-    for found, idx, check in sorted(check_results, key=lambda x: (not x[0], x[1])):
-        if found:
-            print(f"[OK] {check} -- FOUND")
-    for found, idx, check in sorted(check_results, key=lambda x: (not x[0], x[1])):
-        if not found:
-            print(f"[FAIL] {check} -- NOT FOUND")
-
-    if all_passed:
-        print("\nAll file existence checks passed.")
-    else:
-        print("\nSome file existence checks failed.")
+    check_files_exist(processed_path, Path(check_schema_path))
     print("File existence check complete.")
 
 def process_folder(task: str, processed_path: str, raw_paths=None, excel_output_path: str = None, regex_pattern: str = None, copy_dest_folder: str = None, check_schema_path: str = None, export_base_dir: str = None, run_merge: bool = False):
