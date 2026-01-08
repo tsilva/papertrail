@@ -15,7 +15,11 @@
       "Bash(find:*)",
       "Bash(source ~/.documentor/.env)",
       "Bash(echo:*)",
-      "Bash(git -C /Users/tsilva/repos/tsilva/documentor log --oneline -10)"
+      "Bash(git -C /Users/tsilva/repos/tsilva/documentor log --oneline -10)",
+      "Bash(uv run python:*)",
+      "Bash(uv run check-hash:*)",
+      "Bash(uv run documentor --help:*)",
+      "Bash(wc:*)"
     ],
     "deny": [],
     "ask": []

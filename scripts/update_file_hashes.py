@@ -4,18 +4,13 @@ Add file_hash (_old_hash) field to metadata files that are missing it.
 """
 
 import json
-import hashlib
+import sys
 from pathlib import Path
+
 from tqdm import tqdm
 
-
-def hash_file_fast(path: Path) -> str:
-    """Fast file-based hash using raw file bytes."""
-    h = hashlib.sha256()
-    with open(path, "rb") as f:
-        for chunk in iter(lambda: f.read(8192), b''):
-            h.update(chunk)
-    return h.hexdigest()[:8]
+from documentor.config import load_config
+from documentor.hashing import hash_file_fast
 
 
 def update_missing_file_hashes(processed_folder: str, dry_run: bool = True):
@@ -99,8 +94,6 @@ def update_missing_file_hashes(processed_folder: str, dry_run: bool = True):
 
 if __name__ == "__main__":
     import argparse
-    import os
-    from dotenv import load_dotenv
 
     parser = argparse.ArgumentParser(
         description="Add file_hash to metadata files that are missing it"
@@ -118,25 +111,16 @@ if __name__ == "__main__":
 
     args = parser.parse_args()
 
-    # Get folder path from args or .env
+    # Get folder path from args or config
     if args.folder:
         folder_path = args.folder
     else:
-        # Load from .env
-        config_dir = Path.home() / ".documentor"
-        env_path = config_dir / ".env"
-
-        if not env_path.exists():
-            print(f"Error: .env file not found at {env_path}")
-            print("Please specify --folder argument or ensure .env is configured")
-            exit(1)
-
-        load_dotenv(dotenv_path=env_path, override=True)
-        folder_path = os.getenv("PROCESSED_FILES_DIR")
+        config = load_config()
+        folder_path = config.get("PROCESSED_FILES_DIR")
 
         if not folder_path:
             print("Error: PROCESSED_FILES_DIR not set in .env")
             print("Please set PROCESSED_FILES_DIR in .env or use --folder argument")
-            exit(1)
+            sys.exit(1)
 
     update_missing_file_hashes(folder_path, dry_run=not args.execute)
