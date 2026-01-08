@@ -4,8 +4,8 @@ build-backend = "hatchling.build"
 
 [project]
 name = "documentor"
-version = "0.1.0"
-description = "Process and classify PDF documents, extract metadata, and export to Excel"
+version = "0.2.0"
+description = "AI-powered PDF document classification and organization using vision LLMs"
 authors = [
     { name = "Tiago Silva", email = "eng.tiago.silva@gmail.com" }
 ]
@@ -19,7 +19,7 @@ dependencies = [
     "openpyxl",
     "pillow"
 ]
-requires-python = ">=3.7"
+requires-python = ">=3.10"
 
 [project.scripts]
 documentor = "main:main"
@@ -28,6 +28,7 @@ check-hash = "scripts.check_hash:main"
 [tool.hatch.build.targets.wheel]
 include = [
     "main.py",
+    "documentor/**",
     "config/**",
     "scripts/**"
 ]

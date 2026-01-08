@@ -1,75 +1,18 @@
 #!/usr/bin/env python3
 """
 Update all document metadata with new content-based hash (new_hash field).
-This uses the same hashing scheme from migrate_duplicates.py - rendering pages as images.
+Uses the content-based hashing from documentor package.
 """
 
-import hashlib
 import json
 import os
 import sys
 from pathlib import Path
+
 from tqdm import tqdm
-import fitz  # PyMuPDF
 
-
-def extract_images_digest(pdf_path: str) -> str | None:
-    """
-    Render each PDF page as an image and create a digest based on the rendered content.
-    This approach captures all visual content including text, graphics, and embedded images.
-
-    This is the NEW hashing scheme that should be used going forward.
-
-    Args:
-        pdf_path: Path to the PDF file
-
-    Returns:
-        First 8 characters of SHA256 digest of all rendered page images, or None if rendering fails
-    """
-    try:
-        doc = fitz.open(pdf_path)
-        page_hashes = []
-
-        # Use deterministic rendering settings for consistency
-        # 150 DPI provides good quality while being reasonably fast
-        zoom = 150 / 72  # 72 is the default DPI
-        mat = fitz.Matrix(zoom, zoom)
-
-        # Iterate through all pages and render each as an image
-        for page_num in range(len(doc)):
-            page = doc[page_num]
-
-            try:
-                # Render page as pixmap (image) with deterministic settings
-                # alpha=False ensures no transparency channel for consistency
-                pix = page.get_pixmap(matrix=mat, alpha=False, colorspace=fitz.csRGB)
-
-                # Get the raw pixel data
-                img_data = pix.samples
-
-                # Hash the pixel data
-                page_hash = hashlib.sha256(img_data).hexdigest()
-                page_hashes.append(page_hash)
-
-            except Exception as e:
-                print(f"  Warning: Could not render page {page_num}: {e}")
-                continue
-
-        doc.close()
-
-        # Create a digest of all page hashes combined (in order)
-        if page_hashes:
-            combined = "".join(page_hashes)
-            content_digest = hashlib.sha256(combined.encode()).hexdigest()
-            # Return only first 8 characters to match old hash format
-            return content_digest[:8]
-        else:
-            # No pages could be rendered
-            return None
-
-    except Exception as e:
-        print(f"  Error processing {pdf_path}: {e}")
-        return None
+from documentor.config import load_config
+from documentor.hashing import hash_file_content
 
 
 def update_document_hashes(processed_folder: str, dry_run: bool = True):
@@ -110,16 +53,8 @@ def update_document_hashes(processed_folder: str, dry_run: bool = True):
             with open(json_file, "r", encoding="utf-8") as f:
                 metadata = json.load(f)
 
-            # Check if new_hash already exists (optional - for re-running)
-            if "new_hash" in metadata and not dry_run:
-                # Skip if already has new_hash (unless we want to recalculate)
-                # Comment this out if you want to recalculate existing new_hash values
-                # skipped_count += 1
-                # continue
-                pass
-
             # Calculate new content-based hash
-            new_hash = extract_images_digest(str(pdf_file))
+            new_hash = hash_file_content(pdf_file)
 
             if new_hash is None:
                 print(f"\n[ERROR] Failed to calculate hash for {pdf_file.name}")
@@ -175,22 +110,12 @@ if __name__ == "__main__":
 
     args = parser.parse_args()
 
-    # Get folder path from args or .env
+    # Get folder path from args or config
     if args.folder:
         folder_path = args.folder
     else:
-        # Load from .env
-        from dotenv import load_dotenv
-        config_dir = Path.home() / ".documentor"
-        env_path = config_dir / ".env"
-
-        if not env_path.exists():
-            print(f"Error: .env file not found at {env_path}")
-            print("Please specify --folder argument or ensure .env is configured")
-            sys.exit(1)
-
-        load_dotenv(dotenv_path=env_path, override=True)
-        folder_path = os.getenv("PROCESSED_FILES_DIR")
+        config = load_config()
+        folder_path = config.get("PROCESSED_FILES_DIR")
 
         if not folder_path:
             print("Error: PROCESSED_FILES_DIR not set in .env")

@@ -4,70 +4,14 @@ Migrate duplicate PDFs to a duplicates folder based on image content.
 Keeps one original per duplicate group and moves the rest.
 """
 
-import hashlib
 import os
 import re
 import shutil
 from pathlib import Path
 from collections import defaultdict
-import fitz  # PyMuPDF
 import argparse
 
-
-def extract_images_digest(pdf_path: str) -> str | None:
-    """
-    Render each PDF page as an image and create a digest based on the rendered content.
-    This approach captures all visual content including text, graphics, and embedded images.
-
-    Args:
-        pdf_path: Path to the PDF file
-
-    Returns:
-        A SHA256 digest of all rendered page images, or None if rendering fails
-    """
-    try:
-        doc = fitz.open(pdf_path)
-        page_hashes = []
-
-        # Use deterministic rendering settings for consistency
-        # 150 DPI provides good quality while being reasonably fast
-        zoom = 150 / 72  # 72 is the default DPI
-        mat = fitz.Matrix(zoom, zoom)
-
-        # Iterate through all pages and render each as an image
-        for page_num in range(len(doc)):
-            page = doc[page_num]
-
-            try:
-                # Render page as pixmap (image) with deterministic settings
-                # alpha=False ensures no transparency channel for consistency
-                pix = page.get_pixmap(matrix=mat, alpha=False, colorspace=fitz.csRGB)
-
-                # Get the raw pixel data
-                img_data = pix.samples
-
-                # Hash the pixel data
-                page_hash = hashlib.sha256(img_data).hexdigest()
-                page_hashes.append(page_hash)
-
-            except Exception as e:
-                print(f"  Warning: Could not render page {page_num}: {e}")
-                continue
-
-        doc.close()
-
-        # Create a digest of all page hashes combined (in order)
-        if page_hashes:
-            combined = "".join(page_hashes)
-            content_digest = hashlib.sha256(combined.encode()).hexdigest()
-            return content_digest
-        else:
-            # No pages could be rendered
-            return None
-
-    except Exception as e:
-        print(f"  Error processing {pdf_path}: {e}")
-        return None
+from documentor.hashing import hash_file_content
 
 
 def get_file_date(filename: str) -> str:
@@ -114,12 +58,12 @@ def migrate_duplicates(source_folder: str, dry_run: bool = True):
     for idx, pdf_file in enumerate(pdf_files, 1):
         print(f"[{idx}/{total_files}] Processing: {pdf_file.name}")
 
-        digest = extract_images_digest(str(pdf_file))
+        digest = hash_file_content(pdf_file)
 
         if digest:
             digest_to_files[digest].append(str(pdf_file))
         else:
-            print(f"  → Failed to extract digest, skipping")
+            print(f"  -> Failed to extract digest, skipping")
 
     print("\n" + "=" * 80)
     print("DUPLICATE MIGRATION")
@@ -240,7 +184,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--folder",
         type=str,
-        default="/Users/tsilva/Google Drive/My Drive/documentor-puzzle/processed/",
+        required=True,
         help="Path to the processed folder"
     )
     parser.add_argument(

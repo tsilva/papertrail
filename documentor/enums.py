@@ -1,0 +1,156 @@
+"""Dynamic enum loading and utilities."""
+
+import json
+import os
+from enum import Enum
+from pathlib import Path
+from typing import Optional
+
+
+def clean_enum_string(value: str, enum_prefix: Optional[str] = None) -> str:
+    """
+    Remove enum prefix from serialized enum strings.
+
+    Handles formats like "DocumentType.invoice" -> "invoice"
+
+    Args:
+        value: The value to clean
+        enum_prefix: Optional specific prefix to check (e.g., "DocumentType")
+
+    Returns:
+        Cleaned value without enum prefix
+    """
+    if not isinstance(value, str):
+        return value
+
+    if enum_prefix:
+        prefix = f"{enum_prefix}."
+        if value.startswith(prefix):
+            return value.split(".", 1)[-1]
+    elif "." in value and value.count(".") == 1:
+        # Generic enum format detection
+        return value.split(".", 1)[-1]
+
+    return value
+
+
+def load_enum_values(
+    field_name: str,
+    fallback_values: list[str],
+    processed_files_dir: Optional[str] = None,
+    enum_prefix: Optional[str] = None
+) -> list[str]:
+    """
+    Generic enum value loader from processed metadata files.
+
+    Scans all JSON metadata files in the processed directory and extracts
+    unique values for the specified field.
+
+    Args:
+        field_name: The metadata field to extract (e.g., "document_type", "issuing_party")
+        fallback_values: Default values to use if no files found
+        processed_files_dir: Path to processed files directory (defaults to env var)
+        enum_prefix: Optional enum prefix to strip (e.g., "DocumentType", "IssuingParty")
+
+    Returns:
+        Sorted list of unique values, always including "$UNKNOWN$"
+    """
+    if processed_files_dir is None:
+        processed_files_dir = os.getenv("PROCESSED_FILES_DIR")
+
+    if not processed_files_dir or not Path(processed_files_dir).exists():
+        return fallback_values
+
+    values_set = set()
+    processed_path = Path(processed_files_dir)
+
+    # Scan all .json files in the processed directory
+    for json_file in processed_path.rglob("*.json"):
+        try:
+            with open(json_file, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                value = data.get(field_name)
+                if value and isinstance(value, str):
+                    value = clean_enum_string(value, enum_prefix)
+                    values_set.add(value)
+        except Exception:
+            # Silently skip files that can't be read or parsed
+            continue
+
+    # If no values found, use fallback
+    if not values_set:
+        values_set = set(fallback_values)
+
+    # Always ensure "$UNKNOWN$" is in the list
+    values_set.add("$UNKNOWN$")
+
+    # Return sorted list for consistency
+    return sorted(values_set)
+
+
+def create_dynamic_enum(name: str, values: list[str]) -> Enum:
+    """
+    Create a dynamic Enum class from a list of values.
+
+    Args:
+        name: Name of the enum class
+        values: List of enum values (each value becomes both name and value)
+
+    Returns:
+        Dynamic Enum class
+    """
+    return Enum(name, dict([(k, k) for k in values]), type=str)
+
+
+# Fallback values for document types
+FALLBACK_DOCUMENT_TYPES = [
+    "$UNKNOWN$", "bill", "certificate", "contract", "declaration", "email", "extract",
+    "invoice", "letter", "notification", "other", "receipt", "report", "statement", "ticket"
+]
+
+# Fallback values for issuing parties
+FALLBACK_ISSUING_PARTIES = [
+    "$UNKNOWN$", "ActivoBank", "Allianz", "Amazon", "Anthropic", "Antonio Martins & Filhos",
+    "Apple", "Armando", "Ascendi", "AT", "Auchan", "Banco BEST", "Banco Invest",
+    "Bandicam", "BIG", "Bitwarden", "BlackRock", "BP", "BPI", "Caetano Formula",
+    "Carrefour", "CEPSA", "Cleverbridge", "Codota", "Cohere", "Coinbase",
+    "Consensus", "Continente", "CTT", "Dacia", "DEGIRO", "Digital River",
+    "DigitalOcean", "DOKKER", "E.Leclerc", "EUROPA", "ExpressVPN", "FGCT",
+    "Fidelidade", "Fluxe", "Fundo de Compensacao do Trabalho", "Galp", "GESPOST",
+    "GitHub", "GONCALTEAM", "Google", "Google Commerce Limited", "Government",
+    "GRUPO", "HONG KONG USGREEN LIMITED", "INE", "Intermarche", "International",
+    "IRN", "IRS", "iServices", "iShares", "justETF", "Justica",
+    "La Maison", "Leroy", "LuLuComfort", "LusoAloja", "M2030",
+    "MANUEL ALVES DIAS, LDA", "MB WAY", "Melo, Nadais & Associados", "Microsoft",
+    "MillenniumBCP", "Mini Soninha", "Ministerio das Financas", "Mobatek",
+    "MONTEPIO", "Multibanco", "Multicare", "MyCommerce", "MyFactoryHub", "NordVPN",
+    "NOS", "Notario", "NTI", "OCC", "OpenAI", "OpenRouter", "OUYINEN", "Paddle",
+    "Parallels", "PayPal", "PCDIGA", "Pinecone", "PLIMAT", "Pluxee", "PRIO",
+    "PRISMXR", "Puzzle Message, Unipessoal Lda.", "Quindi", "Redunicre",
+    "RegistoLEI", "Renault", "Republica Portuguesa", "RescueTime", "Restaurant",
+    "Securitas", "Seguranca Social", "Shenzhen", "Sierra",
+    "Sodexo", "Solred", "SONAE", "SRS Acquiom", "Swappie", "Sweatcoin",
+    "Tesouraria", "TIAGO", "Tilda", "Together.ai", "TopazLabs", "Universal",
+    "Universo", "Vanguard", "Via Verde", "VIDRIO PAIS PORTUGAL",
+    "VITALOPE", "Vodafone", "WisdomTree", "Worten", "xAI"
+]
+
+
+def load_document_types(processed_files_dir: Optional[str] = None) -> list[str]:
+    """Load document types from processed files or use fallback."""
+    return load_enum_values(
+        field_name="document_type",
+        fallback_values=FALLBACK_DOCUMENT_TYPES,
+        processed_files_dir=processed_files_dir,
+        enum_prefix="DocumentType"
+    )
+
+
+def load_issuing_parties(processed_files_dir: Optional[str] = None) -> list[str]:
+    """Load issuing parties from processed files or use fallback."""
+    return load_enum_values(
+        field_name="issuing_party",
+        fallback_values=FALLBACK_ISSUING_PARTIES,
+        processed_files_dir=processed_files_dir,
+        enum_prefix="IssuingParty"
+    )
