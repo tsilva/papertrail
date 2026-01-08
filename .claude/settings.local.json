@@ -14,7 +14,8 @@
       "Bash(timeout 120 python:*)",
       "Bash(find:*)",
       "Bash(source ~/.documentor/.env)",
-      "Bash(echo:*)"
+      "Bash(echo:*)",
+      "Bash(git -C /Users/tsilva/repos/tsilva/documentor log --oneline -10)"
     ],
     "deny": [],
     "ask": []
