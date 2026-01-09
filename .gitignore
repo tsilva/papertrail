@@ -178,3 +178,7 @@ _helpers.md
 # Generated output files
 duplicates_report.txt
 migration_dry_run*.txt
+
+# Local config files (contain secrets/passwords)
+.passwords.txt
+.file_check_validations.json
