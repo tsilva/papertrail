@@ -1,8 +1,6 @@
 """Configuration loading and environment management."""
 
 import os
-import shutil
-import sys
 from pathlib import Path
 from typing import Optional
 
@@ -10,76 +8,56 @@ import openai
 from dotenv import load_dotenv
 
 
-def get_config_dir_and_env_path() -> tuple[Path, Path]:
-    """Get the configuration directory and .env file path."""
-    config_dir = Path.home() / ".documentor"
-    env_path = config_dir / ".env"
-    return config_dir, env_path
+def get_repo_root() -> Path:
+    """Get the repository root directory."""
+    return Path(__file__).parent.parent
 
 
-def ensure_home_config_and_env() -> tuple[Path, Path]:
+def get_config_paths() -> dict[str, Path]:
+    """Get paths to all configuration files in repo root."""
+    repo_root = get_repo_root()
+    return {
+        "env": repo_root / ".env",
+        "passwords": repo_root / ".passwords.txt",
+        "validations": repo_root / ".file_check_validations.json",
+    }
+
+
+def load_env() -> Path:
     """
-    Ensure the home config directory exists and contains required config files.
-
-    Copies example config files if they don't exist, and creates .env if missing.
-    Exits if files were copied (user needs to edit them first).
+    Load environment variables from repo root .env file.
 
     Returns:
-        Tuple of (config_dir, env_path)
+        Path to the .env file
     """
-    config_dir, env_path = get_config_dir_and_env_path()
-    config_dir.mkdir(parents=True, exist_ok=True)
+    paths = get_config_paths()
+    env_path = paths["env"]
 
-    # Find config example directory (relative to main.py location)
-    # This handles both installed package and development scenarios
-    possible_config_dirs = [
-        Path(__file__).parent.parent / "config",  # Development: documentor/../config
-        Path(__file__).parent / "config",  # Installed: documentor/config
-    ]
-
-    config_example_dir = None
-    for d in possible_config_dirs:
-        if d.exists():
-            config_example_dir = d
-            break
-
-    files_copied = []
-    if config_example_dir:
-        for file in config_example_dir.iterdir():
-            if file.is_file() and file.name.endswith('.example'):
-                dest_name = file.name[:-8]  # Remove .example suffix
-                dest = config_dir / dest_name
-                if not dest.exists():
-                    shutil.copy(file, dest)
-                    files_copied.append(dest_name)
-
-    if files_copied:
-        print(f"[OK] Copied example config files to {config_dir}: {', '.join(files_copied)}.")
-        print("Edit these files before rerunning.")
-        sys.exit(0)
-
-    # Always ensure .env exists
     if not env_path.exists():
-        env_path.touch()
-        print(f"[OK] Created .env at {env_path}. Edit this file before rerunning.")
-        sys.exit(0)
+        raise FileNotFoundError(
+            f"No .env file found at {env_path}. "
+            "Copy .env.example to .env and configure it."
+        )
 
-    return config_dir, env_path
+    load_dotenv(dotenv_path=env_path, override=True)
+    return env_path
 
 
 def load_config() -> dict:
     """
-    Load configuration from ~/.documentor/.env.
+    Load configuration from repo root .env.
 
     Returns:
         Dictionary with configuration values
     """
-    config_dir, env_path = ensure_home_config_and_env()
-    load_dotenv(dotenv_path=env_path, override=True)
+    env_path = load_env()
+    paths = get_config_paths()
 
     return {
-        "config_dir": config_dir,
+        "repo_root": get_repo_root(),
         "env_path": env_path,
+        "passwords_path": paths["passwords"],
+        "validations_path": paths["validations"],
         "OPENROUTER_MODEL_ID": os.getenv("OPENROUTER_MODEL_ID"),
         "OPENROUTER_API_KEY": os.getenv("OPENROUTER_API_KEY"),
         "OPENROUTER_BASE_URL": os.getenv("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1"),

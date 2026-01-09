@@ -22,7 +22,8 @@ from tqdm import tqdm
 
 # Import from documentor package
 from documentor.config import (
-    ensure_home_config_and_env,
+    load_env,
+    get_config_paths,
     get_openai_client,
 )
 from documentor.hashing import hash_file_fast, hash_file_content
@@ -51,10 +52,8 @@ from documentor.metadata import (
 # ------------------- CONFIG -------------------
 
 # Initialize config at module load
-CONFIG_DIR, ENV_PATH = ensure_home_config_and_env()
-
-from dotenv import load_dotenv
-load_dotenv(dotenv_path=ENV_PATH, override=True)
+CONFIG_PATHS = get_config_paths()
+load_env()
 
 OPENROUTER_MODEL_ID = os.getenv("OPENROUTER_MODEL_ID")
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
@@ -515,7 +514,7 @@ def pipeline(export_date_arg=None):
         sys.exit(1)
 
     export_date_dir = os.path.join(EXPORT_FILES_DIR, export_date)
-    zip_passwords_file_path = str(Path.home() / ".documentor/passwords.txt")
+    zip_passwords_file_path = str(CONFIG_PATHS["passwords"])
     assert os.path.exists(zip_passwords_file_path), f"Missing zip passwords file: {zip_passwords_file_path}"
 
     processed_files_excel_path = Path(PROCESSED_FILES_DIR) / "processed_files.xlsx"
@@ -825,7 +824,7 @@ def main():
     check_schema_path = args.check_schema_path
     if args.task == "check_files_exist":
         if not check_schema_path:
-            check_schema_path = str(Path.home() / ".documentor" / "file_check_validations.json")
+            check_schema_path = str(CONFIG_PATHS["validations"])
         if not os.path.exists(check_schema_path):
             parser.error(f"The check_schema_path '{check_schema_path}' does not exist.")
 
