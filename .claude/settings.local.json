@@ -19,7 +19,8 @@
       "Bash(uv run python:*)",
       "Bash(uv run check-hash:*)",
       "Bash(uv run documentor --help:*)",
-      "Bash(wc:*)"
+      "Bash(wc:*)",
+      "Bash(git -C /Users/tsilva/repos/tsilva/documentor status --short)"
     ],
     "deny": [],
     "ask": []

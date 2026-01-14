@@ -14,12 +14,14 @@ def get_repo_root() -> Path:
 
 
 def get_config_paths() -> dict[str, Path]:
-    """Get paths to all configuration files in repo root."""
+    """Get paths to all configuration files."""
     repo_root = get_repo_root()
+    config_dir = repo_root / "config"
     return {
-        "env": repo_root / ".env",
-        "passwords": repo_root / ".passwords.txt",
-        "validations": repo_root / ".file_check_validations.json",
+        "env": repo_root / ".env",  # .env stays at repo root
+        "passwords": config_dir / "passwords.txt",
+        "validations": config_dir / "file_check_validations.json",
+        "document_types": config_dir / "document_types.json",
     }
 
 
