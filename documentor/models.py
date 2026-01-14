@@ -1,6 +1,7 @@
 """Pydantic models for document metadata."""
 
 import re
+from datetime import datetime
 from enum import Enum
 from typing import Optional
 
@@ -160,6 +161,19 @@ class DocumentMetadata(DocumentMetadataInput):
     def validate_issue_date(cls, value):
         if _is_empty_value(value):
             return "$UNKNOWN$"
+
+        # Check for future dates (likely extraction error)
+        if value != "$UNKNOWN$":
+            try:
+                parsed_date = datetime.strptime(value, "%Y-%m-%d").date()
+                if parsed_date > datetime.now().date():
+                    raise ValueError(f"issue_date '{value}' is in the future - likely extraction error")
+            except ValueError as e:
+                if "future" in str(e):
+                    raise  # Re-raise our future date error
+                # If parsing fails, let it through (may be non-standard format)
+                pass
+
         return value
 
     @field_validator('issuing_party', mode='before')
