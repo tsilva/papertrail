@@ -550,18 +550,20 @@ def pipeline(export_date_arg=None):
     processed_files_excel_path = Path(PROCESSED_FILES_DIR) / "processed_files.xlsx"
     raw_dirs = [p for p in RAW_FILES_DIR.split(';') if p]
 
+    run_step(f'"{sys.executable}" "{__file__}" gmail_download', "Step 1: Download Gmail attachments")
+
     for rd in raw_dirs:
-        run_step(f'mbox-extractor "{rd}"', "Step 1: Google Takeout mbox extraction")
-        run_step(f'archive-extractor "{rd}" --passwords "{zip_passwords_file_path}"', "Step 2: Google Takeout zip extraction")
+        run_step(f'mbox-extractor "{rd}"', "Step 2: Google Takeout mbox extraction")
+        run_step(f'archive-extractor "{rd}" --passwords "{zip_passwords_file_path}"', "Step 3: Google Takeout zip extraction")
 
     raw_dirs_arg = ";".join(raw_dirs)
-    run_step(f'"{sys.executable}" "{__file__}" extract_new "{PROCESSED_FILES_DIR}" --raw_path "{raw_dirs_arg}"', "Step 3: Extract new documents")
-    run_step(f'"{sys.executable}" "{__file__}" rename_files "{PROCESSED_FILES_DIR}"', "Step 4: Rename files and metadata")
-    run_step(f'"{sys.executable}" "{__file__}" export_excel "{PROCESSED_FILES_DIR}" --excel_output_path "{processed_files_excel_path}"', "Step 5: Export metadata to Excel")
-    run_step(f'"{sys.executable}" "{__file__}" copy_matching "{PROCESSED_FILES_DIR}" --regex_pattern "{export_date}" --copy_dest_folder "{export_date_dir}"', "Step 6: Copy matching documents")
-    run_step(f'pdf-merger "{export_date_dir}"', "Step 7: Merge PDFs")
+    run_step(f'"{sys.executable}" "{__file__}" extract_new "{PROCESSED_FILES_DIR}" --raw_path "{raw_dirs_arg}"', "Step 4: Extract new documents")
+    run_step(f'"{sys.executable}" "{__file__}" rename_files "{PROCESSED_FILES_DIR}"', "Step 5: Rename files and metadata")
+    run_step(f'"{sys.executable}" "{__file__}" export_excel "{PROCESSED_FILES_DIR}" --excel_output_path "{processed_files_excel_path}"', "Step 6: Export metadata to Excel")
+    run_step(f'"{sys.executable}" "{__file__}" copy_matching "{PROCESSED_FILES_DIR}" --regex_pattern "{export_date}" --copy_dest_folder "{export_date_dir}"', "Step 7: Copy matching documents")
+    run_step(f'pdf-merger "{export_date_dir}"', "Step 8: Merge PDFs")
     validate_merged_pdf(Path(export_date_dir))
-    run_step(f'"{sys.executable}" "{__file__}" check_files_exist "{export_date_dir}"', "Step 8: Validate exported files")
+    run_step(f'"{sys.executable}" "{__file__}" check_files_exist "{export_date_dir}"', "Step 9: Validate exported files")
 
     print("All steps completed successfully.")
 
