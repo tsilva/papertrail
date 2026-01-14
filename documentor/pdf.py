@@ -49,6 +49,14 @@ def render_pdf_to_images(
     return images_b64
 
 
+def get_page_count(pdf_path: Path) -> int:
+    """Return the number of pages in a PDF file."""
+    doc = fitz.open(str(pdf_path))
+    count = len(doc)
+    doc.close()
+    return count
+
+
 def find_pdf_files(folder_paths) -> list[Path]:
     """
     Return all PDF files within one or multiple folders.
