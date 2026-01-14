@@ -42,7 +42,7 @@ from documentor.llm import (
     TOOLS_RAW_EXTRACTION,
     normalize_metadata,
 )
-from documentor.pdf import render_pdf_to_images, find_pdf_files
+from documentor.pdf import render_pdf_to_images, find_pdf_files, get_page_count
 from documentor.metadata import (
     build_hash_index,
     get_unique_dates,
@@ -236,6 +236,36 @@ def validate_metadata(output_path: Path):
         print("\nAll metadata files passed validation.")
 
     return valid_entries
+
+
+def validate_merged_pdf(folder_path: Path) -> bool:
+    """
+    Validate that merged_all.pdf has the correct page count.
+
+    Compares the page count of merged_all.pdf against the sum of
+    page counts of all other PDFs in the folder.
+
+    Returns True if valid, raises AssertionError if mismatch.
+    """
+    merged_path = folder_path / "merged_all.pdf"
+    if not merged_path.exists():
+        print(f"  No merged_all.pdf found in {folder_path}")
+        return True
+
+    source_pdfs = [p for p in folder_path.glob("*.pdf") if p.name != "merged_all.pdf"]
+    expected_pages = sum(get_page_count(pdf) for pdf in source_pdfs)
+
+    actual_pages = get_page_count(merged_path)
+
+    if actual_pages != expected_pages:
+        raise AssertionError(
+            f"Merged PDF page count mismatch in {folder_path}: "
+            f"expected {expected_pages} pages (from {len(source_pdfs)} files), "
+            f"got {actual_pages} pages"
+        )
+
+    print(f"  Merge validation passed: {actual_pages} pages from {len(source_pdfs)} files")
+    return True
 
 
 def rename_existing_files(output_path: Path):
@@ -530,6 +560,7 @@ def pipeline(export_date_arg=None):
     run_step(f'"{sys.executable}" "{__file__}" export_excel "{PROCESSED_FILES_DIR}" --excel_output_path "{processed_files_excel_path}"', "Step 5: Export metadata to Excel")
     run_step(f'"{sys.executable}" "{__file__}" copy_matching "{PROCESSED_FILES_DIR}" --regex_pattern "{export_date}" --copy_dest_folder "{export_date_dir}"', "Step 6: Copy matching documents")
     run_step(f'pdf-merger "{export_date_dir}"', "Step 7: Merge PDFs")
+    validate_merged_pdf(Path(export_date_dir))
     run_step(f'"{sys.executable}" "{__file__}" check_files_exist "{export_date_dir}"', "Step 8: Validate exported files")
 
     print("All steps completed successfully.")
@@ -706,6 +737,7 @@ def _task__export_all_dates(processed_path, export_base_dir, run_merge=False):
                 result = subprocess.run(f'pdf-merger "{export_dir}"', shell=True, text=True)
                 if result.returncode == 0:
                     print(f"  Merge completed successfully")
+                    validate_merged_pdf(export_dir)
                 else:
                     print(f"  Merge failed with exit code {result.returncode}")
 
