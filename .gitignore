@@ -180,5 +180,7 @@ duplicates_report.txt
 migration_dry_run*.txt
 
 # Local config files (contain secrets/passwords)
-.passwords.txt
-.file_check_validations.json
+# Note: .example files in config/ are tracked for reference
+config/passwords.txt
+config/file_check_validations.json
+config/document_types.json
