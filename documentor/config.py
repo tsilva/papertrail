@@ -25,6 +25,16 @@ def get_config_paths() -> dict[str, Path]:
     }
 
 
+def get_gmail_config_paths() -> dict[str, Path]:
+    """Get paths to Gmail API configuration files."""
+    config_dir = get_repo_root() / "config"
+    return {
+        "credentials": config_dir / "gmail_credentials.json",
+        "token": config_dir / "gmail_token.json",
+        "settings": config_dir / "gmail_settings.json",
+    }
+
+
 def load_env() -> Path:
     """
     Load environment variables from repo root .env file.

@@ -753,6 +753,62 @@ def _task__check_files_exist(processed_path, check_schema_path):
     print("File existence check complete.")
 
 
+def _task__gmail_download():
+    """Download email attachments from Gmail to RAW_FILES_DIR."""
+    from datetime import timedelta
+    from documentor.gmail import download_gmail_attachments
+    from documentor.metadata import get_unique_dates
+
+    RAW_FILES_DIR = os.getenv("RAW_FILES_DIR")
+    PROCESSED_FILES_DIR = os.getenv("PROCESSED_FILES_DIR")
+
+    if not RAW_FILES_DIR or not PROCESSED_FILES_DIR:
+        missing = []
+        if not RAW_FILES_DIR:
+            missing.append("RAW_FILES_DIR")
+        if not PROCESSED_FILES_DIR:
+            missing.append("PROCESSED_FILES_DIR")
+        print(f"Missing required .env variables: {', '.join(missing)}")
+        sys.exit(1)
+
+    # Use first raw path for downloads
+    raw_path = Path(RAW_FILES_DIR.split(";")[0])
+    processed_path = Path(PROCESSED_FILES_DIR)
+
+    raw_path.mkdir(parents=True, exist_ok=True)
+
+    end_date = datetime.now()
+
+    # Get most recent date from processed files
+    unique_dates = get_unique_dates(processed_path) if processed_path.exists() else []
+
+    if unique_dates:
+        most_recent = unique_dates[0]  # Already sorted descending
+        # Parse YYYY-MM to first day of that month
+        start_date = datetime.strptime(f"{most_recent}-01", "%Y-%m-%d")
+        print(f"Date range: {start_date.date()} to {end_date.date()}")
+    else:
+        # Default to last 30 days if no processed files
+        start_date = end_date - timedelta(days=30)
+        print(f"No processed files found. Using default range: last 30 days")
+
+    print(f"Downloading attachments to: {raw_path}")
+
+    stats = download_gmail_attachments(
+        output_dir=raw_path,
+        start_date=start_date,
+        end_date=end_date,
+    )
+
+    print(f"\n=== Gmail Download Summary ===")
+    print(f"Messages found: {stats['messages_found']}")
+    print(f"Messages processed: {stats['messages_processed']}")
+    print(f"Messages skipped: {stats['messages_skipped']}")
+    print(f"Attachments downloaded: {stats['attachments_downloaded']}")
+    print(f"Attachments failed: {stats['attachments_failed']}")
+    print(f"Bytes downloaded: {stats['bytes_downloaded']:,}")
+
+
 def process_folder(task: str, processed_path: str, raw_paths=None, excel_output_path: str = None,
                    regex_pattern: str = None, copy_dest_folder: str = None, check_schema_path: str = None,
                    export_base_dir: str = None, run_merge: bool = False):
@@ -787,7 +843,8 @@ def main():
     parser = argparse.ArgumentParser(description="Process a folder of PDF files.")
     parser.add_argument("task", type=str, choices=[
         'extract_new', 'rename_files', 'validate_metadata', 'export_excel',
-        'copy_matching', 'export_all_dates', 'check_files_exist', 'pipeline'
+        'copy_matching', 'export_all_dates', 'check_files_exist', 'pipeline',
+        'gmail_download'
     ], help="Task to perform.")
     parser.add_argument("processed_path", type=str, nargs='?', help="Path to output folder.")
     parser.add_argument("--raw_path", type=str, help="Path to documents folder(s). Use ';' to separate multiple paths.")
@@ -804,6 +861,10 @@ def main():
         if args.export_date and not re.match(r"^\d{4}-\d{2}$", args.export_date):
             parser.error("The --export_date argument must be in YYYY-MM format.")
         pipeline(export_date_arg=args.export_date)
+        return
+
+    if args.task == "gmail_download":
+        _task__gmail_download()
         return
 
     if not args.processed_path:

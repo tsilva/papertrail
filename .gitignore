@@ -184,3 +184,9 @@ migration_dry_run*.txt
 config/passwords.txt
 config/file_check_validations.json
 config/document_types.json
+
+# Gmail API config files (OAuth credentials and tokens)
+config/gmail_credentials.json
+config/gmail_token.json
+config/gmail_settings.json
+gmail_processed_messages.json
