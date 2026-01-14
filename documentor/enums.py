@@ -6,6 +6,8 @@ from enum import Enum
 from pathlib import Path
 from typing import Optional
 
+from documentor.config import get_config_paths
+
 
 def clean_enum_string(value: str, enum_prefix: Optional[str] = None) -> str:
     """
@@ -102,11 +104,30 @@ def create_dynamic_enum(name: str, values: list[str]) -> Enum:
     return Enum(name, dict([(k, k) for k in values]), type=str)
 
 
-# Fallback values for document types
-FALLBACK_DOCUMENT_TYPES = [
-    "$UNKNOWN$", "bill", "certificate", "contract", "declaration", "email", "extract",
-    "invoice", "letter", "notification", "other", "receipt", "report", "statement", "ticket"
-]
+def _load_fallback_document_types() -> list[str]:
+    """Load fallback document types from config file or use hardcoded defaults."""
+    try:
+        config_paths = get_config_paths()
+        doc_types_path = config_paths.get("document_types")
+        if doc_types_path and doc_types_path.exists():
+            with open(doc_types_path, "r", encoding="utf-8") as f:
+                types = json.load(f)
+                if isinstance(types, list):
+                    # Ensure $UNKNOWN$ is always present
+                    if "$UNKNOWN$" not in types:
+                        types.append("$UNKNOWN$")
+                    return sorted(types)
+    except Exception:
+        pass
+    # Hardcoded fallback if config file doesn't exist or fails to load
+    return [
+        "$UNKNOWN$", "bill", "certificate", "contract", "declaration", "email", "extract",
+        "invoice", "letter", "notification", "other", "receipt", "report", "statement", "ticket"
+    ]
+
+
+# Fallback values for document types (loaded from config/document_types.json if available)
+FALLBACK_DOCUMENT_TYPES = _load_fallback_document_types()
 
 # Fallback values for issuing parties
 FALLBACK_ISSUING_PARTIES = [
