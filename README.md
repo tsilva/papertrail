@@ -1,41 +1,54 @@
-<p align="center">
-  <img src="logo.png" alt="documentor Logo" width="200">
-</p>
+<div align="center">
+  <img src="logo.png" alt="Documentor" width="200">
 
-<h1 align="center">documentor</h1>
+  [![Python 3.10+](https://img.shields.io/badge/Python-3.10+-3776AB?style=flat&logo=python&logoColor=white)](https://www.python.org/)
+  [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg?style=flat)](https://opensource.org/licenses/MIT)
+  [![OpenRouter](https://img.shields.io/badge/OpenRouter-Vision%20LLMs-6366f1?style=flat&logo=openai&logoColor=white)](https://openrouter.ai/)
+  [![PyMuPDF](https://img.shields.io/badge/PyMuPDF-PDF%20Processing-red?style=flat)](https://pymupdf.readthedocs.io/)
 
-<p align="center">
-  <strong>AI-powered PDF document classification and organization using vision LLMs</strong>
-</p>
+  **Stop manually organizing PDFs. Let AI read, classify, and rename your documents automatically.**
 
-<p align="center">
-  <a href="https://www.python.org/"><img src="https://img.shields.io/badge/Python-3.10+-3776AB?logo=python&logoColor=white" alt="Python"></a>
-  <a href="https://opensource.org/licenses/MIT"><img src="https://img.shields.io/badge/License-MIT-yellow.svg" alt="License: MIT"></a>
-  <a href="https://openrouter.ai/"><img src="https://img.shields.io/badge/OpenRouter-Vision%20LLMs-6366f1?logo=openai&logoColor=white" alt="OpenRouter"></a>
-  <a href="https://pymupdf.readthedocs.io/"><img src="https://img.shields.io/badge/PyMuPDF-PDF%20Processing-red" alt="PyMuPDF"></a>
-  <a href="https://docs.pydantic.dev/"><img src="https://img.shields.io/badge/Pydantic-Data%20Validation-e92063" alt="Pydantic"></a>
-  <a href="https://claude.ai/code"><img src="https://img.shields.io/badge/Built%20with-Claude%20Code-DA7857?logo=anthropic" alt="Built with Claude Code"></a>
-</p>
+  [Quick Start](#-quick-start) · [Features](#-features) · [CLI Reference](#-cli-reference) · [How It Works](#-how-it-works)
+</div>
 
 ---
 
-## Overview
+## Table of Contents
 
-documentor automates the tedious task of organizing PDF documents by using vision-capable LLMs to extract and classify metadata directly from document images. It renders PDF pages as images, sends them to AI models for analysis, and automatically renames and organizes files based on extracted information like issue dates, document types, issuing parties, and amounts.
+- [Overview](#-overview)
+- [Features](#-features)
+- [Quick Start](#-quick-start)
+- [Installation](#-installation)
+- [Usage](#-usage)
+- [How It Works](#-how-it-works)
+- [CLI Reference](#-cli-reference)
+- [Project Structure](#-project-structure)
+- [Contributing](#-contributing)
+- [License](#-license)
 
-## Features
+## 📖 Overview
 
-- **Vision-based extraction** - Uses LLM vision capabilities to read documents exactly as a human would
-- **Two-phase pipeline** - Raw extraction followed by normalization to canonical values
-- **Smart duplicate detection** - Content-based hashing detects duplicates even when PDF metadata differs
-- **Gmail integration** - Automatically download PDF attachments from your email
-- **Dynamic classification** - Document types and issuing parties are learned from your existing files
-- **Excel export** - Generate spreadsheets for accounting and record-keeping
+Documentor automates the tedious task of organizing PDF documents by using vision-capable LLMs to extract and classify metadata directly from document images. It renders PDF pages as images, sends them to AI models for analysis, and automatically renames and organizes files based on extracted information like issue dates, document types, issuing parties, and amounts.
 
-## Quick Start
+**Before:** `scan_2024_001.pdf`, `document(3).pdf`, `IMG_4521.pdf`
+
+**After:** `2025-01-02 - invoice - anthropic - claude-api - 120 eur - a1b2c3d4.pdf`
+
+## ✨ Features
+
+| Feature | Benefit |
+|---------|---------|
+| **Vision-based extraction** | Reads documents exactly as a human would - no brittle text parsing |
+| **Two-phase pipeline** | Raw extraction + normalization ensures consistent, canonical values |
+| **Smart duplicate detection** | Content-based hashing detects duplicates even when PDF metadata differs |
+| **Gmail integration** | Automatically download PDF attachments from your email |
+| **Dynamic classification** | Document types and issuing parties are learned from your existing files |
+| **Excel export** | Generate spreadsheets for accounting and record-keeping |
+
+## 🚀 Quick Start
 
 ```bash
-# Clone and install
+# Install
 git clone https://github.com/tsilva/documentor.git
 cd documentor
 uv pip install -e .
@@ -48,12 +61,13 @@ cp .env.example .env
 documentor extract_new /path/to/processed --raw_path /path/to/raw
 ```
 
-## Installation
+## 📦 Installation
 
 ### Prerequisites
 
 - Python 3.10 or higher
 - [uv](https://github.com/astral-sh/uv) package manager (recommended)
+- [OpenRouter API key](https://openrouter.ai/)
 
 ### Setup
 
@@ -92,9 +106,11 @@ cp config/gmail_settings.json.example config/gmail_settings.json
 # Add gmail_credentials.json from Google Cloud Console
 ```
 
+See `config/gmail_settings.json.example` for MIME type filters and label configuration.
+
 </details>
 
-## Usage
+## 💻 Usage
 
 ### Basic Commands
 
@@ -125,9 +141,19 @@ python scripts/debug_classification.py /path/to/document.pdf
 check-hash /path/to/document.pdf
 ```
 
-## How It Works
+## ⚙️ How It Works
 
 ### Two-Phase Extraction Pipeline
+
+```mermaid
+graph LR
+    A[PDF Document] --> B[Render Pages<br/>as JPEG]
+    B --> C[Vision LLM<br/>Extraction]
+    C --> D[Raw Metadata]
+    D --> E[Normalization]
+    E --> F[Canonical<br/>Metadata]
+    F --> G[Renamed File]
+```
 
 1. **Phase 1 - Raw Extraction**: Renders the first 2 pages as JPEG images, sends them to the vision LLM, and extracts metadata exactly as it appears on the document.
 
@@ -150,7 +176,7 @@ YYYY-MM-DD - document-type - issuing-party - [service] - [amount currency] - has
 
 Example: `2025-01-02 - invoice - anthropic - claude-api - 120 eur - a1b2c3d4.pdf`
 
-## CLI Reference
+## 📋 CLI Reference
 
 | Task | Description | Required Options |
 |------|-------------|------------------|
@@ -164,7 +190,7 @@ Example: `2025-01-02 - invoice - anthropic - claude-api - 120 eur - a1b2c3d4.pdf
 | `pipeline` | Full end-to-end workflow | `--export_date` (optional) |
 | `gmail_download` | Download email attachments | - |
 
-## Project Structure
+## 📁 Project Structure
 
 ```
 documentor/
@@ -184,36 +210,27 @@ documentor/
 └── CLAUDE.md               # AI assistant context
 ```
 
-## Dependencies
+## 🔧 Dependencies
 
-**Core:**
-- `openai` - LLM API client (OpenRouter compatible)
-- `PyMuPDF` - PDF rendering and manipulation
-- `pandas` - Data processing and Excel export
-- `pydantic` - Data validation and modeling
-- `pillow` - Image processing
-- `tqdm` - Progress bars
-- `python-dotenv` - Environment configuration
+| Category | Packages |
+|----------|----------|
+| **Core** | `openai`, `PyMuPDF`, `pandas`, `pydantic`, `pillow`, `tqdm`, `python-dotenv`, `openpyxl` |
+| **Gmail** | `google-api-python-client`, `google-auth-httplib2`, `google-auth-oauthlib` |
 
-**Gmail integration:**
-- `google-api-python-client`
-- `google-auth-httplib2`
-- `google-auth-oauthlib`
-
-## Contributing
+## 🤝 Contributing
 
 Contributions are welcome. Please open an issue to discuss proposed changes before submitting a pull request.
 
-## License
+## 📄 License
 
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
 
-## Author
-
-**Tiago Silva** - [@tsilva](https://github.com/tsilva)
-
 ---
 
-<p align="center">
-  Made with <a href="https://openrouter.ai/">OpenRouter</a> and <a href="https://pymupdf.readthedocs.io/">PyMuPDF</a>
-</p>
+<div align="center">
+  <strong>Built by <a href="https://github.com/tsilva">Tiago Silva</a></strong>
+  <br><br>
+  If this project helps you, consider giving it a ⭐
+  <br><br>
+  <sub>Made with <a href="https://openrouter.ai/">OpenRouter</a> and <a href="https://pymupdf.readthedocs.io/">PyMuPDF</a></sub>
+</div>
