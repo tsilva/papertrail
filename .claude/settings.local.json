@@ -20,7 +20,9 @@
       "Bash(uv run check-hash:*)",
       "Bash(uv run documentor --help:*)",
       "Bash(wc:*)",
-      "Bash(git -C /Users/tsilva/repos/tsilva/documentor status --short)"
+      "Bash(git -C /Users/tsilva/repos/tsilva/documentor status --short)",
+      "Bash(pdf-compressor:*)",
+      "Skill(readme-generator)"
     ],
     "deny": [],
     "ask": []
