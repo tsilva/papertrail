@@ -1,8 +1,0 @@
-{
-  "attachment_mime_types": [
-    "application/pdf"
-  ],
-  "label_filter": null,
-  "max_results_per_query": 500,
-  "skip_already_downloaded": true
-}

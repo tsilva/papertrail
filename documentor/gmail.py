@@ -14,7 +14,7 @@ from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 from tqdm import tqdm
 
-from documentor.config import get_gmail_config_paths
+from documentor.config import get_gmail_config_paths, get_current_profile
 
 # Gmail API scope - read-only access to messages
 SCOPES = ["https://www.googleapis.com/auth/gmail.readonly"]
@@ -71,10 +71,33 @@ class GmailDownloader:
         self.failure_logger = None
 
     def _load_settings(self) -> dict:
-        """Load Gmail settings from config file."""
+        """
+        Load Gmail settings from profile or config file.
+
+        If a profile is active and has Gmail settings, uses those.
+        Otherwise, falls back to settings file or defaults.
+
+        Returns:
+            Dictionary with Gmail settings
+        """
+        profile = get_current_profile()
+
+        # Check profile first
+        if profile and profile.gmail.enabled:
+            # Build settings dict from profile
+            return {
+                "attachment_mime_types": profile.gmail.settings.attachment_mime_types,
+                "label_filter": profile.gmail.settings.label_filter,
+                "max_results_per_query": profile.gmail.settings.max_results_per_query,
+                "skip_already_downloaded": profile.gmail.settings.skip_already_downloaded,
+            }
+
+        # Fall back to settings file
         if self.settings_path.exists():
             with open(self.settings_path, "r") as f:
                 return json.load(f)
+
+        # Final fallback to defaults
         return DEFAULT_SETTINGS.copy()
 
     def authenticate(self) -> bool:

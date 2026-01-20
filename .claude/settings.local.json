@@ -22,7 +22,8 @@
       "Bash(wc:*)",
       "Bash(git -C /Users/tsilva/repos/tsilva/documentor status --short)",
       "Bash(pdf-compressor:*)",
-      "Skill(readme-generator)"
+      "Skill(readme-generator)",
+      "Bash(archive-extractor:*)"
     ],
     "deny": [],
     "ask": []

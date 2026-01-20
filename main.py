@@ -13,6 +13,7 @@ import unicodedata
 import argparse
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 from datetime import datetime
 from typing import Optional
@@ -25,6 +26,15 @@ from documentor.config import (
     load_env,
     get_config_paths,
     get_openai_client,
+    set_current_profile,
+    get_current_profile,
+)
+from documentor.profiles import (
+    load_profile,
+    list_available_profiles,
+    get_profiles_dir,
+    ProfileNotFoundError,
+    ProfileError,
 )
 from documentor.hashing import hash_file_fast, hash_file_content
 from documentor.logging_utils import setup_failure_logger, log_failure
@@ -51,18 +61,71 @@ from documentor.metadata import (
 
 # ------------------- CONFIG -------------------
 
-# Initialize config at module load
-CONFIG_PATHS = get_config_paths()
-load_env()
-
-OPENROUTER_MODEL_ID = os.getenv("OPENROUTER_MODEL_ID")
-OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
-OPENROUTER_BASE_URL = os.getenv("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1")
-
-openai_client = get_openai_client(OPENROUTER_API_KEY, OPENROUTER_BASE_URL)
+# Module-level globals (initialized by initialize_config)
+CONFIG_PATHS = None
+OPENROUTER_MODEL_ID = None
+OPENROUTER_API_KEY = None
+OPENROUTER_BASE_URL = None
+openai_client = None
 
 # Global failure logger
 failure_logger = None
+
+
+def initialize_config(profile_name: Optional[str] = None) -> None:
+    """
+    Initialize configuration from profile or legacy .env.
+
+    Args:
+        profile_name: Profile name to load, or None for auto-detection/legacy mode
+
+    Raises:
+        ProfileNotFoundError: If specified profile doesn't exist
+        ProfileError: If profile loading fails
+    """
+    global CONFIG_PATHS, OPENROUTER_MODEL_ID, OPENROUTER_API_KEY, OPENROUTER_BASE_URL, openai_client
+
+    # IMPORTANT: Load .env first for environment variable expansion in profiles
+    load_env(required=False)
+
+    # Check if profiles directory exists
+    profiles_dir = get_profiles_dir()
+    profiles_exist = profiles_dir.exists() and any(profiles_dir.glob("*.yaml"))
+
+    # Determine mode: profile or legacy
+    if profile_name is not None:
+        # Explicit profile requested
+        profile = load_profile(profile_name)
+        set_current_profile(profile)
+        print(f"Using profile: {profile.profile.name}")
+        if profile.profile.description:
+            print(f"  {profile.profile.description}")
+
+    elif profiles_exist and not profile_name:
+        # Auto-detect: use default profile if available
+        available = list_available_profiles()
+        if "default" in available:
+            profile = load_profile("default")
+            set_current_profile(profile)
+            print(f"Using profile: {profile.profile.name} (auto-detected)")
+        else:
+            # Multiple profiles but no default, print warning and use legacy
+            print(f"Warning: Multiple profiles available ({', '.join(available)}) but no 'default' profile.")
+            print("Using legacy .env configuration. Specify --profile to use a profile.")
+            set_current_profile(None)
+
+    else:
+        # No profiles or explicit legacy mode
+        set_current_profile(None)
+
+    # Load configuration (profile-aware)
+    CONFIG_PATHS = get_config_paths()
+
+    OPENROUTER_MODEL_ID = os.getenv("OPENROUTER_MODEL_ID")
+    OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
+    OPENROUTER_BASE_URL = os.getenv("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1")
+
+    openai_client = get_openai_client(OPENROUTER_API_KEY, OPENROUTER_BASE_URL)
 
 # ------------------- UTILS -------------------
 
@@ -544,8 +607,52 @@ def pipeline(export_date_arg=None):
         sys.exit(1)
 
     export_date_dir = os.path.join(EXPORT_FILES_DIR, export_date)
-    zip_passwords_file_path = str(CONFIG_PATHS["passwords"])
-    assert os.path.exists(zip_passwords_file_path), f"Missing zip passwords file: {zip_passwords_file_path}"
+
+    # Get passwords from profile (inline or file reference)
+    from documentor.config import get_passwords, get_validations
+    passwords, passwords_file = get_passwords()
+
+    # Track temp files for cleanup
+    temp_passwords_file = None
+    temp_validations_file = None
+
+    # Setup passwords file path for archive-extractor tool
+    if passwords:
+        if passwords_file:
+            # Use profile file reference directly
+            zip_passwords_file_path = passwords_file
+            print(f"Using passwords file from profile: {zip_passwords_file_path}")
+        else:
+            # Create temp file for inline data
+            temp_passwords = tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.txt')
+            temp_passwords.write('\n'.join(passwords))
+            temp_passwords.close()
+            zip_passwords_file_path = temp_passwords.name
+            temp_passwords_file = temp_passwords.name
+            print(f"Created temporary passwords file: {zip_passwords_file_path}")
+    else:
+        print("Warning: No passwords configured. Skipping password-protected archives.")
+        zip_passwords_file_path = None
+
+    # Get validations from profile (inline or file reference)
+    validations, validations_file = get_validations()
+
+    # Setup validations file path for check_files_exist task
+    if validations and validations.get('rules'):
+        if validations_file:
+            # Use profile file reference directly
+            validations_file_path = validations_file
+            print(f"Using validations file from profile: {validations_file_path}")
+        else:
+            # Create temp file for inline data
+            temp_validations = tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.json')
+            json.dump(validations['rules'], temp_validations, indent=2)
+            temp_validations.close()
+            validations_file_path = temp_validations.name
+            temp_validations_file = temp_validations.name
+            print(f"Created temporary validations file: {validations_file_path}")
+    else:
+        validations_file_path = None
 
     processed_files_excel_path = Path(PROCESSED_FILES_DIR) / "processed_files.xlsx"
     raw_dirs = [p for p in RAW_FILES_DIR.split(';') if p]
@@ -554,7 +661,10 @@ def pipeline(export_date_arg=None):
 
     for rd in raw_dirs:
         run_step(f'mbox-extractor "{rd}"', "Step 2: Google Takeout mbox extraction")
-        run_step(f'archive-extractor "{rd}" --passwords "{zip_passwords_file_path}"', "Step 3: Google Takeout zip extraction")
+        if zip_passwords_file_path:
+            run_step(f'archive-extractor "{rd}" --passwords "{zip_passwords_file_path}"', "Step 3: Google Takeout zip extraction")
+        else:
+            run_step(f'archive-extractor "{rd}"', "Step 3: Google Takeout zip extraction")
 
     raw_dirs_arg = ";".join(raw_dirs)
     run_step(f'"{sys.executable}" "{__file__}" extract_new "{PROCESSED_FILES_DIR}" --raw_path "{raw_dirs_arg}"', "Step 4: Extract new documents")
@@ -563,7 +673,25 @@ def pipeline(export_date_arg=None):
     run_step(f'"{sys.executable}" "{__file__}" copy_matching "{PROCESSED_FILES_DIR}" --regex_pattern "{export_date}" --copy_dest_folder "{export_date_dir}"', "Step 7: Copy matching documents")
     run_step(f'pdf-merger "{export_date_dir}"', "Step 8: Merge PDFs")
     validate_merged_pdf(Path(export_date_dir))
-    run_step(f'"{sys.executable}" "{__file__}" check_files_exist "{export_date_dir}"', "Step 9: Validate exported files")
+    if validations_file_path:
+        run_step(f'"{sys.executable}" "{__file__}" check_files_exist "{export_date_dir}" --check_schema_path "{validations_file_path}"', "Step 9: Validate exported files")
+    else:
+        print("Step 9: Skipping file validation (no validation rules configured in profile)")
+
+    # Cleanup temporary files
+    if temp_passwords_file:
+        try:
+            os.unlink(temp_passwords_file)
+            print(f"Cleaned up temporary passwords file: {temp_passwords_file}")
+        except Exception as e:
+            print(f"Warning: Failed to cleanup temporary passwords file: {e}")
+
+    if temp_validations_file:
+        try:
+            os.unlink(temp_validations_file)
+            print(f"Cleaned up temporary validations file: {temp_validations_file}")
+        except Exception as e:
+            print(f"Warning: Failed to cleanup temporary validations file: {e}")
 
     print("All steps completed successfully.")
 
@@ -842,7 +970,17 @@ def process_folder(task: str, processed_path: str, raw_paths=None, excel_output_
 
 def main():
     """Main CLI entry point."""
-    parser = argparse.ArgumentParser(description="Process a folder of PDF files.")
+    parser = argparse.ArgumentParser(
+        description="Process a folder of PDF files.",
+        epilog="Use --profile to select a configuration profile. "
+               "Available profiles are listed in profiles/ directory."
+    )
+    parser.add_argument(
+        "--profile",
+        type=str,
+        help="Configuration profile to use (e.g., 'default', 'personal', 'work'). "
+             "If not specified, uses 'default' profile if available, otherwise legacy .env configuration."
+    )
     parser.add_argument("task", type=str, choices=[
         'extract_new', 'rename_files', 'validate_metadata', 'export_excel',
         'copy_matching', 'export_all_dates', 'check_files_exist', 'pipeline',
@@ -858,6 +996,14 @@ def main():
     parser.add_argument("--check_schema_path", type=str, help="Validation schema path.")
     parser.add_argument("--export_date", type=str, help="Export date in YYYY-MM format (for pipeline).")
     args = parser.parse_args()
+
+    # Initialize configuration (profile or legacy .env)
+    try:
+        initialize_config(args.profile)
+    except ProfileNotFoundError as e:
+        parser.error(str(e))
+    except ProfileError as e:
+        parser.error(f"Failed to load profile: {e}")
 
     if args.task == "pipeline":
         if args.export_date and not re.match(r"^\d{4}-\d{2}$", args.export_date):
@@ -917,9 +1063,24 @@ def main():
             parser.error(f"The export_base_dir '{export_base_dir}' is not a directory.")
 
     check_schema_path = args.check_schema_path
+    temp_check_schema_file = None
     if args.task == "check_files_exist":
         if not check_schema_path:
-            check_schema_path = str(CONFIG_PATHS["validations"])
+            # Get validations from profile
+            from documentor.config import get_validations
+            validations, validations_file = get_validations()
+            if validations and validations.get('rules'):
+                if validations_file:
+                    check_schema_path = validations_file
+                else:
+                    # Create temp file for inline data
+                    temp_check_schema = tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.json')
+                    json.dump(validations['rules'], temp_check_schema, indent=2)
+                    temp_check_schema.close()
+                    check_schema_path = temp_check_schema.name
+                    temp_check_schema_file = temp_check_schema.name
+            else:
+                parser.error("No validation rules found in profile. Use --check_schema_path or configure validations in profile.")
         if not os.path.exists(check_schema_path):
             parser.error(f"The check_schema_path '{check_schema_path}' does not exist.")
 
@@ -934,6 +1095,13 @@ def main():
         run_merge=args.run_merge if hasattr(args, 'run_merge') else False,
         check_schema_path=check_schema_path if args.task == "check_files_exist" else args.check_schema_path
     )
+
+    # Cleanup temp schema file if created
+    if temp_check_schema_file:
+        try:
+            os.unlink(temp_check_schema_file)
+        except Exception:
+            pass
 
 
 if __name__ == "__main__":
