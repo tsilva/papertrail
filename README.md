@@ -120,6 +120,76 @@ To automatically download PDF attachments from Gmail:
 
 </details>
 
+### Configuration Profiles (Recommended)
+
+**New in v0.2**: Profiles simplify configuration management with YAML files. Use profiles to manage multiple environments (personal, work, testing) with a single file per environment.
+
+**Quick Start:**
+
+```bash
+# 1. Create a profile from template
+cp profiles/default.yaml.example profiles/default.yaml
+
+# 2. Edit with your settings
+vim profiles/default.yaml
+
+# 3. Run with profile
+documentor --profile default extract_new /path/to/processed
+```
+
+**Example Profile** (`profiles/default.yaml`):
+
+```yaml
+profile:
+  name: "default"
+  description: "Default configuration"
+
+paths:
+  raw: ["/path/to/raw/documents"]
+  processed: "/path/to/processed"
+  export: "/path/to/export"
+
+openrouter:
+  model_id: "google/gemini-2.5-flash"
+  api_key: "${OPENROUTER_API_KEY}"  # References .env for security
+  base_url: "https://openrouter.ai/api/v1"
+
+document_types:
+  predefined: null  # Dynamic loading from processed metadata
+
+gmail:
+  enabled: true
+  credentials_file: "../config/gmail_credentials.json"
+  token_file: "../config/gmail_token.json"
+  settings:
+    attachment_mime_types: ["application/pdf"]
+    max_results_per_query: 500
+```
+
+**Using Profiles:**
+
+```bash
+# Auto-detect (uses default.yaml if available, otherwise .env)
+documentor extract_new /path/to/processed
+
+# Explicit profile selection
+documentor --profile personal pipeline
+documentor --profile work export_excel /path/to/processed --excel_output_path output.xlsx
+```
+
+**Multiple Environments:**
+
+```
+profiles/
+├── default.yaml        # Personal documents
+├── work.yaml          # Work documents
+└── test.yaml          # Testing
+```
+
+See [profiles/README.md](profiles/README.md) for detailed documentation.
+
+**Note:** The legacy `.env` configuration still works for backward compatibility. Profiles are optional but recommended for easier multi-environment management.
+
 ## Usage
 
 ### Basic Workflow

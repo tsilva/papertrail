@@ -1,0 +1,6 @@
+# Ignore all YAML profile files (contain local paths and potentially sensitive info)
+*.yaml
+
+# Allow example templates
+!*.example
+!README.md

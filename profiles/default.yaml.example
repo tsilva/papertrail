@@ -1,0 +1,85 @@
+# Default Profile Configuration Template
+# Copy this file to default.yaml and customize with your settings
+
+profile:
+  name: "default"
+  description: "Default configuration for Documentor"
+
+# Directory paths for document processing
+paths:
+  raw:
+    # List of directories to scan for new documents
+    # Multiple paths can be specified (e.g., Downloads, Takeout, etc.)
+    - "/path/to/raw/documents"
+    - "/path/to/downloads"
+  processed: "/path/to/processed/documents"
+  export: "/path/to/export/documents"
+
+# OpenRouter API configuration
+openrouter:
+  model_id: "google/gemini-2.5-flash"  # or "openai/gpt-4.1"
+  # Use ${VAR} syntax to reference environment variables for security
+  api_key: "${OPENROUTER_API_KEY}"
+  base_url: "https://openrouter.ai/api/v1"
+
+# Document type configuration
+document_types:
+  # Set to null for dynamic loading from processed metadata (recommended)
+  predefined: null
+  # Inline fallback list (recommended - no external files needed)
+  fallback_list:
+    - "invoice"
+    - "receipt"
+    - "statement"
+    - "contract"
+    - "notification"
+    - "unknown"
+
+# Issuing party configuration
+issuing_parties:
+  # Set to null for dynamic loading from processed metadata (recommended)
+  predefined: null
+  # Inline fallback list (optional)
+  fallback_list:
+    - "Amazon"
+    - "Anthropic"
+    - "Google"
+
+# Gmail integration (optional)
+gmail:
+  enabled: true
+  # Credentials default to ../.credentials/ when null (gitignored)
+  credentials_file: null  # Defaults to ../.credentials/gmail_credentials.json
+  token_file: null  # Defaults to ../.credentials/gmail_token.json
+  # Or specify custom path: "/custom/path/gmail_credentials.json"
+  settings:
+    attachment_mime_types: ["application/pdf"]
+    label_filter: null  # e.g., "Bills" to filter by label
+    max_results_per_query: 500
+    skip_already_downloaded: true
+
+# Passwords for ZIP extraction (inline - recommended)
+passwords:
+  passwords:
+    - "password1"
+    - "password2"
+  # Or use external file (legacy)
+  # passwords_file: "../config/passwords.txt"
+
+# File validation rules (inline - recommended)
+validations:
+  rules:
+    - document_type: "invoice"
+      issuing_party: "Amazon"
+    - document_type: "receipt"
+      service_name: "AWS"
+  # Or use external file (legacy)
+  # validations_file: "../config/file_check_validations.json"
+
+# Pipeline task configuration
+pipeline:
+  tools_required: ["mbox-extractor", "archive-extractor", "pdf-merger"]
+  default_export_date: "last_month"
+
+# Task-specific defaults (optional)
+task_defaults: {}

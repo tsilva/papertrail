@@ -16,6 +16,7 @@ dependencies = [
     "PyMuPDF",
     "pandas",
     "pydantic",
+    "pyyaml>=6.0",
     "openpyxl",
     "pillow",
     "google-api-python-client",

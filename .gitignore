@@ -179,14 +179,12 @@ _helpers.md
 duplicates_report.txt
 migration_dry_run*.txt
 
-# Local config files (contain secrets/passwords)
-# Note: .example files in config/ are tracked for reference
+# Profile configuration files (contain local paths)
+# Note: .example files in profiles/ are tracked for reference
+profiles/*.yaml
+
+.credentials/*
+
+# Legacy config files (deprecated - use profiles instead)
 config/passwords.txt
 config/file_check_validations.json
-config/document_types.json
-
-# Gmail API config files (OAuth credentials and tokens)
-config/gmail_credentials.json
-config/gmail_token.json
-config/gmail_settings.json
-gmail_processed_messages.json
