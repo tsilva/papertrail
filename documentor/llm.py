@@ -11,6 +11,15 @@ if TYPE_CHECKING:
     from documentor.mappings import MappingsManager
 
 
+def _extract_json_from_response(content: str) -> str:
+    """Extract JSON from LLM response, handling markdown code blocks."""
+    if "```json" in content:
+        return content.split("```json")[1].split("```")[0].strip()
+    if "```" in content:
+        return content.split("```")[1].split("```")[0].strip()
+    return content
+
+
 def get_tools_raw_extraction() -> list[dict]:
     """
     Get the tool definition for raw metadata extraction.
@@ -151,16 +160,12 @@ Respond in JSON format:
         content = response.choices[0].message.content
 
         if not content:
-            print(f"DEBUG: Empty response from normalization LLM")
+            print("DEBUG: Empty response from normalization LLM")
             print(f"DEBUG: Full response: {response}")
             return doc_type or "$UNKNOWN$", issuing_party or "$UNKNOWN$"
 
         # Extract JSON from the response (handle markdown code blocks)
-        if "```json" in content:
-            content = content.split("```json")[1].split("```")[0].strip()
-        elif "```" in content:
-            content = content.split("```")[1].split("```")[0].strip()
-
+        content = _extract_json_from_response(content)
         result = json.loads(content)
         llm_doc_type = result.get("document_type", "$UNKNOWN$")
         llm_issuing_party = result.get("issuing_party", "$UNKNOWN$")
