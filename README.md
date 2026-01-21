@@ -218,6 +218,9 @@ documentor export_excel /path/to/processed --excel_output_path invoices_2025.xls
 | `check_files_exist` | Validate against schema | `documentor check_files_exist /processed --check_schema_path schema.json` |
 | `pipeline` | Full end-to-end workflow | `documentor pipeline /processed --export_date 2025-01` |
 | `gmail_download` | Download Gmail attachments | `documentor gmail_download /processed` |
+| `bootstrap_mappings` | Populate mappings from existing metadata | `documentor bootstrap_mappings /processed` |
+| `review_mappings` | Interactive review of auto-added mappings | `documentor review_mappings /processed` |
+| `add_canonical` | Add a new canonical value | `documentor add_canonical /processed --field issuing_party --canonical "new-vendor"` |
 
 ### Debug Tools
 
@@ -296,6 +299,52 @@ YYYY-MM-DD - document-type - issuing-party - [service] - [amount currency] - has
 
 All components are lowercase, sanitized, and safe for all filesystems.
 
+### Two-Tier Normalization System
+
+Documentor uses a mapping persistence system to ensure deterministic normalization without repeated LLM calls:
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                      Raw Value Extraction                       │
+│                   "Anthropic, PBC" from PDF                     │
+└────────────────────────────┬────────────────────────────────────┘
+                             │
+                             ▼
+┌─────────────────────────────────────────────────────────────────┐
+│  TIER 1: Mappings Lookup (config/mappings.yaml)                 │
+│  ├── confirmed: { "Anthropic, PBC": "anthropic" } ← Found!      │
+│  └── Return "anthropic" immediately (no LLM call)               │
+└─────────────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────────────┐
+│  TIER 2: LLM Fallback (only if not in mappings)                 │
+│  ├── Ask LLM: "New Company LLC" → "new-company"                 │
+│  └── Save to mappings.yaml as 'auto' for future reuse           │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+**Benefits:**
+- Known values normalize instantly without API calls
+- New values are learned and remembered
+- Review auto-added mappings to ensure accuracy
+
+**Mappings file structure** (`config/mappings.yaml`):
+- `confirmed`: User-validated mappings (trusted)
+- `auto`: LLM-generated mappings (pending review)
+- `canonicals`: Master list of valid canonical values
+
+**Workflow:**
+```bash
+# 1. Bootstrap from existing processed documents
+documentor bootstrap_mappings /path/to/processed
+
+# 2. Review auto-added mappings interactively
+documentor review_mappings /path/to/processed
+
+# 3. Add new canonical values as needed
+documentor add_canonical /path/to/processed --field issuing_party --canonical "new-vendor"
+```
+
 ## Data Models
 
 Documentor uses Pydantic models for type-safe metadata handling:
@@ -347,6 +396,7 @@ documentor/
 │   ├── hashing.py                   # Two-tier hashing system
 │   ├── llm.py                       # LLM prompts and tools
 │   ├── logging_utils.py             # Failure logging
+│   ├── mappings.py                  # Two-tier normalization mappings
 │   ├── metadata.py                  # Metadata operations
 │   ├── models.py                    # Pydantic models
 │   └── pdf.py                       # PDF rendering utilities
@@ -356,6 +406,7 @@ documentor/
 │   ├── update_hashes.py             # Batch update hashes
 │   └── migrate_duplicates.py        # Handle duplicate files
 ├── config/                          # Configuration files (gitignored)
+│   ├── mappings.yaml                # Raw → canonical normalization mappings
 │   ├── passwords.txt.example        # ZIP extraction passwords
 │   ├── gmail_credentials.json       # OAuth2 credentials
 │   ├── gmail_settings.json.example  # Gmail download settings

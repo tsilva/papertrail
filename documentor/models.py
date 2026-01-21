@@ -12,6 +12,8 @@ from documentor.enums import (
     load_document_types,
     load_issuing_parties,
     create_dynamic_enum,
+    get_document_types,
+    get_issuing_parties,
 )
 
 
@@ -24,22 +26,31 @@ def _is_empty_value(value) -> bool:
     return False
 
 
-def _validate_enum_field(value, enum_prefix: str, valid_values: list[str]) -> str:
-    """Validate and normalize an enum field value."""
+def _validate_enum_field(value, enum_prefix: str, get_valid_values) -> str:
+    """
+    Validate and normalize an enum field value.
+
+    Args:
+        value: Value to validate
+        enum_prefix: Enum class prefix (e.g., "DocumentType")
+        get_valid_values: Function that returns list of valid values (lazy getter)
+    """
     if _is_empty_value(value):
         return "$UNKNOWN$"
     if isinstance(value, str):
         value = clean_enum_string(value, enum_prefix)
+        valid_values = get_valid_values()
         if value not in valid_values:
             return "$UNKNOWN$"
     return value
 
 
-# Load enum values at module level
+# Load enum values at module level for initial type annotations
+# These provide fallback values before profile is set
 DOCUMENT_TYPES = load_document_types()
 ISSUING_PARTIES = load_issuing_parties()
 
-# Create dynamic enums
+# Create dynamic enums for Pydantic type annotations
 DocumentType = create_dynamic_enum('DocumentType', DOCUMENT_TYPES)
 IssuingParty = create_dynamic_enum('IssuingParty', ISSUING_PARTIES)
 
@@ -190,12 +201,12 @@ class DocumentMetadata(DocumentMetadataInput):
     @field_validator('issuing_party', mode='before')
     @classmethod
     def validate_issuing_party(cls, value):
-        return _validate_enum_field(value, "IssuingParty", ISSUING_PARTIES)
+        return _validate_enum_field(value, "IssuingParty", get_issuing_parties)
 
     @field_validator('document_type', mode='before')
     @classmethod
     def validate_document_type(cls, value):
-        return _validate_enum_field(value, "DocumentType", DOCUMENT_TYPES)
+        return _validate_enum_field(value, "DocumentType", get_document_types)
 
     @field_validator('total_amount', mode='before')
     @classmethod

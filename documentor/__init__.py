@@ -4,7 +4,6 @@ from documentor.config import (
     get_repo_root,
     get_config_paths,
     load_env,
-    load_config,
     get_openai_client,
 )
 from documentor.hashing import hash_file_fast, hash_file_content
@@ -15,7 +14,6 @@ __all__ = [
     "get_repo_root",
     "get_config_paths",
     "load_env",
-    "load_config",
     "get_openai_client",
     # Hashing
     "hash_file_fast",
