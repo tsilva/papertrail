@@ -353,11 +353,11 @@ def validate_merged_pdf(folder_path: Path) -> bool:
 def export_metadata_to_excel(processed_path: Path, excel_output_path: str):
     """Export metadata to an Excel file."""
     from enum import Enum
-    from documentor.metadata import iter_metadata_files
+    from documentor.metadata import iter_json_files
 
     metadata_list = []
 
-    for metadata_path, metadata in iter_metadata_files(processed_path, show_progress=True, progress_desc="Collecting metadata"):
+    for metadata_path, metadata in iter_json_files(processed_path, show_progress=True, progress_desc="Collecting metadata", validate=True):
         metadata_dict = metadata.model_dump()
 
         metadata_dict.pop("reasoning", None)

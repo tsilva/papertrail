@@ -40,47 +40,14 @@ def load_json_data(json_path: Path) -> dict:
         return json.load(f)
 
 
-def iter_metadata_files(
-    directory: Path,
-    show_progress: bool = False,
-    progress_desc: str = "Processing metadata"
-) -> Iterator[tuple[Path, DocumentMetadata]]:
-    """
-    Iterate over all metadata JSON files in a directory.
-
-    Yields tuples of (path, metadata) for each valid metadata file.
-    Invalid files are silently skipped.
-
-    Args:
-        directory: Directory to scan for JSON files
-        show_progress: Whether to show a progress bar
-        progress_desc: Description for the progress bar
-
-    Yields:
-        Tuples of (json_path, DocumentMetadata)
-    """
-    json_files = list(directory.rglob("*.json"))
-
-    if show_progress:
-        from tqdm import tqdm
-        json_files = tqdm(json_files, desc=progress_desc)
-
-    for json_path in json_files:
-        try:
-            metadata = load_metadata_file(json_path)
-            yield json_path, metadata
-        except Exception:
-            # Skip invalid files
-            continue
-
-
 def iter_json_files(
     directory: Path,
     show_progress: bool = False,
-    progress_desc: str = "Processing files"
-) -> Iterator[tuple[Path, dict]]:
+    progress_desc: str = "Processing files",
+    validate: bool = False
+) -> Iterator[tuple[Path, DocumentMetadata | dict]]:
     """
-    Iterate over all JSON files in a directory, yielding raw data.
+    Iterate over all JSON files in a directory.
 
     Yields tuples of (path, data) for each valid JSON file.
     Invalid files are silently skipped.
@@ -89,9 +56,10 @@ def iter_json_files(
         directory: Directory to scan for JSON files
         show_progress: Whether to show a progress bar
         progress_desc: Description for the progress bar
+        validate: If True, yield (path, DocumentMetadata). If False, yield (path, dict).
 
     Yields:
-        Tuples of (json_path, dict)
+        Tuples of (json_path, DocumentMetadata | dict)
     """
     json_files = list(directory.rglob("*.json"))
 
@@ -102,7 +70,10 @@ def iter_json_files(
     for json_path in json_files:
         try:
             data = load_json_data(json_path)
-            yield json_path, data
+            if validate:
+                yield json_path, DocumentMetadata.model_validate(data)
+            else:
+                yield json_path, data
         except Exception:
             continue
 

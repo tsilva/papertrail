@@ -17,7 +17,7 @@ from tqdm import tqdm
 from documentor.config import get_current_profile
 from documentor.hashing import hash_file_fast, hash_file_content
 from documentor.logging_utils import setup_failure_logger
-from documentor.metadata import build_hash_index, get_unique_dates, iter_metadata_files
+from documentor.metadata import build_hash_index, get_unique_dates, iter_json_files
 from documentor.models import DocumentMetadata
 from documentor.pdf import find_pdf_files
 
@@ -95,7 +95,7 @@ def task_rename_files(
 
     valid_entries = []
 
-    for metadata_path, metadata in iter_metadata_files(processed_path, show_progress=True, progress_desc="Validating metadata"):
+    for metadata_path, metadata in iter_json_files(processed_path, show_progress=True, progress_desc="Validating metadata", validate=True):
         pdf_path = metadata_path.with_suffix(".pdf")
         if not pdf_path.exists():
             print(f"Skipping {metadata_path.name}: PDF file not found")
