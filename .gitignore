@@ -189,4 +189,7 @@ profiles/*.yaml
 config/passwords.txt
 config/file_check_validations.json
 
+# Mappings file (contains personal vendor names)
+config/mappings.yaml
+
 .claude/settings.local.json
