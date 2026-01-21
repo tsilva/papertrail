@@ -400,19 +400,20 @@ def export_metadata_to_excel(processed_path: Path, excel_output_path: str):
             worksheet = writer.sheets['Sheet1']
             worksheet.freeze_panes = 'A2'
 
+            from openpyxl.utils import get_column_letter
             for col in ordered_cols:
                 if col in df.columns:
                     col_idx = df.columns.get_loc(col) + 1
-                    max_len = max(
-                        [len(str(val)) if val is not None else 0 for val in df[col].values] + [len(col)]
-                    )
-                    max_len = min(max_len, 100)
-                    worksheet.column_dimensions[chr(64 + col_idx)].width = max_len + 2
+                    col_letter = get_column_letter(col_idx)
+                    values_lens = [len(str(val)) for val in df[col].values if val is not None]
+                    max_len = max(values_lens + [len(col)])
+                    worksheet.column_dimensions[col_letter].width = min(max_len + 2, 102)
 
-            for col in ["year", "month", "filename_length"]:
+            hidden_cols = ["year", "month", "filename_length"]
+            for col in hidden_cols:
                 if col in df.columns:
-                    col_idx = df.columns.get_loc(col) + 1
-                    worksheet.column_dimensions[chr(64 + col_idx)].hidden = True
+                    col_letter = get_column_letter(df.columns.get_loc(col) + 1)
+                    worksheet.column_dimensions[col_letter].hidden = True
 
         print(f"\nExported {len(df)} entries to {excel_output_path}")
     else:
@@ -522,24 +523,22 @@ def check_files_exist(target_folder: Path, validation_schema_path: Path):
         except Exception as e:
             print(f"Skipping {json_path.name}: {e}")
 
-    all_passed = True
     check_results = []
     for idx, check in enumerate(checks):
-        found = False
-        for json_path, data in file_data:
-            if all(str(data.get(k, "")).strip() == str(v).strip() for k, v in check.items()):
-                found = True
-                break
+        found = any(
+            all(str(data.get(k, "")).strip() == str(v).strip() for k, v in check.items())
+            for _, data in file_data
+        )
         check_results.append((found, idx, check))
-        if not found:
-            all_passed = False
 
-    for found, idx, check in sorted(check_results, key=lambda x: (not x[0], x[1])):
-        if found:
-            print(f"[OK] {check} -- FOUND")
-    for found, idx, check in sorted(check_results, key=lambda x: (not x[0], x[1])):
-        if not found:
-            print(f"[FAIL] {check} -- NOT FOUND")
+    all_passed = all(found for found, _, _ in check_results)
+
+    # Sort: found items first, then by index
+    sorted_results = sorted(check_results, key=lambda x: (not x[0], x[1]))
+    for found, idx, check in sorted_results:
+        status = "[OK]" if found else "[FAIL]"
+        result = "FOUND" if found else "NOT FOUND"
+        print(f"{status} {check} -- {result}")
 
     if all_passed:
         print("\nAll file existence checks passed.")
