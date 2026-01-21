@@ -52,6 +52,7 @@ from documentor.llm import (
     TOOLS_RAW_EXTRACTION,
     normalize_metadata,
 )
+from documentor.mappings import MappingsManager
 from documentor.pdf import render_pdf_to_images, find_pdf_files, get_page_count
 from documentor.metadata import (
     build_hash_index,
@@ -71,6 +72,9 @@ openai_client = None
 # Global failure logger
 failure_logger = None
 
+# Global mappings manager
+mappings_manager = None
+
 
 def initialize_config(profile_name: Optional[str] = None) -> None:
     """
@@ -83,7 +87,7 @@ def initialize_config(profile_name: Optional[str] = None) -> None:
         ProfileNotFoundError: If specified profile doesn't exist
         ProfileError: If profile loading fails
     """
-    global CONFIG_PATHS, OPENROUTER_MODEL_ID, OPENROUTER_API_KEY, OPENROUTER_BASE_URL, openai_client
+    global CONFIG_PATHS, OPENROUTER_MODEL_ID, OPENROUTER_API_KEY, OPENROUTER_BASE_URL, openai_client, mappings_manager
 
     # IMPORTANT: Load .env first for environment variable expansion in profiles
     load_env(required=False)
@@ -126,6 +130,11 @@ def initialize_config(profile_name: Optional[str] = None) -> None:
     OPENROUTER_BASE_URL = os.getenv("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1")
 
     openai_client = get_openai_client(OPENROUTER_API_KEY, OPENROUTER_BASE_URL)
+
+    # Initialize mappings manager
+    config_dir = Path(__file__).parent / "config"
+    mappings_path = config_dir / "mappings.yaml"
+    mappings_manager = MappingsManager(mappings_path)
 
 # ------------------- UTILS -------------------
 
@@ -200,9 +209,9 @@ def classify_pdf_document(pdf_path: Path, file_hash: str) -> DocumentMetadata:
         args = tool_calls[0].function.arguments
         raw_metadata = DocumentMetadataRaw.model_validate_json(args)
 
-        # PHASE 2: Normalization
+        # PHASE 2: Normalization (with two-tier mapping lookup)
         normalized_doc_type, normalized_issuing_party = normalize_metadata(
-            raw_metadata, client, OPENROUTER_MODEL_ID
+            raw_metadata, client, OPENROUTER_MODEL_ID, mappings=mappings_manager
         )
 
         # Create final metadata with both raw and normalized values
@@ -883,6 +892,200 @@ def _task__check_files_exist(processed_path, check_schema_path):
     print("File existence check complete.")
 
 
+def _task__bootstrap_mappings(processed_path: Path):
+    """Populate mappings from existing metadata JSON files.
+
+    Scans all metadata files and extracts raw → canonical pairs,
+    adding them as 'confirmed' mappings (since they're already in use).
+    """
+    global mappings_manager
+
+    if mappings_manager is None:
+        print("Error: Mappings manager not initialized.")
+        return
+
+    json_files = list(processed_path.rglob("*.json"))
+    if not json_files:
+        print(f"No metadata files found in {processed_path}")
+        return
+
+    doc_type_count = 0
+    issuer_count = 0
+    skipped = 0
+
+    for metadata_path in tqdm(json_files, desc="Scanning metadata"):
+        try:
+            with open(metadata_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+
+            # Get raw and normalized values
+            doc_type_raw = data.get("document_type_raw")
+            doc_type = data.get("document_type")
+            issuing_party_raw = data.get("issuing_party_raw")
+            issuing_party = data.get("issuing_party")
+
+            # Add document type mapping if we have both raw and normalized
+            if doc_type_raw and doc_type and doc_type != "$UNKNOWN$":
+                existing = mappings_manager.get_mapping(doc_type_raw, "document_types")
+                if existing is None:
+                    mappings_manager.add_mapping(
+                        doc_type_raw, doc_type, "document_types", confirmed=True, save=False
+                    )
+                    doc_type_count += 1
+
+            # Add issuing party mapping if we have both raw and normalized
+            if issuing_party_raw and issuing_party and issuing_party != "$UNKNOWN$":
+                existing = mappings_manager.get_mapping(issuing_party_raw, "issuing_parties")
+                if existing is None:
+                    mappings_manager.add_mapping(
+                        issuing_party_raw, issuing_party, "issuing_parties", confirmed=True, save=False
+                    )
+                    issuer_count += 1
+
+        except Exception as e:
+            skipped += 1
+            if skipped <= 5:
+                print(f"Skipping {metadata_path.name}: {e}")
+
+    # Save all at once
+    mappings_manager._save()
+
+    print(f"\nBootstrap complete:")
+    print(f"  Document type mappings added: {doc_type_count}")
+    print(f"  Issuing party mappings added: {issuer_count}")
+    print(f"  Files skipped: {skipped}")
+    print(f"\nMappings saved to: {mappings_manager.path}")
+
+    # Show stats
+    stats = mappings_manager.get_stats()
+    print(f"\nCurrent mappings stats:")
+    for field, counts in stats.items():
+        print(f"  {field}: {counts['confirmed']} confirmed, {counts['auto']} auto, {counts['canonicals']} canonicals")
+
+
+def _task__review_mappings():
+    """Interactive review of auto-added mappings."""
+    global mappings_manager
+
+    if mappings_manager is None:
+        print("Error: Mappings manager not initialized.")
+        return
+
+    # Get auto mappings for both fields
+    doc_auto = mappings_manager.get_auto_mappings("document_types")
+    issuer_auto = mappings_manager.get_auto_mappings("issuing_parties")
+
+    total_pending = len(doc_auto) + len(issuer_auto)
+
+    if total_pending == 0:
+        print("No auto-added mappings pending review.")
+        stats = mappings_manager.get_stats()
+        print(f"\nCurrent mappings stats:")
+        for field, counts in stats.items():
+            print(f"  {field}: {counts['confirmed']} confirmed, {counts['auto']} auto")
+        return
+
+    print("=" * 60)
+    print("AUTO-ADDED MAPPINGS AWAITING REVIEW")
+    print("=" * 60)
+    print()
+
+    if doc_auto:
+        print(f"Document Types ({len(doc_auto)} pending):")
+        for i, (raw, canonical) in enumerate(doc_auto.items(), 1):
+            print(f"  {i}. \"{raw}\" -> \"{canonical}\"")
+        print()
+
+    if issuer_auto:
+        print(f"Issuing Parties ({len(issuer_auto)} pending):")
+        for i, (raw, canonical) in enumerate(issuer_auto.items(), 1):
+            print(f"  {i}. \"{raw}\" -> \"{canonical}\"")
+        print()
+
+    print("Options:")
+    print("  [a] Confirm ALL mappings")
+    print("  [r] Review one-by-one")
+    print("  [q] Quit without changes")
+    print()
+
+    choice = input("Select option: ").strip().lower()
+
+    if choice == 'a':
+        # Confirm all
+        doc_confirmed = mappings_manager.confirm_all("document_types", save=False)
+        issuer_confirmed = mappings_manager.confirm_all("issuing_parties", save=True)
+        print(f"\nConfirmed {doc_confirmed} document type mappings and {issuer_confirmed} issuer mappings.")
+
+    elif choice == 'r':
+        # Review one-by-one
+        _review_field_mappings("document_types", doc_auto)
+        _review_field_mappings("issuing_parties", issuer_auto)
+        print("\nReview complete.")
+
+    else:
+        print("No changes made.")
+
+
+def _review_field_mappings(field: str, mappings_dict: dict):
+    """Helper to review mappings for a single field."""
+    global mappings_manager
+
+    if not mappings_dict:
+        return
+
+    field_label = "Document Type" if field == "document_types" else "Issuing Party"
+    print(f"\n--- Reviewing {field_label} Mappings ---")
+
+    for raw, canonical in list(mappings_dict.items()):
+        print(f"\n\"{raw}\" -> \"{canonical}\"")
+        print("  [c] Confirm  [e] Edit canonical  [r] Reject  [s] Skip")
+        action = input("  Action: ").strip().lower()
+
+        if action == 'c':
+            mappings_manager.confirm_mapping(raw, field, save=True)
+            print(f"  Confirmed.")
+        elif action == 'e':
+            new_canonical = input("  Enter new canonical value: ").strip()
+            if new_canonical:
+                mappings_manager.update_mapping(raw, new_canonical, field, confirm=True, save=True)
+                print(f"  Updated to \"{new_canonical}\" and confirmed.")
+            else:
+                print("  No change (empty input).")
+        elif action == 'r':
+            mappings_manager.reject_mapping(raw, field, save=True)
+            print(f"  Rejected (removed).")
+        else:
+            print(f"  Skipped.")
+
+
+def _task__add_canonical(field: str, canonical: str):
+    """Add a new canonical value to the mappings."""
+    global mappings_manager
+
+    if mappings_manager is None:
+        print("Error: Mappings manager not initialized.")
+        return
+
+    # Normalize field name
+    field_map = {
+        "document_type": "document_types",
+        "document_types": "document_types",
+        "issuing_party": "issuing_parties",
+        "issuing_parties": "issuing_parties",
+    }
+
+    normalized_field = field_map.get(field.lower())
+    if not normalized_field:
+        print(f"Error: Unknown field '{field}'. Use 'document_type' or 'issuing_party'.")
+        return
+
+    if mappings_manager.add_canonical(normalized_field, canonical):
+        print(f"Added canonical '{canonical}' to {normalized_field}.")
+        print(f"Current canonicals: {', '.join(mappings_manager.get_canonicals(normalized_field))}")
+    else:
+        print(f"Canonical '{canonical}' already exists in {normalized_field}.")
+
+
 def _task__gmail_download():
     """Download email attachments from Gmail to RAW_FILES_DIR."""
     from datetime import timedelta
@@ -984,7 +1187,7 @@ def main():
     parser.add_argument("task", type=str, choices=[
         'extract_new', 'rename_files', 'validate_metadata', 'export_excel',
         'copy_matching', 'export_all_dates', 'check_files_exist', 'pipeline',
-        'gmail_download'
+        'gmail_download', 'bootstrap_mappings', 'review_mappings', 'add_canonical'
     ], help="Task to perform.")
     parser.add_argument("processed_path", type=str, nargs='?', help="Path to output folder.")
     parser.add_argument("--raw_path", type=str, help="Path to documents folder(s). Use ';' to separate multiple paths.")
@@ -995,6 +1198,8 @@ def main():
     parser.add_argument("--run_merge", action="store_true", help="Run PDF merge for changed directories.")
     parser.add_argument("--check_schema_path", type=str, help="Validation schema path.")
     parser.add_argument("--export_date", type=str, help="Export date in YYYY-MM format (for pipeline).")
+    parser.add_argument("--field", type=str, help="Field name for add_canonical (document_type or issuing_party).")
+    parser.add_argument("--canonical", type=str, help="Canonical value to add.")
     args = parser.parse_args()
 
     # Initialize configuration (profile or legacy .env)
@@ -1013,6 +1218,24 @@ def main():
 
     if args.task == "gmail_download":
         _task__gmail_download()
+        return
+
+    if args.task == "review_mappings":
+        _task__review_mappings()
+        return
+
+    if args.task == "add_canonical":
+        if not args.field or not args.canonical:
+            parser.error("add_canonical requires --field and --canonical arguments.")
+        _task__add_canonical(args.field, args.canonical)
+        return
+
+    if args.task == "bootstrap_mappings":
+        if not args.processed_path:
+            parser.error("bootstrap_mappings requires the processed_path argument.")
+        if not os.path.exists(args.processed_path):
+            parser.error(f"The processed_path '{args.processed_path}' does not exist.")
+        _task__bootstrap_mappings(Path(args.processed_path))
         return
 
     if not args.processed_path:

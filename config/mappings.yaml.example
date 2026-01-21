@@ -1,0 +1,79 @@
+# Mappings file for document type and issuing party normalization
+#
+# This file stores raw → canonical mappings to ensure deterministic normalization.
+# Once a raw value has been mapped, it will always map to the same canonical.
+#
+# Structure:
+#   - confirmed: User-validated mappings (trusted)
+#   - auto: Auto-added by LLM (pending review via 'review_mappings' command)
+#   - canonicals: Master list of valid canonical values
+#
+# Copy this file to config/mappings.yaml and customize as needed.
+# The actual mappings.yaml is gitignored as it may contain personal vendor names.
+
+# Document type mappings (raw → canonical)
+document_types:
+  confirmed:
+    # User-validated mappings (trusted, won't be re-queried)
+    "Invoice": "invoice"
+    "INVOICE": "invoice"
+    "Factura": "invoice"
+    "Receipt": "receipt"
+    "RECEIPT": "receipt"
+    "Recibo": "receipt"
+    "Statement": "statement"
+    "Bank Statement": "statement"
+    "Contract": "contract"
+
+  auto:
+    # Auto-added by LLM (pending review)
+    # Use 'documentor review_mappings' to approve/edit these
+    # Example:
+    # "Tax Invoice": "invoice"
+
+  canonicals:
+    # Master list of valid canonical values
+    # Add new canonical types here before using them
+    - "invoice"
+    - "receipt"
+    - "statement"
+    - "contract"
+    - "letter"
+    - "report"
+    - "certificate"
+    - "license"
+    - "permit"
+    - "tax-document"
+    - "pay-slip"
+    - "utility-bill"
+    - "$UNKNOWN$"
+
+# Issuing party mappings (raw → canonical)
+issuing_parties:
+  confirmed:
+    # User-validated mappings
+    # Common variations → canonical name
+    "Anthropic, PBC": "anthropic"
+    "Anthropic Inc": "anthropic"
+    "Anthropic": "anthropic"
+    "Amazon Web Services": "amazon"
+    "Amazon.com": "amazon"
+    "Amazon": "amazon"
+    "Google LLC": "google"
+    "Google Inc": "google"
+    "Google": "google"
+
+  auto:
+    # Auto-added by LLM (pending review)
+    # Example:
+    # "AWS": "amazon"
+
+  canonicals:
+    # Master list of valid canonical issuing parties
+    - "anthropic"
+    - "amazon"
+    - "google"
+    - "microsoft"
+    - "apple"
+    - "openai"
+    - "$UNKNOWN$"
