@@ -185,16 +185,14 @@ class DocumentMetadata(DocumentMetadataInput):
             return "$UNKNOWN$"
 
         # Check for future dates (likely extraction error)
-        if value != "$UNKNOWN$":
-            try:
-                parsed_date = datetime.strptime(value, "%Y-%m-%d").date()
-                if parsed_date > datetime.now().date():
-                    raise ValueError(f"issue_date '{value}' is in the future - likely extraction error")
-            except ValueError as e:
-                if "future" in str(e):
-                    raise  # Re-raise our future date error
-                # If parsing fails, let it through (may be non-standard format)
-                pass
+        try:
+            parsed_date = datetime.strptime(value, "%Y-%m-%d").date()
+            if parsed_date > datetime.now().date():
+                raise ValueError(f"issue_date '{value}' is in the future - likely extraction error")
+        except ValueError as e:
+            if "future" in str(e):
+                raise
+            # If parsing fails, let it through (may be non-standard format)
 
         return value
 

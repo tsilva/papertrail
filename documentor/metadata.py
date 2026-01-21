@@ -1,10 +1,9 @@
 """Metadata file operations and utilities."""
 
 import json
-import os
 import re
 from pathlib import Path
-from typing import Iterator, Optional
+from typing import Iterator
 
 from documentor.models import DocumentMetadata
 
@@ -119,23 +118,18 @@ def build_hash_index(directory: Path) -> dict[str, Path]:
         Dictionary mapping hash -> PDF path
     """
     hash_index = {}
-    for root, _, files in os.walk(directory):
-        for file in files:
-            if not file.lower().endswith(".json"):
-                continue
-            try:
-                with open(Path(root) / file, "r", encoding="utf-8") as f:
-                    metadata = json.load(f)
-                    # Index by content hash (primary) - support both old and new field names
-                    content_hash = metadata.get('content_hash') or metadata.get('hash')
-                    if content_hash:
-                        hash_index[content_hash] = Path(root) / file.replace(".json", ".pdf")
-                    # Also index by file hash (for quick filtering)
-                    file_hash = metadata.get('file_hash') or metadata.get('_old_hash')
-                    if file_hash:
-                        hash_index[file_hash] = Path(root) / file.replace(".json", ".pdf")
-            except Exception:
-                continue
+
+    for json_path, data in iter_json_files(directory):
+        pdf_path = json_path.with_suffix(".pdf")
+        # Index by content hash (primary) - support both old and new field names
+        content_hash = data.get('content_hash') or data.get('hash')
+        if content_hash:
+            hash_index[content_hash] = pdf_path
+        # Also index by file hash (for quick filtering)
+        file_hash = data.get('file_hash') or data.get('_old_hash')
+        if file_hash:
+            hash_index[file_hash] = pdf_path
+
     return hash_index
 
 
@@ -150,20 +144,14 @@ def get_unique_dates(directory: Path) -> list[str]:
         Sorted list of dates (most recent first)
     """
     dates_set = set()
-    json_files = list(directory.rglob("*.json"))
 
-    for json_file in json_files:
-        try:
-            with open(json_file, "r", encoding="utf-8") as f:
-                data = json.load(f)
-            issue_date = data.get("issue_date", "")
-            if issue_date and issue_date != "$UNKNOWN$":
-                # Extract YYYY-MM portion
-                match = re.match(r"^(\d{4}-\d{2})", issue_date)
-                if match:
-                    dates_set.add(match.group(1))
-        except Exception:
-            continue
+    for _, data in iter_json_files(directory):
+        issue_date = data.get("issue_date", "")
+        if issue_date and issue_date != "$UNKNOWN$":
+            # Extract YYYY-MM portion
+            match = re.match(r"^(\d{4}-\d{2})", issue_date)
+            if match:
+                dates_set.add(match.group(1))
 
     # Sort dates in descending order (most recent first)
     return sorted(dates_set, reverse=True)

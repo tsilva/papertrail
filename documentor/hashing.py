@@ -39,7 +39,6 @@ def hash_file_content(path: Path) -> str:
         First 8 characters of SHA256 digest of rendered page content
     """
     try:
-        doc = fitz.open(str(path))
         page_hashes = []
 
         # Use deterministic rendering settings for consistency
@@ -47,40 +46,26 @@ def hash_file_content(path: Path) -> str:
         zoom = 150 / 72  # 72 is the default DPI
         mat = fitz.Matrix(zoom, zoom)
 
-        # Iterate through all pages and render each as an image
-        for page_num in range(len(doc)):
-            page = doc[page_num]
+        with fitz.open(str(path)) as doc:
+            for page in doc:
+                try:
+                    # Render page as pixmap with deterministic settings
+                    # alpha=False ensures no transparency channel for consistency
+                    pix = page.get_pixmap(matrix=mat, alpha=False, colorspace=fitz.csRGB)
+                    page_hash = hashlib.sha256(pix.samples).hexdigest()
+                    page_hashes.append(page_hash)
+                except Exception:
+                    # Skip pages that fail to render but continue with others
+                    continue
 
-            try:
-                # Render page as pixmap (image) with deterministic settings
-                # alpha=False ensures no transparency channel for consistency
-                pix = page.get_pixmap(matrix=mat, alpha=False, colorspace=fitz.csRGB)
-
-                # Get the raw pixel data
-                img_data = pix.samples
-
-                # Hash the pixel data
-                page_hash = hashlib.sha256(img_data).hexdigest()
-                page_hashes.append(page_hash)
-
-                # Explicitly clean up pixmap to avoid memory leaks
-                pix = None
-
-            except Exception:
-                # Skip pages that fail to render but continue with others
-                continue
-
-        doc.close()
-
-        # Create a digest of all page hashes combined (in order)
-        if page_hashes:
-            combined = "".join(page_hashes)
-            content_digest = hashlib.sha256(combined.encode()).hexdigest()
-            return content_digest[:8]
-        else:
+        if not page_hashes:
             # No pages could be rendered - fall back to file hash
             return hash_file_fast(path)
 
+        # Create a digest of all page hashes combined (in order)
+        combined = "".join(page_hashes)
+        return hashlib.sha256(combined.encode()).hexdigest()[:8]
+
     except Exception:
         # If content-based hashing fails entirely, fall back to file hash
-        return _hash_raw_bytes(path)
+        return hash_file_fast(path)

@@ -27,34 +27,32 @@ def render_pdf_to_images(
     Returns:
         List of base64-encoded JPEG images
     """
-    doc = fitz.open(str(pdf_path))
     images_b64 = []
-    num_pages = min(max_pages, len(doc))
 
-    for i in range(num_pages):
-        page = doc[i]
-        pix = page.get_pixmap()
-        img = Image.open(io.BytesIO(pix.tobytes("jpeg")))
+    with fitz.open(str(pdf_path)) as doc:
+        num_pages = min(max_pages, len(doc))
 
-        if enhance_contrast:
-            enhancer = ImageEnhance.Contrast(img)
-            img = enhancer.enhance(contrast_factor)
+        for i in range(num_pages):
+            page = doc[i]
+            pix = page.get_pixmap()
+            img = Image.open(io.BytesIO(pix.tobytes("jpeg")))
 
-        img_buffer = io.BytesIO()
-        img.save(img_buffer, format="JPEG")
-        img_b64 = base64.b64encode(img_buffer.getvalue()).decode("utf-8")
-        images_b64.append(img_b64)
+            if enhance_contrast:
+                enhancer = ImageEnhance.Contrast(img)
+                img = enhancer.enhance(contrast_factor)
 
-    doc.close()
+            img_buffer = io.BytesIO()
+            img.save(img_buffer, format="JPEG")
+            img_b64 = base64.b64encode(img_buffer.getvalue()).decode("utf-8")
+            images_b64.append(img_b64)
+
     return images_b64
 
 
 def get_page_count(pdf_path: Path) -> int:
     """Return the number of pages in a PDF file."""
-    doc = fitz.open(str(pdf_path))
-    count = len(doc)
-    doc.close()
-    return count
+    with fitz.open(str(pdf_path)) as doc:
+        return len(doc)
 
 
 def find_pdf_files(folder_paths) -> list[Path]:
