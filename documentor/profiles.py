@@ -118,13 +118,6 @@ class PasswordsConfig:
 
 
 @dataclass
-class ValidationRule:
-    """Single validation rule."""
-    pattern: str
-    description: Optional[str] = None
-
-
-@dataclass
 class ValidationsConfig:
     """File validation schema configuration."""
     # Inline validation rules (recommended)
@@ -234,6 +227,14 @@ def resolve_path(path_str: Optional[str], profile_path: Path) -> Optional[Path]:
     return (profile_dir / path).resolve()
 
 
+def _resolve_path_attr(obj: Any, attr: str, profile_path: Path) -> None:
+    """Resolve a path attribute on an object in-place."""
+    value = getattr(obj, attr, None)
+    if value:
+        resolved = resolve_path(value, profile_path)
+        setattr(obj, attr, str(resolved) if resolved else None)
+
+
 def resolve_paths_in_profile(profile: Profile) -> None:
     """
     Resolve all relative paths in a profile to absolute paths.
@@ -246,54 +247,31 @@ def resolve_paths_in_profile(profile: Profile) -> None:
     if profile._profile_path is None:
         return
 
+    pp = profile._profile_path
+
     # Resolve paths.raw (list of paths)
     if profile.paths.raw:
-        profile.paths.raw = [
-            str(resolve_path(p, profile._profile_path))
-            for p in profile.paths.raw
-        ]
+        profile.paths.raw = [str(resolve_path(p, pp)) for p in profile.paths.raw]
 
-    # Resolve paths.processed
-    if profile.paths.processed:
-        resolved = resolve_path(profile.paths.processed, profile._profile_path)
-        profile.paths.processed = str(resolved) if resolved else None
+    # Resolve single path attributes
+    _resolve_path_attr(profile.paths, "processed", pp)
+    _resolve_path_attr(profile.paths, "export", pp)
+    _resolve_path_attr(profile.document_types, "fallback_file", pp)
+    _resolve_path_attr(profile.passwords, "passwords_file", pp)
+    _resolve_path_attr(profile.validations, "validations_file", pp)
 
-    # Resolve paths.export
-    if profile.paths.export:
-        resolved = resolve_path(profile.paths.export, profile._profile_path)
-        profile.paths.export = str(resolved) if resolved else None
-
-    # Resolve document_types.fallback_file
-    if profile.document_types.fallback_file:
-        resolved = resolve_path(profile.document_types.fallback_file, profile._profile_path)
-        profile.document_types.fallback_file = str(resolved) if resolved else None
-
-    # Resolve gmail config files (or set defaults to ../.credentials/ relative to profile)
+    # Resolve gmail config files (or set defaults if enabled)
     if profile.gmail.credentials_file:
-        resolved = resolve_path(profile.gmail.credentials_file, profile._profile_path)
-        profile.gmail.credentials_file = str(resolved) if resolved else None
+        _resolve_path_attr(profile.gmail, "credentials_file", pp)
     elif profile.gmail.enabled:
-        # Default to ../.credentials/gmail_credentials.json (relative to profile)
-        default_path = resolve_path("../.credentials/gmail_credentials.json", profile._profile_path)
+        default_path = resolve_path("../.credentials/gmail_credentials.json", pp)
         profile.gmail.credentials_file = str(default_path) if default_path else None
 
     if profile.gmail.token_file:
-        resolved = resolve_path(profile.gmail.token_file, profile._profile_path)
-        profile.gmail.token_file = str(resolved) if resolved else None
+        _resolve_path_attr(profile.gmail, "token_file", pp)
     elif profile.gmail.enabled:
-        # Default to ../.credentials/gmail_token.json (relative to profile)
-        default_path = resolve_path("../.credentials/gmail_token.json", profile._profile_path)
+        default_path = resolve_path("../.credentials/gmail_token.json", pp)
         profile.gmail.token_file = str(default_path) if default_path else None
-
-    # Resolve passwords file path (if using file, not inline)
-    if profile.passwords.passwords_file:
-        resolved = resolve_path(profile.passwords.passwords_file, profile._profile_path)
-        profile.passwords.passwords_file = str(resolved) if resolved else None
-
-    # Resolve validations file path (if using file, not inline)
-    if profile.validations.validations_file:
-        resolved = resolve_path(profile.validations.validations_file, profile._profile_path)
-        profile.validations.validations_file = str(resolved) if resolved else None
 
 
 # ============================================================================
