@@ -2,7 +2,6 @@
 
 import base64
 import json
-import logging
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional
@@ -15,6 +14,7 @@ from googleapiclient.errors import HttpError
 from tqdm import tqdm
 
 from documentor.config import get_gmail_config_paths, get_current_profile
+from documentor.logging_utils import setup_failure_logger
 
 # Gmail API scope - read-only access to messages
 SCOPES = ["https://www.googleapis.com/auth/gmail.readonly"]
@@ -26,21 +26,6 @@ DEFAULT_SETTINGS = {
     "max_results_per_query": 500,
     "skip_already_downloaded": True,
 }
-
-
-def setup_failure_logger(log_path: Path) -> logging.Logger:
-    """Set up a logger for download failures."""
-    logger = logging.getLogger("gmail_download_failures")
-    logger.setLevel(logging.ERROR)
-
-    # Remove existing handlers
-    logger.handlers.clear()
-
-    handler = logging.FileHandler(log_path, mode="a")
-    handler.setFormatter(logging.Formatter("%(asctime)s - %(message)s"))
-    logger.addHandler(handler)
-
-    return logger
 
 
 class GmailDownloader:
