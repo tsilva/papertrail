@@ -3,9 +3,12 @@
 import json
 import os
 from datetime import datetime
-from typing import Optional
+from typing import Optional, TYPE_CHECKING
 
 from documentor.models import DocumentMetadataRaw, DOCUMENT_TYPES, ISSUING_PARTIES
+
+if TYPE_CHECKING:
+    from documentor.mappings import MappingsManager
 
 
 def get_tools_raw_extraction() -> list[dict]:
@@ -68,21 +71,44 @@ def get_system_prompt_raw_extraction() -> str:
 def normalize_metadata(
     raw_metadata: DocumentMetadataRaw,
     client,
-    model_id: Optional[str] = None
+    model_id: Optional[str] = None,
+    mappings: Optional["MappingsManager"] = None
 ) -> tuple[str, str]:
     """
-    Phase 2: Use LLM to intelligently map raw extracted values to canonical enum values.
+    Phase 2: Normalize raw extracted values to canonical enum values.
+
+    Uses a two-tier approach:
+    1. TIER 1: Check persistent mappings file (instant, no LLM call)
+    2. TIER 2: Fall back to LLM normalization, then save mapping for reuse
 
     Args:
         raw_metadata: Raw metadata from phase 1 extraction
         client: OpenAI client instance
         model_id: Model ID to use (defaults to OPENROUTER_MODEL_ID env var)
+        mappings: Optional MappingsManager for persistent mapping lookup/storage
 
     Returns:
         Tuple of (normalized_document_type, normalized_issuing_party)
     """
     if model_id is None:
         model_id = os.getenv("OPENROUTER_MODEL_ID")
+
+    doc_type = None
+    issuing_party = None
+
+    # TIER 1: Check mappings file first (no LLM call needed)
+    if mappings:
+        doc_type = mappings.get_mapping(raw_metadata.document_type, "document_types")
+        issuing_party = mappings.get_mapping(raw_metadata.issuing_party, "issuing_parties")
+
+        if doc_type and issuing_party:
+            # Both found in mappings - no LLM needed!
+            return doc_type, issuing_party
+
+    # TIER 2: Fall back to LLM for unknown values
+    # Determine which fields need LLM normalization
+    need_doc_type = doc_type is None
+    need_issuing_party = issuing_party is None
 
     normalization_prompt = f"""You are a metadata normalization assistant. Your job is to map extracted document values to their canonical forms.
 
@@ -127,7 +153,7 @@ Respond in JSON format:
         if not content:
             print(f"DEBUG: Empty response from normalization LLM")
             print(f"DEBUG: Full response: {response}")
-            return "$UNKNOWN$", "$UNKNOWN$"
+            return doc_type or "$UNKNOWN$", issuing_party or "$UNKNOWN$"
 
         # Extract JSON from the response (handle markdown code blocks)
         if "```json" in content:
@@ -136,16 +162,33 @@ Respond in JSON format:
             content = content.split("```")[1].split("```")[0].strip()
 
         result = json.loads(content)
-        doc_type = result.get("document_type", "$UNKNOWN$")
-        issuing_party = result.get("issuing_party", "$UNKNOWN$")
+        llm_doc_type = result.get("document_type", "$UNKNOWN$")
+        llm_issuing_party = result.get("issuing_party", "$UNKNOWN$")
 
         # Validate that the returned values are actually in the canonical lists
-        if doc_type not in DOCUMENT_TYPES:
-            print(f"DEBUG: Normalized doc_type '{doc_type}' not in canonical list, using $UNKNOWN$")
-            doc_type = "$UNKNOWN$"
-        if issuing_party not in ISSUING_PARTIES:
-            print(f"DEBUG: Normalized issuing_party '{issuing_party}' not in canonical list, using $UNKNOWN$")
-            issuing_party = "$UNKNOWN$"
+        if llm_doc_type not in DOCUMENT_TYPES:
+            print(f"DEBUG: Normalized doc_type '{llm_doc_type}' not in canonical list, using $UNKNOWN$")
+            llm_doc_type = "$UNKNOWN$"
+        if llm_issuing_party not in ISSUING_PARTIES:
+            print(f"DEBUG: Normalized issuing_party '{llm_issuing_party}' not in canonical list, using $UNKNOWN$")
+            llm_issuing_party = "$UNKNOWN$"
+
+        # Use LLM results for fields that needed normalization
+        if need_doc_type:
+            doc_type = llm_doc_type
+        if need_issuing_party:
+            issuing_party = llm_issuing_party
+
+        # Save successful LLM mappings for reuse (as 'auto' pending review)
+        if mappings:
+            if need_doc_type and raw_metadata.document_type != "$UNKNOWN$":
+                mappings.add_mapping(
+                    raw_metadata.document_type, doc_type, "document_types", confirmed=False
+                )
+            if need_issuing_party and raw_metadata.issuing_party != "$UNKNOWN$":
+                mappings.add_mapping(
+                    raw_metadata.issuing_party, issuing_party, "issuing_parties", confirmed=False
+                )
 
         return doc_type, issuing_party
 
@@ -153,4 +196,4 @@ Respond in JSON format:
         print(f"Normalization failed: {e}, using $UNKNOWN$ for both fields")
         import traceback
         traceback.print_exc()
-        return "$UNKNOWN$", "$UNKNOWN$"
+        return doc_type or "$UNKNOWN$", issuing_party or "$UNKNOWN$"
