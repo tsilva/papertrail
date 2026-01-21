@@ -188,3 +188,5 @@ profiles/*.yaml
 # Legacy config files (deprecated - use profiles instead)
 config/passwords.txt
 config/file_check_validations.json
+
+.claude/settings.local.json
