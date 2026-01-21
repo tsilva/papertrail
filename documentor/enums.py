@@ -124,74 +124,94 @@ def create_dynamic_enum(name: str, values: list[str]) -> Enum:
     return Enum(name, dict([(k, k) for k in values]), type=str)
 
 
-def _load_fallback_document_types() -> list[str]:
-    """Load fallback document types from profile, config file, or use hardcoded defaults."""
+def _load_fallback_values(
+    profile_accessor,
+    config_key: Optional[str],
+    hardcoded_defaults: list[str]
+) -> list[str]:
+    """
+    Generic fallback loader for enum values.
+
+    Args:
+        profile_accessor: Function that takes profile and returns fallback_list or None
+        config_key: Config path key to try (e.g., "document_types"), or None to skip
+        hardcoded_defaults: Default values if all else fails
+
+    Returns:
+        Sorted list of values, always including "$UNKNOWN$"
+    """
     # Check profile first
     profile = get_current_profile()
-    if profile and profile.document_types.fallback_list:
-        types = list(profile.document_types.fallback_list)
-        if "$UNKNOWN$" not in types:
-            types.append("$UNKNOWN$")
-        return sorted(types)
+    if profile:
+        fallback_list = profile_accessor(profile)
+        if fallback_list:
+            values = list(fallback_list)
+            if "$UNKNOWN$" not in values:
+                values.append("$UNKNOWN$")
+            return sorted(values)
 
-    # Try config file
-    try:
-        config_paths = get_config_paths()
-        doc_types_path = config_paths.get("document_types")
-        if doc_types_path and doc_types_path.exists():
-            with open(doc_types_path, "r", encoding="utf-8") as f:
-                types = json.load(f)
-                if isinstance(types, list):
-                    # Ensure $UNKNOWN$ is always present
-                    if "$UNKNOWN$" not in types:
-                        types.append("$UNKNOWN$")
-                    return sorted(types)
-    except Exception:
-        pass
+    # Try config file if key provided
+    if config_key:
+        try:
+            config_paths = get_config_paths()
+            config_path = config_paths.get(config_key)
+            if config_path and config_path.exists():
+                with open(config_path, "r", encoding="utf-8") as f:
+                    values = json.load(f)
+                    if isinstance(values, list):
+                        if "$UNKNOWN$" not in values:
+                            values.append("$UNKNOWN$")
+                        return sorted(values)
+        except Exception:
+            pass
 
-    # Hardcoded fallback if config file doesn't exist or fails to load
-    return [
-        "$UNKNOWN$", "bill", "certificate", "contract", "declaration", "email", "extract",
-        "invoice", "letter", "notification", "other", "receipt", "report", "statement", "ticket"
-    ]
+    # Return hardcoded defaults
+    return hardcoded_defaults
+
+
+def _load_fallback_document_types() -> list[str]:
+    """Load fallback document types from profile, config file, or use hardcoded defaults."""
+    return _load_fallback_values(
+        profile_accessor=lambda p: p.document_types.fallback_list,
+        config_key="document_types",
+        hardcoded_defaults=[
+            "$UNKNOWN$", "bill", "certificate", "contract", "declaration", "email", "extract",
+            "invoice", "letter", "notification", "other", "receipt", "report", "statement", "ticket"
+        ]
+    )
 
 
 def _load_fallback_issuing_parties() -> list[str]:
     """Load fallback issuing parties from profile or use hardcoded defaults."""
-    # Check profile first
-    profile = get_current_profile()
-    if profile and profile.issuing_parties.fallback_list:
-        parties = list(profile.issuing_parties.fallback_list)
-        if "$UNKNOWN$" not in parties:
-            parties.append("$UNKNOWN$")
-        return sorted(parties)
-
-    # Hardcoded fallback
-    return [
-        "$UNKNOWN$", "ActivoBank", "Allianz", "Amazon", "Anthropic", "Antonio Martins & Filhos",
-        "Apple", "Armando", "Ascendi", "AT", "Auchan", "Banco BEST", "Banco Invest",
-        "Bandicam", "BIG", "Bitwarden", "BlackRock", "BP", "BPI", "Caetano Formula",
-        "Carrefour", "CEPSA", "Cleverbridge", "Codota", "Cohere", "Coinbase",
-        "Consensus", "Continente", "CTT", "Dacia", "DEGIRO", "Digital River",
-        "DigitalOcean", "DOKKER", "E.Leclerc", "EUROPA", "ExpressVPN", "FGCT",
-        "Fidelidade", "Fluxe", "Fundo de Compensacao do Trabalho", "Galp", "GESPOST",
-        "GitHub", "GONCALTEAM", "Google", "Google Commerce Limited", "Government",
-        "GRUPO", "HONG KONG USGREEN LIMITED", "INE", "Intermarche", "International",
-        "IRN", "IRS", "iServices", "iShares", "justETF", "Justica",
-        "La Maison", "Leroy", "LuLuComfort", "LusoAloja", "M2030",
-        "MANUEL ALVES DIAS, LDA", "MB WAY", "Melo, Nadais & Associados", "Microsoft",
-        "MillenniumBCP", "Mini Soninha", "Ministerio das Financas", "Mobatek",
-        "MONTEPIO", "Multibanco", "Multicare", "MyCommerce", "MyFactoryHub", "NordVPN",
-        "NOS", "Notario", "NTI", "OCC", "OpenAI", "OpenRouter", "OUYINEN", "Paddle",
-        "Parallels", "PayPal", "PCDIGA", "Pinecone", "PLIMAT", "Pluxee", "PRIO",
-        "PRISMXR", "Puzzle Message, Unipessoal Lda.", "Quindi", "Redunicre",
-        "RegistoLEI", "Renault", "Republica Portuguesa", "RescueTime", "Restaurant",
-        "Securitas", "Seguranca Social", "Shenzhen", "Sierra",
-        "Sodexo", "Solred", "SONAE", "SRS Acquiom", "Swappie", "Sweatcoin",
-        "Tesouraria", "TIAGO", "Tilda", "Together.ai", "TopazLabs", "Universal",
-        "Universo", "Vanguard", "Via Verde", "VIDRIO PAIS PORTUGAL",
-        "VITALOPE", "Vodafone", "WisdomTree", "Worten", "xAI"
-    ]
+    return _load_fallback_values(
+        profile_accessor=lambda p: p.issuing_parties.fallback_list,
+        config_key=None,
+        hardcoded_defaults=[
+            "$UNKNOWN$", "ActivoBank", "Allianz", "Amazon", "Anthropic", "Antonio Martins & Filhos",
+            "Apple", "Armando", "Ascendi", "AT", "Auchan", "Banco BEST", "Banco Invest",
+            "Bandicam", "BIG", "Bitwarden", "BlackRock", "BP", "BPI", "Caetano Formula",
+            "Carrefour", "CEPSA", "Cleverbridge", "Codota", "Cohere", "Coinbase",
+            "Consensus", "Continente", "CTT", "Dacia", "DEGIRO", "Digital River",
+            "DigitalOcean", "DOKKER", "E.Leclerc", "EUROPA", "ExpressVPN", "FGCT",
+            "Fidelidade", "Fluxe", "Fundo de Compensacao do Trabalho", "Galp", "GESPOST",
+            "GitHub", "GONCALTEAM", "Google", "Google Commerce Limited", "Government",
+            "GRUPO", "HONG KONG USGREEN LIMITED", "INE", "Intermarche", "International",
+            "IRN", "IRS", "iServices", "iShares", "justETF", "Justica",
+            "La Maison", "Leroy", "LuLuComfort", "LusoAloja", "M2030",
+            "MANUEL ALVES DIAS, LDA", "MB WAY", "Melo, Nadais & Associados", "Microsoft",
+            "MillenniumBCP", "Mini Soninha", "Ministerio das Financas", "Mobatek",
+            "MONTEPIO", "Multibanco", "Multicare", "MyCommerce", "MyFactoryHub", "NordVPN",
+            "NOS", "Notario", "NTI", "OCC", "OpenAI", "OpenRouter", "OUYINEN", "Paddle",
+            "Parallels", "PayPal", "PCDIGA", "Pinecone", "PLIMAT", "Pluxee", "PRIO",
+            "PRISMXR", "Puzzle Message, Unipessoal Lda.", "Quindi", "Redunicre",
+            "RegistoLEI", "Renault", "Republica Portuguesa", "RescueTime", "Restaurant",
+            "Securitas", "Seguranca Social", "Shenzhen", "Sierra",
+            "Sodexo", "Solred", "SONAE", "SRS Acquiom", "Swappie", "Sweatcoin",
+            "Tesouraria", "TIAGO", "Tilda", "Together.ai", "TopazLabs", "Universal",
+            "Universo", "Vanguard", "Via Verde", "VIDRIO PAIS PORTUGAL",
+            "VITALOPE", "Vodafone", "WisdomTree", "Worten", "xAI"
+        ]
+    )
 
 
 # Fallback values for document types (loaded from profile or config/document_types.json if available)

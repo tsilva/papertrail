@@ -1151,20 +1151,19 @@ def process_folder(task: str, processed_path: str, raw_paths=None, excel_output_
     processed_path = Path(processed_path)
     processed_path.mkdir(parents=True, exist_ok=True)
 
-    if task == "extract_new":
-        _task__extract_new(processed_path, raw_paths)
-    elif task == "rename_files":
-        _task__rename_files(processed_path)
-    elif task == "validate_metadata":
-        _task__validate_metadata(processed_path)
-    elif task == "export_excel":
-        _task__export_excel(processed_path, excel_output_path)
-    elif task == "copy_matching":
-        _task__copy_matching(processed_path, regex_pattern, copy_dest_folder)
-    elif task == "export_all_dates":
-        _task__export_all_dates(processed_path, export_base_dir, run_merge)
-    elif task == "check_files_exist":
-        _task__check_files_exist(processed_path, check_schema_path)
+    task_handlers = {
+        "extract_new": lambda: _task__extract_new(processed_path, raw_paths),
+        "rename_files": lambda: _task__rename_files(processed_path),
+        "validate_metadata": lambda: _task__validate_metadata(processed_path),
+        "export_excel": lambda: _task__export_excel(processed_path, excel_output_path),
+        "copy_matching": lambda: _task__copy_matching(processed_path, regex_pattern, copy_dest_folder),
+        "export_all_dates": lambda: _task__export_all_dates(processed_path, export_base_dir, run_merge),
+        "check_files_exist": lambda: _task__check_files_exist(processed_path, check_schema_path),
+    }
+
+    handler = task_handlers.get(task)
+    if handler:
+        handler()
     else:
         print("Invalid task specified.")
 

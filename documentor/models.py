@@ -24,6 +24,17 @@ def _is_empty_value(value) -> bool:
     return False
 
 
+def _validate_enum_field(value, enum_prefix: str, valid_values: list[str]) -> str:
+    """Validate and normalize an enum field value."""
+    if _is_empty_value(value):
+        return "$UNKNOWN$"
+    if isinstance(value, str):
+        value = clean_enum_string(value, enum_prefix)
+        if value not in valid_values:
+            return "$UNKNOWN$"
+    return value
+
+
 # Load enum values at module level
 DOCUMENT_TYPES = load_document_types()
 ISSUING_PARTIES = load_issuing_parties()
@@ -179,24 +190,12 @@ class DocumentMetadata(DocumentMetadataInput):
     @field_validator('issuing_party', mode='before')
     @classmethod
     def validate_issuing_party(cls, value):
-        if _is_empty_value(value):
-            return "$UNKNOWN$"
-        if isinstance(value, str):
-            value = clean_enum_string(value, "IssuingParty")
-            if value not in ISSUING_PARTIES:
-                return "$UNKNOWN$"
-        return value
+        return _validate_enum_field(value, "IssuingParty", ISSUING_PARTIES)
 
     @field_validator('document_type', mode='before')
     @classmethod
     def validate_document_type(cls, value):
-        if _is_empty_value(value):
-            return "$UNKNOWN$"
-        if isinstance(value, str):
-            value = clean_enum_string(value, "DocumentType")
-            if value not in DOCUMENT_TYPES:
-                return "$UNKNOWN$"
-        return value
+        return _validate_enum_field(value, "DocumentType", DOCUMENT_TYPES)
 
     @field_validator('total_amount', mode='before')
     @classmethod

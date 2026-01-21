@@ -25,15 +25,6 @@ def hash_file_fast(path: Path) -> str:
     return h.hexdigest()[:8]
 
 
-def _hash_raw_bytes(path: Path) -> str:
-    """Internal helper to hash raw file bytes."""
-    h = hashlib.sha256()
-    with open(path, "rb") as f:
-        for chunk in iter(lambda: f.read(8192), b''):
-            h.update(chunk)
-    return h.hexdigest()[:8]
-
-
 def hash_file_content(path: Path) -> str:
     """
     Generate content-based hash by rendering PDF pages as images.
@@ -88,7 +79,7 @@ def hash_file_content(path: Path) -> str:
             return content_digest[:8]
         else:
             # No pages could be rendered - fall back to file hash
-            return _hash_raw_bytes(path)
+            return hash_file_fast(path)
 
     except Exception:
         # If content-based hashing fails entirely, fall back to file hash
