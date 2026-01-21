@@ -9,6 +9,63 @@ from typing import Optional
 from documentor.config import get_config_paths, get_current_profile
 
 
+# ============================================================================
+# Lazy Loading Cache
+# ============================================================================
+
+# Module-level cache for lazy-loaded values
+_DOCUMENT_TYPES: list[str] | None = None
+_ISSUING_PARTIES: list[str] | None = None
+_DOCUMENT_TYPE_ENUM: Enum | None = None
+_ISSUING_PARTY_ENUM: Enum | None = None
+
+
+def reset_enum_cache() -> None:
+    """
+    Reset the enum cache, forcing re-evaluation on next access.
+
+    Call this after setting a new profile to ensure enums reflect
+    the profile's predefined values.
+    """
+    global _DOCUMENT_TYPES, _ISSUING_PARTIES, _DOCUMENT_TYPE_ENUM, _ISSUING_PARTY_ENUM
+    _DOCUMENT_TYPES = None
+    _ISSUING_PARTIES = None
+    _DOCUMENT_TYPE_ENUM = None
+    _ISSUING_PARTY_ENUM = None
+
+
+def get_document_types() -> list[str]:
+    """Get document types list, loading lazily if needed."""
+    global _DOCUMENT_TYPES
+    if _DOCUMENT_TYPES is None:
+        _DOCUMENT_TYPES = load_document_types()
+    return _DOCUMENT_TYPES
+
+
+def get_issuing_parties() -> list[str]:
+    """Get issuing parties list, loading lazily if needed."""
+    global _ISSUING_PARTIES
+    if _ISSUING_PARTIES is None:
+        _ISSUING_PARTIES = load_issuing_parties()
+    return _ISSUING_PARTIES
+
+
+def get_document_type_enum() -> Enum:
+    """Get DocumentType enum, creating lazily if needed."""
+    global _DOCUMENT_TYPE_ENUM
+    if _DOCUMENT_TYPE_ENUM is None:
+        _DOCUMENT_TYPE_ENUM = create_dynamic_enum('DocumentType', get_document_types())
+    return _DOCUMENT_TYPE_ENUM
+
+
+def get_issuing_party_enum() -> Enum:
+    """Get IssuingParty enum, creating lazily if needed."""
+    global _ISSUING_PARTY_ENUM
+    if _ISSUING_PARTY_ENUM is None:
+        _ISSUING_PARTY_ENUM = create_dynamic_enum('IssuingParty', get_issuing_parties())
+    return _ISSUING_PARTY_ENUM
+
+
 def clean_enum_string(value: str, enum_prefix: Optional[str] = None) -> str:
     """
     Remove enum prefix from serialized enum strings.

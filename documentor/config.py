@@ -114,110 +114,53 @@ def get_gmail_config_paths() -> dict[str, Path]:
     return paths
 
 
-def load_env(required: bool = True) -> Optional[Path]:
+def load_env() -> Optional[Path]:
     """
     Load environment variables from repo root .env file.
 
-    Args:
-        required: If True, raises error if .env not found. If False, silently returns None.
+    Used for environment variable expansion in profile values (e.g., ${OPENROUTER_API_KEY}).
+    Silently returns None if .env not found.
 
     Returns:
-        Path to the .env file, or None if not found and not required
-
-    Raises:
-        FileNotFoundError: If .env not found and required=True
+        Path to the .env file, or None if not found
     """
     paths = get_config_paths()
     env_path = paths["env"]
 
     if not env_path.exists():
-        if required:
-            raise FileNotFoundError(
-                f"No .env file found at {env_path}. "
-                "Copy .env.example to .env and configure it, "
-                "or use a profile with --profile."
-            )
         return None
 
     load_dotenv(dotenv_path=env_path, override=True)
     return env_path
 
 
-def load_config() -> dict:
-    """
-    Load configuration from active profile or legacy .env.
-
-    If a profile is active, uses values from the profile.
-    Otherwise, loads from .env file (legacy mode).
-
-    Returns:
-        Dictionary with configuration values
-    """
-    profile = get_current_profile()
-    repo_root = get_repo_root()
-    paths = get_config_paths()
-
-    # Profile mode
-    if profile:
-        # Load .env for environment variable expansion (not required)
-        env_path = load_env(required=False)
-
-        # Build config from profile
-        return {
-            "repo_root": repo_root,
-            "env_path": env_path,
-            "passwords_path": paths["passwords"],
-            "validations_path": paths["validations"],
-            "OPENROUTER_MODEL_ID": profile.openrouter.model_id,
-            "OPENROUTER_API_KEY": profile.openrouter.api_key,
-            "OPENROUTER_BASE_URL": profile.openrouter.base_url,
-            "RAW_FILES_DIR": ";".join(profile.paths.raw) if profile.paths.raw else None,
-            "PROCESSED_FILES_DIR": profile.paths.processed,
-            "EXPORT_FILES_DIR": profile.paths.export,
-        }
-
-    # Legacy .env mode
-    env_path = load_env(required=True)
-
-    return {
-        "repo_root": repo_root,
-        "env_path": env_path,
-        "passwords_path": paths["passwords"],
-        "validations_path": paths["validations"],
-        "OPENROUTER_MODEL_ID": os.getenv("OPENROUTER_MODEL_ID"),
-        "OPENROUTER_API_KEY": os.getenv("OPENROUTER_API_KEY"),
-        "OPENROUTER_BASE_URL": os.getenv("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1"),
-        "RAW_FILES_DIR": os.getenv("RAW_FILES_DIR"),
-        "PROCESSED_FILES_DIR": os.getenv("PROCESSED_FILES_DIR"),
-        "EXPORT_FILES_DIR": os.getenv("EXPORT_FILES_DIR"),
-    }
-
-
-def get_openai_client(api_key: Optional[str] = None, base_url: Optional[str] = None) -> openai.OpenAI:
+def get_openai_client() -> openai.OpenAI:
     """
     Get a configured OpenAI client for OpenRouter.
 
-    Args:
-        api_key: Optional API key (defaults to profile or OPENROUTER_API_KEY env var)
-        base_url: Optional base URL (defaults to profile or OPENROUTER_BASE_URL env var)
+    Requires an active profile with OpenRouter configuration.
 
     Returns:
         Configured OpenAI client
+
+    Raises:
+        RuntimeError: If no profile is active
     """
     profile = get_current_profile()
 
-    # Use profile values if available and not overridden
-    if api_key is None:
-        if profile and profile.openrouter.api_key:
-            api_key = profile.openrouter.api_key
-        else:
-            api_key = os.getenv("OPENROUTER_API_KEY")
+    if not profile:
+        raise RuntimeError(
+            "No profile is active. Use --profile to specify a configuration profile."
+        )
 
-    if base_url is None:
-        if profile and profile.openrouter.base_url:
-            base_url = profile.openrouter.base_url
-        else:
-            base_url = os.getenv("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1")
+    api_key = profile.openrouter.api_key
+    base_url = profile.openrouter.base_url
+
+    if not api_key:
+        raise RuntimeError(
+            f"No OpenRouter API key configured in profile '{profile.profile.name}'. "
+            "Set openrouter.api_key in your profile YAML."
+        )
 
     return openai.OpenAI(api_key=api_key, base_url=base_url)
 

@@ -487,18 +487,18 @@ def _parse_profile_dict(data: Dict[str, Any], profile_path: Path) -> Profile:
         base_url=openrouter_data.get("base_url", "https://openrouter.ai/api/v1")
     )
 
-    # Parse document_types
+    # Parse document_types (support both "predefined" and "canonical" field names)
     doc_types_data = data.get("document_types", {})
     document_types = DocumentTypesConfig(
-        predefined=doc_types_data.get("predefined"),
+        predefined=doc_types_data.get("predefined") or doc_types_data.get("canonical"),
         fallback_file=doc_types_data.get("fallback_file"),
         fallback_list=doc_types_data.get("fallback_list")
     )
 
-    # Parse issuing_parties
+    # Parse issuing_parties (support both "predefined" and "canonical" field names)
     issuing_data = data.get("issuing_parties", {})
     issuing_parties = IssuingPartiesConfig(
-        predefined=issuing_data.get("predefined"),
+        predefined=issuing_data.get("predefined") or issuing_data.get("canonical"),
         fallback_list=issuing_data.get("fallback_list")
     )
 
