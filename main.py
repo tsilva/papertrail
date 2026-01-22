@@ -27,6 +27,7 @@ from documentor.config import (
     get_config_paths,
     get_openai_client,
     set_current_profile,
+    get_current_profile,
 )
 from documentor.profiles import (
     load_profile,
@@ -54,33 +55,30 @@ from documentor.metadata import (
     build_hash_index,
     get_unique_dates,
     save_metadata_json,
-)
-from documentor.tasks import (
-    task_extract_new,
-    task_rename_files,
-    task_validate_metadata,
-    task_export_excel,
-    task_copy_matching,
-    task_export_all_dates,
-    task_check_files_exist,
-    task_bootstrap_mappings,
-    task_review_mappings,
-    task_add_canonical,
-    task_gmail_download,
+    iter_json_files,
 )
 
 # ------------------- CONFIG -------------------
 
-# Module-level globals (initialized by initialize_config)
-CONFIG_PATHS = None
-OPENROUTER_MODEL_ID = None
-openai_client = None
+from dataclasses import dataclass
 
-# Global failure logger
-failure_logger = None
+@dataclass
+class AppContext:
+    """Runtime application context holding all initialized resources."""
+    config_paths: dict
+    model_id: str
+    openai_client: any
+    mappings_manager: any
 
-# Global mappings manager
-mappings_manager = None
+# Single global context instance
+_ctx: AppContext | None = None
+
+
+def get_ctx() -> AppContext:
+    """Get the application context. Raises if not initialized."""
+    if _ctx is None:
+        raise RuntimeError("Application context not initialized. Call initialize_config() first.")
+    return _ctx
 
 
 def initialize_config(profile_name: Optional[str] = None) -> None:
@@ -94,12 +92,10 @@ def initialize_config(profile_name: Optional[str] = None) -> None:
         ProfileNotFoundError: If specified profile doesn't exist
         ProfileError: If profile loading fails
     """
-    global CONFIG_PATHS, OPENROUTER_MODEL_ID, openai_client, mappings_manager
+    global _ctx
 
-    # Load .env for environment variable expansion in profiles (e.g., ${OPENROUTER_API_KEY})
     load_env()
 
-    # Check if profiles directory exists
     profiles_dir = get_profiles_dir()
     profiles_exist = profiles_dir.exists() and any(profiles_dir.glob("*.yaml"))
 
@@ -109,7 +105,6 @@ def initialize_config(profile_name: Optional[str] = None) -> None:
             "See profiles/README.md for documentation."
         )
 
-    # Load profile (explicit or auto-detect 'default')
     if profile_name is not None:
         profile = load_profile(profile_name)
         print(f"Using profile: {profile.profile.name}")
@@ -128,23 +123,17 @@ def initialize_config(profile_name: Optional[str] = None) -> None:
         print(f"  {profile.profile.description}")
 
     set_current_profile(profile)
-
-    # Reset enum cache so it loads from profile settings
     reset_enum_cache()
 
-    # Load configuration paths from profile
-    CONFIG_PATHS = get_config_paths()
-
-    # Get model ID from profile
-    OPENROUTER_MODEL_ID = profile.openrouter.model_id
-
-    # Initialize OpenAI client from profile
-    openai_client = get_openai_client()
-
-    # Initialize mappings manager
     config_dir = Path(__file__).parent / "config"
     mappings_path = config_dir / "mappings.yaml"
-    mappings_manager = MappingsManager(mappings_path)
+
+    _ctx = AppContext(
+        config_paths=get_config_paths(),
+        model_id=profile.openrouter.model_id,
+        openai_client=get_openai_client(),
+        mappings_manager=MappingsManager(mappings_path),
+    )
 
 # ------------------- UTILS -------------------
 
@@ -177,10 +166,9 @@ def file_name_from_metadata(metadata: DocumentMetadata, file_hash: str) -> str:
 
 # ------------------- CLASSIFICATION -------------------
 
-def classify_pdf_document(pdf_path: Path, file_hash: str) -> DocumentMetadata:
+def classify_pdf_document(pdf_path: Path, file_hash: str, failure_logger=None) -> DocumentMetadata:
     """Classify a PDF document using the LLM."""
-    global failure_logger
-    client = openai_client
+    ctx = get_ctx()
 
     try:
         images_b64 = render_pdf_to_images(pdf_path)
@@ -189,7 +177,6 @@ def classify_pdf_document(pdf_path: Path, file_hash: str) -> DocumentMetadata:
         raise RuntimeError(f"Failed to render PDF image: {pdf_path}") from e
 
     try:
-        # PHASE 1: Raw Extraction
         user_content = [
             {
                 "type": "image_url",
@@ -203,8 +190,8 @@ def classify_pdf_document(pdf_path: Path, file_hash: str) -> DocumentMetadata:
             {"role": "user", "content": user_content},
         ]
 
-        response = client.chat.completions.create(
-            model=OPENROUTER_MODEL_ID,
+        response = ctx.openai_client.chat.completions.create(
+            model=ctx.model_id,
             max_tokens=4096,
             temperature=0,
             messages=messages,
@@ -219,12 +206,10 @@ def classify_pdf_document(pdf_path: Path, file_hash: str) -> DocumentMetadata:
         args = tool_calls[0].function.arguments
         raw_metadata = DocumentMetadataRaw.model_validate_json(args)
 
-        # PHASE 2: Normalization (with two-tier mapping lookup)
         normalized_doc_type, normalized_issuing_party = normalize_metadata(
-            raw_metadata, client, OPENROUTER_MODEL_ID, mappings=mappings_manager
+            raw_metadata, ctx.openai_client, ctx.model_id, mappings=ctx.mappings_manager
         )
 
-        # Create final metadata with both raw and normalized values
         metadata = DocumentMetadata(
             issue_date=raw_metadata.issue_date,
             document_type=normalized_doc_type,
@@ -250,12 +235,11 @@ def classify_pdf_document(pdf_path: Path, file_hash: str) -> DocumentMetadata:
 
 # ------------------- RENAMING & PROCESSING -------------------
 
-def rename_single_pdf(pdf_path: Path, content_hash: str, processed_path: Path, known_hashes: set):
+def rename_single_pdf(pdf_path: Path, content_hash: str, processed_path: Path, known_hashes: set, failure_logger=None):
     """Process and rename a single PDF file."""
-    global failure_logger
     try:
         file_hash = hash_file_fast(pdf_path)
-        metadata = classify_pdf_document(pdf_path, content_hash)
+        metadata = classify_pdf_document(pdf_path, content_hash, failure_logger)
         metadata.file_hash = file_hash
 
         filename = file_name_from_metadata(metadata, content_hash)
@@ -272,10 +256,10 @@ def rename_single_pdf(pdf_path: Path, content_hash: str, processed_path: Path, k
         print(f"Failed to process {pdf_path.name}: {e}")
 
 
-def rename_pdf_files(pdf_paths, file_hash_map, known_hashes, processed_path):
+def rename_pdf_files(pdf_paths, file_hash_map, known_hashes, processed_path, failure_logger=None):
     """Rename multiple PDF files."""
     for pdf_path in tqdm(pdf_paths):
-        rename_single_pdf(pdf_path, file_hash_map[pdf_path], processed_path, known_hashes)
+        rename_single_pdf(pdf_path, file_hash_map[pdf_path], processed_path, known_hashes, failure_logger)
 
 
 def validate_metadata(output_path: Path):
@@ -546,6 +530,385 @@ def check_files_exist(target_folder: Path, validation_schema_path: Path):
         print("\nSome file existence checks failed.")
 
 
+# ------------------- TASK HANDLERS -------------------
+
+def task_extract_new(processed_path: Path, raw_paths: list[Path]):
+    """Extract and classify new PDF files."""
+    log_path = processed_path / "classification_failures.log"
+    failure_logger = setup_failure_logger(log_path)
+    print(f"Logging failures to: {log_path}")
+
+    print("Building hash index from metadata files...")
+    known_hashes = set(build_hash_index(processed_path).keys())
+
+    print("Scanning for new PDFs...")
+    pdf_paths = find_pdf_files(raw_paths)
+    print(f"Found {len(pdf_paths)} PDFs in raw directories")
+
+    print("Stage 1: Quick filtering using fast file hashes...")
+    fast_hash_map = {pdf: hash_file_fast(pdf) for pdf in tqdm(pdf_paths, desc="Fast hashing")}
+    potentially_new = [pdf for pdf in pdf_paths if fast_hash_map[pdf] not in known_hashes]
+
+    already_processed = len(pdf_paths) - len(potentially_new)
+    print(f"  -> Skipped {already_processed} already-processed files")
+    print(f"  -> {len(potentially_new)} files need content-based hashing")
+
+    if not potentially_new:
+        print("No new PDFs to process.")
+        return
+
+    print(f"Stage 2: Content-based hashing for {len(potentially_new)} new files...")
+    content_hash_map = {}
+
+    for pdf in tqdm(potentially_new, desc="Content hashing"):
+        try:
+            content_hash = hash_file_content(pdf)
+            content_hash_map[pdf] = content_hash
+        except Exception as e:
+            print(f"\n  Error hashing {pdf.name}: {e}")
+
+    files_to_process = [pdf for pdf in potentially_new if content_hash_map.get(pdf) not in known_hashes]
+    print(f"Found {len(files_to_process)} truly new PDFs to process.")
+
+    if files_to_process:
+        rename_pdf_files(files_to_process, content_hash_map, known_hashes, processed_path, failure_logger)
+
+    print("Extraction complete.")
+
+
+def task_rename_files(processed_path: Path):
+    """Rename existing PDF files based on metadata."""
+    print("Renaming existing PDF files and metadata based on metadata...")
+
+    valid_entries = []
+
+    for metadata_path, metadata in iter_json_files(processed_path, show_progress=True, progress_desc="Validating metadata", validate=True):
+        pdf_path = metadata_path.with_suffix(".pdf")
+        if not pdf_path.exists():
+            print(f"Skipping {metadata_path.name}: PDF file not found")
+            continue
+
+        valid_entries.append((pdf_path, metadata))
+
+    print(f"Found {len(valid_entries)} files to rename")
+
+    renamed_count = 0
+    for old_pdf_path, metadata in valid_entries:
+        content_hash = metadata.content_hash
+        new_filename = file_name_from_metadata(metadata, content_hash)
+        new_pdf_path = processed_path / new_filename
+        new_metadata_path = new_pdf_path.with_suffix(".json")
+
+        if old_pdf_path == new_pdf_path:
+            continue
+
+        try:
+            old_metadata_path = old_pdf_path.with_suffix(".json")
+            shutil.move(old_pdf_path, new_pdf_path)
+            shutil.move(old_metadata_path, new_metadata_path)
+            renamed_count += 1
+            if renamed_count <= 10 or renamed_count % 100 == 0:
+                print(f"[{renamed_count}] Renamed: {old_pdf_path.name} -> {new_filename}")
+        except Exception as e:
+            print(f"Failed to rename {old_pdf_path.name}: {e}")
+
+    print(f"Renaming complete. Renamed {renamed_count} files.")
+
+
+def task_export_all_dates(
+    processed_path: Path,
+    export_base_dir: Path,
+    run_merge: bool = False,
+):
+    """Export files for all unique dates found in processed files."""
+    processed_path = Path(processed_path)
+    export_base_dir = Path(export_base_dir)
+
+    print("Scanning for unique dates in processed files...")
+    all_dates = get_unique_dates(processed_path)
+
+    if not all_dates:
+        print("No dates found in processed files.")
+        return
+
+    print(f"Found {len(all_dates)} unique dates: {', '.join(all_dates[:10])}{' ...' if len(all_dates) > 10 else ''}")
+
+    total_copied = 0
+    total_skipped = 0
+    changed_directories = []
+
+    for date in all_dates:
+        export_date_dir = export_base_dir / date
+        print(f"\n[{date}] Processing...")
+
+        stats = copy_matching_files(processed_path, date, export_date_dir, incremental=True)
+        total_copied += stats['copied']
+        total_skipped += stats['skipped']
+
+        if stats['total'] == 0:
+            print(f"  No files match date pattern '{date}'")
+        else:
+            print(f"  Copied: {stats['copied']}, Skipped: {stats['skipped']}, Total: {stats['total']}")
+
+        if stats['copied'] > 0:
+            changed_directories.append(export_date_dir)
+        elif stats['total'] > 0:
+            if export_date_dir.exists() and directory_has_changed(export_date_dir):
+                changed_directories.append(export_date_dir)
+
+    print("\n=== Summary ===")
+    print(f"Processed {len(all_dates)} date(s)")
+    print(f"Total files copied: {total_copied}")
+    print(f"Total files skipped (unchanged): {total_skipped}")
+    print(f"Directories with changes: {len(changed_directories)}")
+
+    if run_merge and changed_directories:
+        print("\n=== Running PDF Merge ===")
+        from shutil import which
+        if which("pdf-merger") is None:
+            print("WARNING: pdf-merger tool not found in PATH. Skipping merge step.")
+        else:
+            for export_dir in changed_directories:
+                print(f"\nMerging PDFs in {export_dir}...")
+                result = subprocess.run(f'pdf-merger "{export_dir}"', shell=True, text=True)
+                if result.returncode == 0:
+                    print("  Merge completed successfully")
+                    validate_merged_pdf(export_dir)
+                else:
+                    print(f"  Merge failed with exit code {result.returncode}")
+
+    print("\nExport all dates complete.")
+
+
+def task_bootstrap_mappings(processed_path: Path, mappings_mgr):
+    """Populate mappings from existing metadata JSON files."""
+    if mappings_mgr is None:
+        print("Error: Mappings manager not initialized.")
+        return
+
+    json_files = list(processed_path.rglob("*.json"))
+    if not json_files:
+        print(f"No metadata files found in {processed_path}")
+        return
+
+    doc_type_count = 0
+    issuer_count = 0
+    skipped = 0
+
+    for metadata_path in tqdm(json_files, desc="Scanning metadata"):
+        try:
+            with open(metadata_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+
+            doc_type_raw = data.get("document_type_raw")
+            doc_type = data.get("document_type")
+            issuing_party_raw = data.get("issuing_party_raw")
+            issuing_party = data.get("issuing_party")
+
+            if doc_type_raw and doc_type and doc_type != "$UNKNOWN$":
+                existing = mappings_mgr.get_mapping(doc_type_raw, "document_types")
+                if existing is None:
+                    mappings_mgr.add_mapping(
+                        doc_type_raw, doc_type, "document_types", confirmed=True, save=False
+                    )
+                    doc_type_count += 1
+
+            if issuing_party_raw and issuing_party and issuing_party != "$UNKNOWN$":
+                existing = mappings_mgr.get_mapping(issuing_party_raw, "issuing_parties")
+                if existing is None:
+                    mappings_mgr.add_mapping(
+                        issuing_party_raw, issuing_party, "issuing_parties", confirmed=True, save=False
+                    )
+                    issuer_count += 1
+
+        except Exception as e:
+            skipped += 1
+            if skipped <= 5:
+                print(f"Skipping {metadata_path.name}: {e}")
+
+    mappings_mgr._save()
+
+    print("\nBootstrap complete:")
+    print(f"  Document type mappings added: {doc_type_count}")
+    print(f"  Issuing party mappings added: {issuer_count}")
+    print(f"  Files skipped: {skipped}")
+    print(f"\nMappings saved to: {mappings_mgr.path}")
+
+    stats = mappings_mgr.get_stats()
+    print("\nCurrent mappings stats:")
+    for field, counts in stats.items():
+        print(f"  {field}: {counts['confirmed']} confirmed, {counts['auto']} auto, {counts['canonicals']} canonicals")
+
+
+def task_review_mappings(mappings_mgr):
+    """Interactive review of auto-added mappings."""
+    if mappings_mgr is None:
+        print("Error: Mappings manager not initialized.")
+        return
+
+    doc_auto = mappings_mgr.get_auto_mappings("document_types")
+    issuer_auto = mappings_mgr.get_auto_mappings("issuing_parties")
+
+    total_pending = len(doc_auto) + len(issuer_auto)
+
+    if total_pending == 0:
+        print("No auto-added mappings pending review.")
+        stats = mappings_mgr.get_stats()
+        print("\nCurrent mappings stats:")
+        for field, counts in stats.items():
+            print(f"  {field}: {counts['confirmed']} confirmed, {counts['auto']} auto")
+        return
+
+    print("=" * 60)
+    print("AUTO-ADDED MAPPINGS AWAITING REVIEW")
+    print("=" * 60)
+    print()
+
+    if doc_auto:
+        print(f"Document Types ({len(doc_auto)} pending):")
+        for i, (raw, canonical) in enumerate(doc_auto.items(), 1):
+            print(f"  {i}. \"{raw}\" -> \"{canonical}\"")
+        print()
+
+    if issuer_auto:
+        print(f"Issuing Parties ({len(issuer_auto)} pending):")
+        for i, (raw, canonical) in enumerate(issuer_auto.items(), 1):
+            print(f"  {i}. \"{raw}\" -> \"{canonical}\"")
+        print()
+
+    print("Options:")
+    print("  [a] Confirm ALL mappings")
+    print("  [r] Review one-by-one")
+    print("  [q] Quit without changes")
+    print()
+
+    choice = input("Select option: ").strip().lower()
+
+    if choice == 'a':
+        doc_confirmed = mappings_mgr.confirm_all("document_types", save=False)
+        issuer_confirmed = mappings_mgr.confirm_all("issuing_parties", save=True)
+        print(f"\nConfirmed {doc_confirmed} document type mappings and {issuer_confirmed} issuer mappings.")
+
+    elif choice == 'r':
+        _review_field_mappings(mappings_mgr, "document_types", doc_auto)
+        _review_field_mappings(mappings_mgr, "issuing_parties", issuer_auto)
+        print("\nReview complete.")
+
+    else:
+        print("No changes made.")
+
+
+def _review_field_mappings(mappings_mgr, field: str, mappings_dict: dict):
+    """Helper to review mappings for a single field."""
+    if not mappings_dict:
+        return
+
+    field_label = "Document Type" if field == "document_types" else "Issuing Party"
+    print(f"\n--- Reviewing {field_label} Mappings ---")
+
+    for raw, canonical in list(mappings_dict.items()):
+        print(f"\n\"{raw}\" -> \"{canonical}\"")
+        print("  [c] Confirm  [e] Edit canonical  [r] Reject  [s] Skip")
+        action = input("  Action: ").strip().lower()
+
+        if action == 'c':
+            mappings_mgr.confirm_mapping(raw, field, save=True)
+            print("  Confirmed.")
+        elif action == 'e':
+            new_canonical = input("  Enter new canonical value: ").strip()
+            if new_canonical:
+                mappings_mgr.update_mapping(raw, new_canonical, field, confirm=True, save=True)
+                print(f"  Updated to \"{new_canonical}\" and confirmed.")
+            else:
+                print("  No change (empty input).")
+        elif action == 'r':
+            mappings_mgr.reject_mapping(raw, field, save=True)
+            print("  Rejected (removed).")
+        else:
+            print("  Skipped.")
+
+
+def task_add_canonical(mappings_mgr, field: str, canonical: str):
+    """Add a new canonical value to the mappings."""
+    if mappings_mgr is None:
+        print("Error: Mappings manager not initialized.")
+        return
+
+    field_map = {
+        "document_type": "document_types",
+        "document_types": "document_types",
+        "issuing_party": "issuing_parties",
+        "issuing_parties": "issuing_parties",
+    }
+
+    normalized_field = field_map.get(field.lower())
+    if not normalized_field:
+        print(f"Error: Unknown field '{field}'. Use 'document_type' or 'issuing_party'.")
+        return
+
+    if mappings_mgr.add_canonical(normalized_field, canonical):
+        print(f"Added canonical '{canonical}' to {normalized_field}.")
+        print(f"Current canonicals: {', '.join(mappings_mgr.get_canonicals(normalized_field))}")
+    else:
+        print(f"Canonical '{canonical}' already exists in {normalized_field}.")
+
+
+def task_gmail_download():
+    """Download email attachments from Gmail."""
+    from datetime import timedelta
+    from documentor.gmail import download_gmail_attachments
+
+    profile = get_current_profile()
+    if not profile:
+        print("Error: No profile is active.")
+        sys.exit(1)
+
+    raw_paths = profile.paths.raw
+    processed_path_str = profile.paths.processed
+
+    if not raw_paths or not processed_path_str:
+        missing = []
+        if not raw_paths:
+            missing.append("paths.raw")
+        if not processed_path_str:
+            missing.append("paths.processed")
+        print(f"Missing required profile settings: {', '.join(missing)}")
+        sys.exit(1)
+
+    raw_path = Path(raw_paths[0])
+    processed_path = Path(processed_path_str)
+
+    raw_path.mkdir(parents=True, exist_ok=True)
+
+    end_date = datetime.now()
+
+    unique_dates = get_unique_dates(processed_path) if processed_path.exists() else []
+
+    if unique_dates:
+        most_recent = unique_dates[0]
+        start_date = datetime.strptime(f"{most_recent}-01", "%Y-%m-%d")
+        print(f"Date range: {start_date.date()} to {end_date.date()}")
+    else:
+        start_date = end_date - timedelta(days=30)
+        print("No processed files found. Using default range: last 30 days")
+
+    print(f"Downloading attachments to: {raw_path}")
+
+    stats = download_gmail_attachments(
+        output_dir=raw_path,
+        start_date=start_date,
+        end_date=end_date,
+    )
+
+    print("\n=== Gmail Download Summary ===")
+    print(f"Messages found: {stats['messages_found']}")
+    print(f"Messages processed: {stats['messages_processed']}")
+    print(f"Messages skipped: {stats['messages_skipped']}")
+    print(f"Attachments downloaded: {stats['attachments_downloaded']}")
+    print(f"Attachments failed: {stats['attachments_failed']}")
+    print(f"Bytes downloaded: {stats['bytes_downloaded']:,}")
+
+
 # ------------------- PIPELINE -------------------
 
 def run_step(cmd, step_desc):
@@ -693,36 +1056,32 @@ def process_folder(task: str, processed_path: str, raw_paths=None, excel_output_
     processed_path = Path(processed_path)
     processed_path.mkdir(parents=True, exist_ok=True)
 
-    # Define task handlers using imported task functions
-    task_handlers = {
-        "extract_new": lambda: task_extract_new(
-            processed_path, raw_paths, rename_pdf_files
-        ),
-        "rename_files": lambda: task_rename_files(
-            processed_path, file_name_from_metadata
-        ),
-        "validate_metadata": lambda: task_validate_metadata(
-            processed_path, validate_metadata
-        ),
-        "export_excel": lambda: task_export_excel(
-            processed_path, excel_output_path, export_metadata_to_excel
-        ),
-        "copy_matching": lambda: task_copy_matching(
-            processed_path, regex_pattern, copy_dest_folder, copy_matching_files
-        ),
-        "export_all_dates": lambda: task_export_all_dates(
-            processed_path, export_base_dir,
-            copy_matching_files, directory_has_changed, validate_merged_pdf,
-            run_merge
-        ),
-        "check_files_exist": lambda: task_check_files_exist(
-            processed_path, check_schema_path, check_files_exist
-        ),
-    }
-
-    handler = task_handlers.get(task)
-    if handler:
-        handler()
+    if task == "extract_new":
+        task_extract_new(processed_path, raw_paths)
+    elif task == "rename_files":
+        task_rename_files(processed_path)
+    elif task == "validate_metadata":
+        print("Validating existing metadata and PDFs...")
+        validate_metadata(processed_path)
+        print("Validation complete.")
+    elif task == "export_excel":
+        print("Exporting metadata to Excel...")
+        export_metadata_to_excel(processed_path, excel_output_path)
+        print("Excel export complete.")
+    elif task == "copy_matching":
+        if not regex_pattern or not copy_dest_folder:
+            print("For 'copy_matching', --regex_pattern and --copy_dest_folder are required.")
+            return
+        stats = copy_matching_files(processed_path, regex_pattern, Path(copy_dest_folder))
+        print(f"Copied {stats['copied']} files matching '{regex_pattern}' to {copy_dest_folder}")
+    elif task == "export_all_dates":
+        task_export_all_dates(processed_path, Path(export_base_dir), run_merge)
+    elif task == "check_files_exist":
+        if not check_schema_path:
+            print("For 'check_files_exist', --check_schema_path is required.")
+            return
+        check_files_exist(processed_path, Path(check_schema_path))
+        print("File existence check complete.")
     else:
         print("Invalid task specified.")
 
@@ -779,13 +1138,13 @@ def main():
         return
 
     if args.task == "review_mappings":
-        task_review_mappings(mappings_manager)
+        task_review_mappings(get_ctx().mappings_manager)
         return
 
     if args.task == "add_canonical":
         if not args.field or not args.canonical:
             parser.error("add_canonical requires --field and --canonical arguments.")
-        task_add_canonical(mappings_manager, args.field, args.canonical)
+        task_add_canonical(get_ctx().mappings_manager, args.field, args.canonical)
         return
 
     if args.task == "bootstrap_mappings":
@@ -793,7 +1152,7 @@ def main():
             parser.error("bootstrap_mappings requires the processed_path argument.")
         if not os.path.exists(args.processed_path):
             parser.error(f"The processed_path '{args.processed_path}' does not exist.")
-        task_bootstrap_mappings(Path(args.processed_path), mappings_manager)
+        task_bootstrap_mappings(Path(args.processed_path), get_ctx().mappings_manager)
         return
 
     if not args.processed_path:
