@@ -17,36 +17,7 @@ from documentor.enums import (
 )
 
 
-def _is_empty_value(value) -> bool:
-    """Check if value is None or empty string."""
-    if value is None:
-        return True
-    if isinstance(value, str) and value.strip() == "":
-        return True
-    return False
-
-
-def _validate_enum_field(value, enum_prefix: str, get_valid_values) -> str:
-    """
-    Validate and normalize an enum field value.
-
-    Args:
-        value: Value to validate
-        enum_prefix: Enum class prefix (e.g., "DocumentType")
-        get_valid_values: Function that returns list of valid values (lazy getter)
-    """
-    if _is_empty_value(value):
-        return "$UNKNOWN$"
-    if isinstance(value, str):
-        value = clean_enum_string(value, enum_prefix)
-        valid_values = get_valid_values()
-        if value not in valid_values:
-            return "$UNKNOWN$"
-    return value
-
-
 # Load enum values at module level for initial type annotations
-# These provide fallback values before profile is set
 DOCUMENT_TYPES = load_document_types()
 ISSUING_PARTIES = load_issuing_parties()
 
@@ -62,129 +33,50 @@ class DocumentMetadataRaw(BaseModel):
     Used for the initial LLM extraction where we want exact text as it appears
     on the document, before normalization to canonical values.
     """
-    issue_date: str = Field(
-        description="Date issued, format: YYYY-MM-DD.",
-        examples=["2025-01-02"]
-    )
-    document_type: str = Field(
-        description="Type of document (as seen on document).",
-        examples=["Invoice"]
-    )
-    issuing_party: str = Field(
-        description="Issuer name (exactly as it appears on document).",
-        examples=["Anthropic, PBC"]
-    )
-    service_name: Optional[str] = Field(
-        default=None,
-        description="Product/service name if applicable (as short as possible).",
-        examples=["Youtube Premium"]
-    )
-    total_amount: Optional[float] = Field(
-        default=None,
-        description="Total currency amount."
-    )
-    total_amount_currency: Optional[str] = Field(
-        default=None,
-        description="Currency of the total amount.",
-        examples=["EUR"]
-    )
-    confidence: float = Field(
-        description="Confidence score between 0 and 1."
-    )
-    reasoning: str = Field(
-        description="Why this classification was chosen."
-    )
+    issue_date: str = Field(description="Date issued, format: YYYY-MM-DD.")
+    document_type: str = Field(description="Type of document (as seen on document).")
+    issuing_party: str = Field(description="Issuer name (exactly as it appears on document).")
+    service_name: Optional[str] = Field(default=None, description="Product/service name if applicable.")
+    total_amount: Optional[float] = Field(default=None, description="Total currency amount.")
+    total_amount_currency: Optional[str] = Field(default=None, description="Currency of the total amount.")
+    confidence: float = Field(description="Confidence score between 0 and 1.")
+    reasoning: str = Field(description="Why this classification was chosen.")
 
 
-class DocumentMetadataInput(BaseModel):
+class DocumentMetadata(BaseModel):
     """
-    Document metadata with enum validation.
+    Full document metadata with hashes, timestamps, and validated enum fields.
 
     Used after normalization when document_type and issuing_party
     have been mapped to canonical values.
     """
-    issue_date: str = Field(
-        description="Date issued, format: YYYY-MM-DD.",
-        examples=["2025-01-02"]
-    )
-    document_type: DocumentType = Field(
-        description="Type of document.",
-        examples=["invoice"]
-    )
-    issuing_party: IssuingParty = Field(
-        description="Issuer name, must be one of the predefined issuing parties.",
-        examples=["Amazon"]
-    )
-    service_name: Optional[str] = Field(
-        default=None,
-        description="Product/service name if applicable (as short as possible).",
-        examples=["Youtube Premium"]
-    )
-    total_amount: Optional[float] = Field(
-        default=None,
-        description="Total currency amount."
-    )
-    total_amount_currency: Optional[str] = Field(
-        default=None,
-        description="Currency of the total amount.",
-        examples=["EUR"]
-    )
-    confidence: float = Field(
-        description="Confidence score between 0 and 1."
-    )
-    reasoning: str = Field(
-        description="Why this classification was chosen."
-    )
+    issue_date: str = Field(description="Date issued, format: YYYY-MM-DD.")
+    document_type: DocumentType = Field(description="Type of document.")
+    issuing_party: IssuingParty = Field(description="Issuer name.")
+    service_name: Optional[str] = Field(default=None, description="Product/service name if applicable.")
+    total_amount: Optional[float] = Field(default=None, description="Total currency amount.")
+    total_amount_currency: Optional[str] = Field(default=None, description="Currency of the total amount.")
+    confidence: float = Field(description="Confidence score between 0 and 1.")
+    reasoning: str = Field(description="Why this classification was chosen.")
 
+    # Hash and timestamp fields
+    content_hash: str = Field(description="Content-based SHA256 hash (first 8 chars).", alias="hash")
+    file_hash: Optional[str] = Field(default=None, description="File-based SHA256 hash for quick filtering.", alias="_old_hash")
+    create_date: Optional[str] = Field(default=None, description="Date this metadata was created.")
+    update_date: Optional[str] = Field(default=None, description="Date this metadata was last updated.")
 
-class DocumentMetadata(DocumentMetadataInput):
-    """
-    Full document metadata with hashes and timestamps.
-
-    Extends DocumentMetadataInput with content hash, file hash,
-    creation/update dates, and raw extracted values.
-    """
-    content_hash: str = Field(
-        description="Content-based SHA256 hash (first 8 chars) - based on rendered PDF pages.",
-        examples=["a1b2c3d4"],
-        alias="hash"
-    )
-    file_hash: Optional[str] = Field(
-        default=None,
-        description="File-based SHA256 hash for quick filtering (first 8 chars).",
-        examples=["b2c3d4e5"],
-        alias="_old_hash"
-    )
-    create_date: Optional[str] = Field(
-        default=None,
-        description="Date this metadata was created, format: YYYY-MM-DD.",
-        examples=["2024-06-01"]
-    )
-    update_date: Optional[str] = Field(
-        default=None,
-        description="Date this metadata was last updated, format: YYYY-MM-DD.",
-        examples=["2024-06-01"]
-    )
     # Raw extracted values before normalization
-    document_type_raw: Optional[str] = Field(
-        default=None,
-        description="Original document type as extracted from document."
-    )
-    issuing_party_raw: Optional[str] = Field(
-        default=None,
-        description="Original issuing party name as extracted from document."
-    )
+    document_type_raw: Optional[str] = Field(default=None, description="Original document type as extracted.")
+    issuing_party_raw: Optional[str] = Field(default=None, description="Original issuing party as extracted.")
 
     class Config:
-        populate_by_name = True  # Allow both field name and alias
+        populate_by_name = True
 
     @field_validator('issue_date', mode='before')
     @classmethod
     def validate_issue_date(cls, value):
-        if _is_empty_value(value):
+        if value is None or (isinstance(value, str) and value.strip() == ""):
             return "$UNKNOWN$"
-
-        # Check for future dates (likely extraction error)
         try:
             parsed_date = datetime.strptime(value, "%Y-%m-%d").date()
             if parsed_date > datetime.now().date():
@@ -192,19 +84,29 @@ class DocumentMetadata(DocumentMetadataInput):
         except ValueError as e:
             if "future" in str(e):
                 raise
-            # If parsing fails, let it through (may be non-standard format)
-
         return value
 
     @field_validator('issuing_party', mode='before')
     @classmethod
     def validate_issuing_party(cls, value):
-        return _validate_enum_field(value, "IssuingParty", get_issuing_parties)
+        if value is None or (isinstance(value, str) and value.strip() == ""):
+            return "$UNKNOWN$"
+        if isinstance(value, str):
+            value = clean_enum_string(value, "IssuingParty")
+            if value not in get_issuing_parties():
+                return "$UNKNOWN$"
+        return value
 
     @field_validator('document_type', mode='before')
     @classmethod
     def validate_document_type(cls, value):
-        return _validate_enum_field(value, "DocumentType", get_document_types)
+        if value is None or (isinstance(value, str) and value.strip() == ""):
+            return "$UNKNOWN$"
+        if isinstance(value, str):
+            value = clean_enum_string(value, "DocumentType")
+            if value not in get_document_types():
+                return "$UNKNOWN$"
+        return value
 
     @field_validator('total_amount', mode='before')
     @classmethod
@@ -214,7 +116,6 @@ class DocumentMetadata(DocumentMetadataInput):
         if isinstance(value, (int, float)):
             return value
         if isinstance(value, str):
-            # Remove currency symbols and normalize decimal separators
             value = re.sub(r'[^\d,.-]', '', value).replace('.', '').replace(',', '.')
             return float(value)
         raise ValueError(f"Invalid type for amount: {type(value)}")
@@ -225,26 +126,12 @@ class DocumentMetadata(DocumentMetadataInput):
         if value is None:
             return None
         value = value.strip().upper()
-        # Map common currency symbols to ISO codes
-        currency_map = {
-            '€': 'EUR', 'EURO': 'EUR',
-            '$': 'USD',
-            '£': 'GBP'
-        }
+        currency_map = {'€': 'EUR', 'EURO': 'EUR', '$': 'USD', '£': 'GBP'}
         return currency_map.get(value, value)
 
 
 def normalize_enum_field_in_dict(data: dict, field_name: str, enum_prefix: str) -> None:
-    """
-    Normalize enum fields in metadata dict (mutates in place).
-
-    Handles both Enum instances and string representations like "DocumentType.invoice".
-
-    Args:
-        data: Dictionary to modify
-        field_name: Name of the field to normalize
-        enum_prefix: The enum prefix to strip (e.g., "DocumentType", "IssuingParty")
-    """
+    """Normalize enum fields in metadata dict (mutates in place)."""
     value = data.get(field_name)
     if isinstance(value, Enum):
         data[field_name] = value.value
