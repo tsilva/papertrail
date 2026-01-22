@@ -37,7 +37,7 @@ from documentor.profiles import (
     ProfileError,
 )
 from documentor.hashing import hash_file_fast, hash_file_content
-from documentor.logging_utils import setup_failure_logger, log_failure
+from documentor.logging_utils import setup_failure_logger, log_failure, setup_logging, get_logger
 from documentor.models import (
     DocumentMetadata,
     DocumentMetadataRaw,
@@ -57,6 +57,11 @@ from documentor.metadata import (
     save_metadata_json,
     iter_json_files,
 )
+
+# ------------------- LOGGING -------------------
+
+# Module-level logger (configured by setup_logging in main())
+logger = get_logger('cli')
 
 # ------------------- CONFIG -------------------
 
@@ -107,12 +112,12 @@ def initialize_config(profile_name: Optional[str] = None) -> None:
 
     if profile_name is not None:
         profile = load_profile(profile_name)
-        print(f"Using profile: {profile.profile.name}")
+        logger.info(f"Using profile: {profile.profile.name}")
     else:
         available = list_available_profiles()
         if "default" in available:
             profile = load_profile("default")
-            print(f"Using profile: {profile.profile.name} (auto-detected)")
+            logger.info(f"Using profile: {profile.profile.name} (auto-detected)")
         else:
             raise ProfileNotFoundError(
                 f"No 'default' profile found. Available profiles: {', '.join(available)}. "
@@ -120,7 +125,7 @@ def initialize_config(profile_name: Optional[str] = None) -> None:
             )
 
     if profile.profile.description:
-        print(f"  {profile.profile.description}")
+        logger.info(f"  {profile.profile.description}")
 
     set_current_profile(profile)
     reset_enum_cache()
@@ -250,10 +255,10 @@ def rename_single_pdf(pdf_path: Path, content_hash: str, processed_path: Path, k
 
         known_hashes.add(content_hash)
         known_hashes.add(file_hash)
-        print(f"Processed: {pdf_path.name} -> {filename}")
+        logger.info(f"Processed: {pdf_path.name} -> {filename}")
     except Exception as e:
         log_failure(failure_logger, pdf_path, e)
-        print(f"Failed to process {pdf_path.name}: {e}")
+        logger.error(f"Failed to process {pdf_path.name}: {e}")
 
 
 def rename_pdf_files(pdf_paths, file_hash_map, known_hashes, processed_path, failure_logger=None):
@@ -295,11 +300,11 @@ def validate_metadata(output_path: Path):
             errors.append((metadata_path, str(e)))
 
     if errors:
-        print("\nValidation errors found:")
+        logger.warning("Validation errors found:")
         for meta_path, err in errors:
-            print(f"- {meta_path}: {err}")
+            logger.warning(f"- {meta_path}: {err}")
     else:
-        print("\nAll metadata files passed validation.")
+        logger.info("All metadata files passed validation.")
 
     return valid_entries
 
@@ -315,7 +320,7 @@ def validate_merged_pdf(folder_path: Path) -> bool:
     """
     merged_path = folder_path / "merged_all.pdf"
     if not merged_path.exists():
-        print(f"  No merged_all.pdf found in {folder_path}")
+        logger.info(f"  No merged_all.pdf found in {folder_path}")
         return True
 
     source_pdfs = [p for p in folder_path.glob("*.pdf") if p.name != "merged_all.pdf"]
@@ -330,7 +335,7 @@ def validate_merged_pdf(folder_path: Path) -> bool:
             f"got {actual_pages} pages"
         )
 
-    print(f"  Merge validation passed: {actual_pages} pages from {len(source_pdfs)} files")
+    logger.info(f"  Merge validation passed: {actual_pages} pages from {len(source_pdfs)} files")
     return True
 
 
@@ -399,9 +404,9 @@ def export_metadata_to_excel(processed_path: Path, excel_output_path: str):
                     col_letter = get_column_letter(df.columns.get_loc(col) + 1)
                     worksheet.column_dimensions[col_letter].hidden = True
 
-        print(f"\nExported {len(df)} entries to {excel_output_path}")
+        logger.info(f"Exported {len(df)} entries to {excel_output_path}")
     else:
-        print("\nNo valid metadata found to export.")
+        logger.info("No valid metadata found to export.")
 
 
 def copy_matching_files(
@@ -505,7 +510,7 @@ def check_files_exist(target_folder: Path, validation_schema_path: Path):
                 data = json.load(f)
             file_data.append((json_path, data))
         except Exception as e:
-            print(f"Skipping {json_path.name}: {e}")
+            logger.warning(f"Skipping {json_path.name}: {e}")
 
     check_results = []
     for idx, check in enumerate(checks):
@@ -522,12 +527,15 @@ def check_files_exist(target_folder: Path, validation_schema_path: Path):
     for found, idx, check in sorted_results:
         status = "[OK]" if found else "[FAIL]"
         result = "FOUND" if found else "NOT FOUND"
-        print(f"{status} {check} -- {result}")
+        if found:
+            logger.info(f"{status} {check} -- {result}")
+        else:
+            logger.warning(f"{status} {check} -- {result}")
 
     if all_passed:
-        print("\nAll file existence checks passed.")
+        logger.info("All file existence checks passed.")
     else:
-        print("\nSome file existence checks failed.")
+        logger.warning("Some file existence checks failed.")
 
 
 # ------------------- TASK HANDLERS -------------------
@@ -536,28 +544,28 @@ def task_extract_new(processed_path: Path, raw_paths: list[Path]):
     """Extract and classify new PDF files."""
     log_path = processed_path / "classification_failures.log"
     failure_logger = setup_failure_logger(log_path)
-    print(f"Logging failures to: {log_path}")
+    logger.debug(f"Logging failures to: {log_path}")
 
-    print("Building hash index from metadata files...")
+    logger.info("Building hash index from metadata files...")
     known_hashes = set(build_hash_index(processed_path).keys())
 
-    print("Scanning for new PDFs...")
+    logger.info("Scanning for new PDFs...")
     pdf_paths = find_pdf_files(raw_paths)
-    print(f"Found {len(pdf_paths)} PDFs in raw directories")
+    logger.info(f"Found {len(pdf_paths)} PDFs in raw directories")
 
-    print("Stage 1: Quick filtering using fast file hashes...")
+    logger.info("Stage 1: Quick filtering using fast file hashes...")
     fast_hash_map = {pdf: hash_file_fast(pdf) for pdf in tqdm(pdf_paths, desc="Fast hashing")}
     potentially_new = [pdf for pdf in pdf_paths if fast_hash_map[pdf] not in known_hashes]
 
     already_processed = len(pdf_paths) - len(potentially_new)
-    print(f"  -> Skipped {already_processed} already-processed files")
-    print(f"  -> {len(potentially_new)} files need content-based hashing")
+    logger.info(f"  -> Skipped {already_processed} already-processed files")
+    logger.info(f"  -> {len(potentially_new)} files need content-based hashing")
 
     if not potentially_new:
-        print("No new PDFs to process.")
+        logger.info("No new PDFs to process.")
         return
 
-    print(f"Stage 2: Content-based hashing for {len(potentially_new)} new files...")
+    logger.info(f"Stage 2: Content-based hashing for {len(potentially_new)} new files...")
     content_hash_map = {}
 
     for pdf in tqdm(potentially_new, desc="Content hashing"):
@@ -565,32 +573,32 @@ def task_extract_new(processed_path: Path, raw_paths: list[Path]):
             content_hash = hash_file_content(pdf)
             content_hash_map[pdf] = content_hash
         except Exception as e:
-            print(f"\n  Error hashing {pdf.name}: {e}")
+            logger.error(f"Error hashing {pdf.name}: {e}")
 
     files_to_process = [pdf for pdf in potentially_new if content_hash_map.get(pdf) not in known_hashes]
-    print(f"Found {len(files_to_process)} truly new PDFs to process.")
+    logger.info(f"Found {len(files_to_process)} truly new PDFs to process.")
 
     if files_to_process:
         rename_pdf_files(files_to_process, content_hash_map, known_hashes, processed_path, failure_logger)
 
-    print("Extraction complete.")
+    logger.info("Extraction complete.")
 
 
 def task_rename_files(processed_path: Path):
     """Rename existing PDF files based on metadata."""
-    print("Renaming existing PDF files and metadata based on metadata...")
+    logger.info("Renaming existing PDF files and metadata based on metadata...")
 
     valid_entries = []
 
     for metadata_path, metadata in iter_json_files(processed_path, show_progress=True, progress_desc="Validating metadata", validate=True):
         pdf_path = metadata_path.with_suffix(".pdf")
         if not pdf_path.exists():
-            print(f"Skipping {metadata_path.name}: PDF file not found")
+            logger.warning(f"Skipping {metadata_path.name}: PDF file not found")
             continue
 
         valid_entries.append((pdf_path, metadata))
 
-    print(f"Found {len(valid_entries)} files to rename")
+    logger.info(f"Found {len(valid_entries)} files to rename")
 
     renamed_count = 0
     for old_pdf_path, metadata in valid_entries:
@@ -608,11 +616,11 @@ def task_rename_files(processed_path: Path):
             shutil.move(old_metadata_path, new_metadata_path)
             renamed_count += 1
             if renamed_count <= 10 or renamed_count % 100 == 0:
-                print(f"[{renamed_count}] Renamed: {old_pdf_path.name} -> {new_filename}")
+                logger.info(f"[{renamed_count}] Renamed: {old_pdf_path.name} -> {new_filename}")
         except Exception as e:
-            print(f"Failed to rename {old_pdf_path.name}: {e}")
+            logger.error(f"Failed to rename {old_pdf_path.name}: {e}")
 
-    print(f"Renaming complete. Renamed {renamed_count} files.")
+    logger.info(f"Renaming complete. Renamed {renamed_count} files.")
 
 
 def task_export_all_dates(
@@ -624,14 +632,14 @@ def task_export_all_dates(
     processed_path = Path(processed_path)
     export_base_dir = Path(export_base_dir)
 
-    print("Scanning for unique dates in processed files...")
+    logger.info("Scanning for unique dates in processed files...")
     all_dates = get_unique_dates(processed_path)
 
     if not all_dates:
-        print("No dates found in processed files.")
+        logger.info("No dates found in processed files.")
         return
 
-    print(f"Found {len(all_dates)} unique dates: {', '.join(all_dates[:10])}{' ...' if len(all_dates) > 10 else ''}")
+    logger.info(f"Found {len(all_dates)} unique dates: {', '.join(all_dates[:10])}{' ...' if len(all_dates) > 10 else ''}")
 
     total_copied = 0
     total_skipped = 0
@@ -639,16 +647,16 @@ def task_export_all_dates(
 
     for date in all_dates:
         export_date_dir = export_base_dir / date
-        print(f"\n[{date}] Processing...")
+        logger.info(f"[{date}] Processing...")
 
         stats = copy_matching_files(processed_path, date, export_date_dir, incremental=True)
         total_copied += stats['copied']
         total_skipped += stats['skipped']
 
         if stats['total'] == 0:
-            print(f"  No files match date pattern '{date}'")
+            logger.info(f"  No files match date pattern '{date}'")
         else:
-            print(f"  Copied: {stats['copied']}, Skipped: {stats['skipped']}, Total: {stats['total']}")
+            logger.info(f"  Copied: {stats['copied']}, Skipped: {stats['skipped']}, Total: {stats['total']}")
 
         if stats['copied'] > 0:
             changed_directories.append(export_date_dir)
@@ -656,39 +664,39 @@ def task_export_all_dates(
             if export_date_dir.exists() and directory_has_changed(export_date_dir):
                 changed_directories.append(export_date_dir)
 
-    print("\n=== Summary ===")
-    print(f"Processed {len(all_dates)} date(s)")
-    print(f"Total files copied: {total_copied}")
-    print(f"Total files skipped (unchanged): {total_skipped}")
-    print(f"Directories with changes: {len(changed_directories)}")
+    logger.info("=== Summary ===")
+    logger.info(f"Processed {len(all_dates)} date(s)")
+    logger.info(f"Total files copied: {total_copied}")
+    logger.info(f"Total files skipped (unchanged): {total_skipped}")
+    logger.info(f"Directories with changes: {len(changed_directories)}")
 
     if run_merge and changed_directories:
-        print("\n=== Running PDF Merge ===")
+        logger.info("=== Running PDF Merge ===")
         from shutil import which
         if which("pdf-merger") is None:
-            print("WARNING: pdf-merger tool not found in PATH. Skipping merge step.")
+            logger.warning("pdf-merger tool not found in PATH. Skipping merge step.")
         else:
             for export_dir in changed_directories:
-                print(f"\nMerging PDFs in {export_dir}...")
+                logger.info(f"Merging PDFs in {export_dir}...")
                 result = subprocess.run(f'pdf-merger "{export_dir}"', shell=True, text=True)
                 if result.returncode == 0:
-                    print("  Merge completed successfully")
+                    logger.info("  Merge completed successfully")
                     validate_merged_pdf(export_dir)
                 else:
-                    print(f"  Merge failed with exit code {result.returncode}")
+                    logger.error(f"  Merge failed with exit code {result.returncode}")
 
-    print("\nExport all dates complete.")
+    logger.info("Export all dates complete.")
 
 
 def task_bootstrap_mappings(processed_path: Path, mappings_mgr):
     """Populate mappings from existing metadata JSON files."""
     if mappings_mgr is None:
-        print("Error: Mappings manager not initialized.")
+        logger.error("Mappings manager not initialized.")
         return
 
     json_files = list(processed_path.rglob("*.json"))
     if not json_files:
-        print(f"No metadata files found in {processed_path}")
+        logger.info(f"No metadata files found in {processed_path}")
         return
 
     doc_type_count = 0
@@ -724,26 +732,26 @@ def task_bootstrap_mappings(processed_path: Path, mappings_mgr):
         except Exception as e:
             skipped += 1
             if skipped <= 5:
-                print(f"Skipping {metadata_path.name}: {e}")
+                logger.warning(f"Skipping {metadata_path.name}: {e}")
 
     mappings_mgr._save()
 
-    print("\nBootstrap complete:")
-    print(f"  Document type mappings added: {doc_type_count}")
-    print(f"  Issuing party mappings added: {issuer_count}")
-    print(f"  Files skipped: {skipped}")
-    print(f"\nMappings saved to: {mappings_mgr.path}")
+    logger.info("Bootstrap complete:")
+    logger.info(f"  Document type mappings added: {doc_type_count}")
+    logger.info(f"  Issuing party mappings added: {issuer_count}")
+    logger.info(f"  Files skipped: {skipped}")
+    logger.info(f"Mappings saved to: {mappings_mgr.path}")
 
     stats = mappings_mgr.get_stats()
-    print("\nCurrent mappings stats:")
+    logger.info("Current mappings stats:")
     for field, counts in stats.items():
-        print(f"  {field}: {counts['confirmed']} confirmed, {counts['auto']} auto, {counts['canonicals']} canonicals")
+        logger.info(f"  {field}: {counts['confirmed']} confirmed, {counts['auto']} auto, {counts['canonicals']} canonicals")
 
 
 def task_review_mappings(mappings_mgr):
     """Interactive review of auto-added mappings."""
     if mappings_mgr is None:
-        print("Error: Mappings manager not initialized.")
+        logger.error("Mappings manager not initialized.")
         return
 
     doc_auto = mappings_mgr.get_auto_mappings("document_types")
@@ -752,11 +760,11 @@ def task_review_mappings(mappings_mgr):
     total_pending = len(doc_auto) + len(issuer_auto)
 
     if total_pending == 0:
-        print("No auto-added mappings pending review.")
+        logger.info("No auto-added mappings pending review.")
         stats = mappings_mgr.get_stats()
-        print("\nCurrent mappings stats:")
+        logger.info("Current mappings stats:")
         for field, counts in stats.items():
-            print(f"  {field}: {counts['confirmed']} confirmed, {counts['auto']} auto")
+            logger.info(f"  {field}: {counts['confirmed']} confirmed, {counts['auto']} auto")
         return
 
     print("=" * 60)
@@ -787,15 +795,15 @@ def task_review_mappings(mappings_mgr):
     if choice == 'a':
         doc_confirmed = mappings_mgr.confirm_all("document_types", save=False)
         issuer_confirmed = mappings_mgr.confirm_all("issuing_parties", save=True)
-        print(f"\nConfirmed {doc_confirmed} document type mappings and {issuer_confirmed} issuer mappings.")
+        logger.info(f"Confirmed {doc_confirmed} document type mappings and {issuer_confirmed} issuer mappings.")
 
     elif choice == 'r':
         _review_field_mappings(mappings_mgr, "document_types", doc_auto)
         _review_field_mappings(mappings_mgr, "issuing_parties", issuer_auto)
-        print("\nReview complete.")
+        logger.info("Review complete.")
 
     else:
-        print("No changes made.")
+        logger.info("No changes made.")
 
 
 def _review_field_mappings(mappings_mgr, field: str, mappings_dict: dict):
@@ -831,7 +839,7 @@ def _review_field_mappings(mappings_mgr, field: str, mappings_dict: dict):
 def task_add_canonical(mappings_mgr, field: str, canonical: str):
     """Add a new canonical value to the mappings."""
     if mappings_mgr is None:
-        print("Error: Mappings manager not initialized.")
+        logger.error("Mappings manager not initialized.")
         return
 
     field_map = {
@@ -843,14 +851,14 @@ def task_add_canonical(mappings_mgr, field: str, canonical: str):
 
     normalized_field = field_map.get(field.lower())
     if not normalized_field:
-        print(f"Error: Unknown field '{field}'. Use 'document_type' or 'issuing_party'.")
+        logger.error(f"Unknown field '{field}'. Use 'document_type' or 'issuing_party'.")
         return
 
     if mappings_mgr.add_canonical(normalized_field, canonical):
-        print(f"Added canonical '{canonical}' to {normalized_field}.")
-        print(f"Current canonicals: {', '.join(mappings_mgr.get_canonicals(normalized_field))}")
+        logger.info(f"Added canonical '{canonical}' to {normalized_field}.")
+        logger.info(f"Current canonicals: {', '.join(mappings_mgr.get_canonicals(normalized_field))}")
     else:
-        print(f"Canonical '{canonical}' already exists in {normalized_field}.")
+        logger.info(f"Canonical '{canonical}' already exists in {normalized_field}.")
 
 
 def task_gmail_download():
@@ -860,7 +868,7 @@ def task_gmail_download():
 
     profile = get_current_profile()
     if not profile:
-        print("Error: No profile is active.")
+        logger.error("No profile is active.")
         sys.exit(1)
 
     raw_paths = profile.paths.raw
@@ -872,7 +880,7 @@ def task_gmail_download():
             missing.append("paths.raw")
         if not processed_path_str:
             missing.append("paths.processed")
-        print(f"Missing required profile settings: {', '.join(missing)}")
+        logger.error(f"Missing required profile settings: {', '.join(missing)}")
         sys.exit(1)
 
     raw_path = Path(raw_paths[0])
@@ -887,12 +895,12 @@ def task_gmail_download():
     if unique_dates:
         most_recent = unique_dates[0]
         start_date = datetime.strptime(f"{most_recent}-01", "%Y-%m-%d")
-        print(f"Date range: {start_date.date()} to {end_date.date()}")
+        logger.info(f"Date range: {start_date.date()} to {end_date.date()}")
     else:
         start_date = end_date - timedelta(days=30)
-        print("No processed files found. Using default range: last 30 days")
+        logger.info("No processed files found. Using default range: last 30 days")
 
-    print(f"Downloading attachments to: {raw_path}")
+    logger.info(f"Downloading attachments to: {raw_path}")
 
     stats = download_gmail_attachments(
         output_dir=raw_path,
@@ -900,25 +908,25 @@ def task_gmail_download():
         end_date=end_date,
     )
 
-    print("\n=== Gmail Download Summary ===")
-    print(f"Messages found: {stats['messages_found']}")
-    print(f"Messages processed: {stats['messages_processed']}")
-    print(f"Messages skipped: {stats['messages_skipped']}")
-    print(f"Attachments downloaded: {stats['attachments_downloaded']}")
-    print(f"Attachments failed: {stats['attachments_failed']}")
-    print(f"Bytes downloaded: {stats['bytes_downloaded']:,}")
+    logger.info("=== Gmail Download Summary ===")
+    logger.info(f"Messages found: {stats['messages_found']}")
+    logger.info(f"Messages processed: {stats['messages_processed']}")
+    logger.info(f"Messages skipped: {stats['messages_skipped']}")
+    logger.info(f"Attachments downloaded: {stats['attachments_downloaded']}")
+    logger.info(f"Attachments failed: {stats['attachments_failed']}")
+    logger.info(f"Bytes downloaded: {stats['bytes_downloaded']:,}")
 
 
 # ------------------- PIPELINE -------------------
 
 def run_step(cmd, step_desc):
     """Run a pipeline step."""
-    print(f"### {step_desc}...")
+    logger.info(f"### {step_desc}...")
     result = subprocess.run(cmd, shell=True, text=True)
     if result.returncode != 0:
-        print(f"{step_desc} failed with exit code {result.returncode}.")
+        logger.error(f"{step_desc} failed with exit code {result.returncode}.")
         sys.exit(result.returncode)
-    print(f"### {step_desc}... Finished.")
+    logger.info(f"### {step_desc}... Finished.")
 
 
 def pipeline(export_date_arg=None):
@@ -937,12 +945,12 @@ def pipeline(export_date_arg=None):
     ]
     missing = [name for name, val in required_vars if not val]
     if missing:
-        print(f"Missing required .env variables: {', '.join(missing)}")
+        logger.error(f"Missing required .env variables: {', '.join(missing)}")
         sys.exit(1)
 
     for tool in ["mbox-extractor", "archive-extractor", "pdf-merger"]:
         if which(tool) is None:
-            print(f"Required tool '{tool}' not found in PATH. Please install it and try again.")
+            logger.error(f"Required tool '{tool}' not found in PATH. Please install it and try again.")
             sys.exit(1)
 
     if export_date_arg:
@@ -954,7 +962,7 @@ def pipeline(export_date_arg=None):
         export_date = last_month.strftime("%Y-%m")
 
     if not re.match(r"^\d{4}-\d{2}$", export_date):
-        print("The export_date must be in YYYY-MM format.")
+        logger.error("The export_date must be in YYYY-MM format.")
         sys.exit(1)
 
     export_date_dir = os.path.join(EXPORT_FILES_DIR, export_date)
@@ -972,7 +980,7 @@ def pipeline(export_date_arg=None):
         if passwords_file:
             # Use profile file reference directly
             zip_passwords_file_path = passwords_file
-            print(f"Using passwords file from profile: {zip_passwords_file_path}")
+            logger.debug(f"Using passwords file from profile: {zip_passwords_file_path}")
         else:
             # Create temp file for inline data
             temp_passwords = tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.txt')
@@ -980,9 +988,9 @@ def pipeline(export_date_arg=None):
             temp_passwords.close()
             zip_passwords_file_path = temp_passwords.name
             temp_passwords_file = temp_passwords.name
-            print(f"Created temporary passwords file: {zip_passwords_file_path}")
+            logger.debug(f"Created temporary passwords file: {zip_passwords_file_path}")
     else:
-        print("Warning: No passwords configured. Skipping password-protected archives.")
+        logger.warning("No passwords configured. Skipping password-protected archives.")
         zip_passwords_file_path = None
 
     # Get validations from profile (inline or file reference)
@@ -993,7 +1001,7 @@ def pipeline(export_date_arg=None):
         if validations_file:
             # Use profile file reference directly
             validations_file_path = validations_file
-            print(f"Using validations file from profile: {validations_file_path}")
+            logger.debug(f"Using validations file from profile: {validations_file_path}")
         else:
             # Create temp file for inline data
             temp_validations = tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.json')
@@ -1001,7 +1009,7 @@ def pipeline(export_date_arg=None):
             temp_validations.close()
             validations_file_path = temp_validations.name
             temp_validations_file = temp_validations.name
-            print(f"Created temporary validations file: {validations_file_path}")
+            logger.debug(f"Created temporary validations file: {validations_file_path}")
     else:
         validations_file_path = None
 
@@ -1027,24 +1035,24 @@ def pipeline(export_date_arg=None):
     if validations_file_path:
         run_step(f'"{sys.executable}" "{__file__}" check_files_exist "{export_date_dir}" --check_schema_path "{validations_file_path}"', "Step 9: Validate exported files")
     else:
-        print("Step 9: Skipping file validation (no validation rules configured in profile)")
+        logger.info("Step 9: Skipping file validation (no validation rules configured in profile)")
 
     # Cleanup temporary files
     if temp_passwords_file:
         try:
             os.unlink(temp_passwords_file)
-            print(f"Cleaned up temporary passwords file: {temp_passwords_file}")
+            logger.debug(f"Cleaned up temporary passwords file: {temp_passwords_file}")
         except Exception as e:
-            print(f"Warning: Failed to cleanup temporary passwords file: {e}")
+            logger.warning(f"Failed to cleanup temporary passwords file: {e}")
 
     if temp_validations_file:
         try:
             os.unlink(temp_validations_file)
-            print(f"Cleaned up temporary validations file: {temp_validations_file}")
+            logger.debug(f"Cleaned up temporary validations file: {temp_validations_file}")
         except Exception as e:
-            print(f"Warning: Failed to cleanup temporary validations file: {e}")
+            logger.warning(f"Failed to cleanup temporary validations file: {e}")
 
-    print("All steps completed successfully.")
+    logger.info("All steps completed successfully.")
 
 
 def process_folder(task: str, processed_path: str, raw_paths=None, excel_output_path: str = None,
@@ -1061,29 +1069,29 @@ def process_folder(task: str, processed_path: str, raw_paths=None, excel_output_
     elif task == "rename_files":
         task_rename_files(processed_path)
     elif task == "validate_metadata":
-        print("Validating existing metadata and PDFs...")
+        logger.info("Validating existing metadata and PDFs...")
         validate_metadata(processed_path)
-        print("Validation complete.")
+        logger.info("Validation complete.")
     elif task == "export_excel":
-        print("Exporting metadata to Excel...")
+        logger.info("Exporting metadata to Excel...")
         export_metadata_to_excel(processed_path, excel_output_path)
-        print("Excel export complete.")
+        logger.info("Excel export complete.")
     elif task == "copy_matching":
         if not regex_pattern or not copy_dest_folder:
-            print("For 'copy_matching', --regex_pattern and --copy_dest_folder are required.")
+            logger.error("For 'copy_matching', --regex_pattern and --copy_dest_folder are required.")
             return
         stats = copy_matching_files(processed_path, regex_pattern, Path(copy_dest_folder))
-        print(f"Copied {stats['copied']} files matching '{regex_pattern}' to {copy_dest_folder}")
+        logger.info(f"Copied {stats['copied']} files matching '{regex_pattern}' to {copy_dest_folder}")
     elif task == "export_all_dates":
         task_export_all_dates(processed_path, Path(export_base_dir), run_merge)
     elif task == "check_files_exist":
         if not check_schema_path:
-            print("For 'check_files_exist', --check_schema_path is required.")
+            logger.error("For 'check_files_exist', --check_schema_path is required.")
             return
         check_files_exist(processed_path, Path(check_schema_path))
-        print("File existence check complete.")
+        logger.info("File existence check complete.")
     else:
-        print("Invalid task specified.")
+        logger.error("Invalid task specified.")
 
 
 # ------------------- MAIN -------------------
@@ -1100,6 +1108,11 @@ def main():
         type=str,
         help="Configuration profile to use (e.g., 'default', 'personal', 'work'). "
              "If not specified, uses 'default' profile if available, otherwise legacy .env configuration."
+    )
+    parser.add_argument(
+        "--verbose", "-v",
+        action="store_true",
+        help="Enable verbose output with timestamps and debug messages."
     )
     parser.add_argument("task", type=str, choices=[
         'extract_new', 'rename_files', 'validate_metadata', 'export_excel',
@@ -1118,6 +1131,9 @@ def main():
     parser.add_argument("--field", type=str, help="Field name for add_canonical (document_type or issuing_party).")
     parser.add_argument("--canonical", type=str, help="Canonical value to add.")
     args = parser.parse_args()
+
+    # Initialize logging early (reconfigures the module-level logger)
+    setup_logging(verbose=args.verbose)
 
     # Initialize configuration (profile or legacy .env)
     try:

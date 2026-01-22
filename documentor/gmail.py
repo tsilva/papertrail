@@ -14,7 +14,9 @@ from googleapiclient.errors import HttpError
 from tqdm import tqdm
 
 from documentor.config import get_gmail_config_paths, get_current_profile
-from documentor.logging_utils import setup_failure_logger
+from documentor.logging_utils import setup_failure_logger, get_logger
+
+logger = get_logger('gmail')
 
 # Gmail API scope - read-only access to messages
 SCOPES = ["https://www.googleapis.com/auth/gmail.readonly"]
@@ -357,11 +359,11 @@ class GmailDownloader:
 
         # Build query and list messages
         query = self.build_search_query(start_date, end_date)
-        print(f"Gmail search query: {query}")
+        logger.debug(f"Gmail search query: {query}")
 
         messages = self.list_messages(query)
         stats["messages_found"] = len(messages)
-        print(f"Found {len(messages)} messages with attachments")
+        logger.info(f"Found {len(messages)} messages with attachments")
 
         if not messages:
             return stats
@@ -371,7 +373,7 @@ class GmailDownloader:
         if self.settings.get("skip_already_downloaded", True):
             processed_ids = self.load_processed_messages()
             if processed_ids:
-                print(f"Already processed: {len(processed_ids)} messages")
+                logger.info(f"Already processed: {len(processed_ids)} messages")
 
         # Process messages
         for msg_meta in tqdm(messages, desc="Downloading attachments"):
@@ -435,8 +437,8 @@ def download_gmail_attachments(
         output_dir=output_dir,
     )
 
-    print("Authenticating with Gmail API...")
+    logger.info("Authenticating with Gmail API...")
     downloader.authenticate()
-    print("Authentication successful!")
+    logger.info("Authentication successful!")
 
     return downloader.download_attachments_in_range(start_date, end_date)
