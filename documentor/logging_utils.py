@@ -1,6 +1,7 @@
-"""Logging utilities for failure tracking."""
+"""Logging utilities for failure tracking and application-wide logging."""
 
 import logging
+import sys
 import traceback
 from pathlib import Path
 from typing import Optional
@@ -63,3 +64,73 @@ def log_failure(logger: Optional[logging.Logger], pdf_path: Path, error: Excepti
             'traceback': traceback.format_exc()
         }
     )
+
+
+# ------------------- APPLICATION LOGGING -------------------
+
+class CleanFormatter(logging.Formatter):
+    """Message-only output for normal CLI use."""
+
+    def format(self, record: logging.LogRecord) -> str:
+        return record.getMessage()
+
+
+class VerboseFormatter(logging.Formatter):
+    """Timestamped output for debug mode."""
+
+    def __init__(self):
+        super().__init__(
+            fmt='%(asctime)s [%(levelname)s] %(name)s: %(message)s',
+            datefmt='%Y-%m-%d %H:%M:%S'
+        )
+
+
+def setup_logging(verbose: bool = False, log_file: Optional[Path] = None) -> logging.Logger:
+    """
+    Configure documentor logging system.
+
+    Args:
+        verbose: If True, show DEBUG messages with timestamps.
+                 If False, show INFO messages only (message-only format).
+        log_file: Optional path to a log file for debug output.
+
+    Returns:
+        The root 'documentor' logger instance.
+    """
+    root = logging.getLogger('documentor')
+    root.setLevel(logging.DEBUG)
+    root.handlers.clear()
+
+    # Console handler
+    console = logging.StreamHandler(sys.stderr)
+    if verbose:
+        console.setLevel(logging.DEBUG)
+        console.setFormatter(VerboseFormatter())
+    else:
+        console.setLevel(logging.INFO)
+        console.setFormatter(CleanFormatter())
+    root.addHandler(console)
+
+    # Optional file handler
+    if log_file:
+        fh = logging.FileHandler(log_file, mode='a', encoding='utf-8')
+        fh.setLevel(logging.DEBUG)
+        fh.setFormatter(logging.Formatter(
+            '%(asctime)s [%(levelname)s] %(name)s:%(lineno)d - %(message)s'
+        ))
+        root.addHandler(fh)
+
+    return root
+
+
+def get_logger(name: str) -> logging.Logger:
+    """
+    Get a logger under the documentor namespace.
+
+    Args:
+        name: Logger name (will be prefixed with 'documentor.')
+
+    Returns:
+        Logger instance for documentor.{name}
+    """
+    return logging.getLogger(f'documentor.{name}')

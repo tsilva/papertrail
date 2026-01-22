@@ -5,7 +5,10 @@ import os
 from datetime import datetime
 from typing import Optional, TYPE_CHECKING
 
+from documentor.logging_utils import get_logger
 from documentor.models import DocumentMetadataRaw, DOCUMENT_TYPES, ISSUING_PARTIES
+
+logger = get_logger('llm')
 
 if TYPE_CHECKING:
     from documentor.mappings import MappingsManager
@@ -160,8 +163,8 @@ Respond in JSON format:
         content = response.choices[0].message.content
 
         if not content:
-            print("DEBUG: Empty response from normalization LLM")
-            print(f"DEBUG: Full response: {response}")
+            logger.debug("Empty response from normalization LLM")
+            logger.debug(f"Full response: {response}")
             return doc_type or "$UNKNOWN$", issuing_party or "$UNKNOWN$"
 
         # Extract JSON from the response (handle markdown code blocks)
@@ -172,10 +175,10 @@ Respond in JSON format:
 
         # Validate that the returned values are actually in the canonical lists
         if llm_doc_type not in DOCUMENT_TYPES:
-            print(f"DEBUG: Normalized doc_type '{llm_doc_type}' not in canonical list, using $UNKNOWN$")
+            logger.debug(f"Normalized doc_type '{llm_doc_type}' not in canonical list, using $UNKNOWN$")
             llm_doc_type = "$UNKNOWN$"
         if llm_issuing_party not in ISSUING_PARTIES:
-            print(f"DEBUG: Normalized issuing_party '{llm_issuing_party}' not in canonical list, using $UNKNOWN$")
+            logger.debug(f"Normalized issuing_party '{llm_issuing_party}' not in canonical list, using $UNKNOWN$")
             llm_issuing_party = "$UNKNOWN$"
 
         # Use LLM results for fields that needed normalization
@@ -198,7 +201,6 @@ Respond in JSON format:
         return doc_type, issuing_party
 
     except Exception as e:
-        print(f"Normalization failed: {e}, using $UNKNOWN$ for both fields")
-        import traceback
-        traceback.print_exc()
+        logger.error(f"Normalization failed: {e}, using $UNKNOWN$ for both fields")
+        logger.debug("Traceback:", exc_info=True)
         return doc_type or "$UNKNOWN$", issuing_party or "$UNKNOWN$"
