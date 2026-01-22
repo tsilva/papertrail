@@ -1,12 +1,12 @@
 <div align="center">
-  <img src="logo.png" alt="documentor" width="220"/>
+  <img src="logo.png" alt="papertrail" width="512"/>
 
   [![Python 3.10+](https://img.shields.io/badge/Python-3.10+-3776AB?style=flat&logo=python&logoColor=white)](https://www.python.org/)
   [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg?style=flat)](LICENSE)
   [![OpenRouter](https://img.shields.io/badge/OpenRouter-Vision%20LLMs-6366f1?style=flat&logo=openai&logoColor=white)](https://openrouter.ai/)
   [![PyMuPDF](https://img.shields.io/badge/PyMuPDF-PDF%20Processing-red?style=flat)](https://pymupdf.readthedocs.io/)
 
-  **Stop manually organizing PDFs. Let AI read, classify, and rename your documents automatically.**
+  **AI that follows your document trail - classify, organize, and tame your PDF chaos**
 
   [Quick Start](#-quick-start) · [Features](#-features) · [Documentation](CLAUDE.md)
 </div>
@@ -15,14 +15,14 @@
 
 ## Overview
 
-Documentor automates the tedious task of organizing PDF documents by using vision-capable LLMs to extract and classify metadata directly from document images. It renders PDF pages as images, sends them to AI models for analysis, and automatically renames and organizes files based on extracted information.
+papertrail uses vision LLMs to "read" your PDFs and automatically extract metadata like dates, document types, and issuing parties. It renders PDF pages as images, sends them to AI models for analysis, and organizes your files with consistent naming.
 
 **Before:** `scan_2024_001.pdf`, `document(3).pdf`, `IMG_4521.pdf`
 **After:** `2025-01-02 - invoice - anthropic - claude-api - 120 eur - a1b2c3d4.pdf`
 
-Perfect for organizing invoices, receipts, bank statements, and any document collection that needs consistent naming and metadata extraction.
+Drop a folder of invoices, receipts, contracts, and statements - papertrail figures out what's what and puts everything in order.
 
-## Features
+## ✨ Features
 
 - **Vision-based extraction** - Reads documents exactly as a human would, no brittle text parsing required
 - **Two-phase pipeline** - Raw extraction + normalization ensures consistent, canonical values
@@ -31,14 +31,13 @@ Perfect for organizing invoices, receipts, bank statements, and any document col
 - **Dynamic classification** - Document types and issuing parties are learned from your existing files
 - **Excel export** - Generate spreadsheets for accounting and record-keeping
 - **Batch processing** - Process hundreds of documents with progress tracking
-- **Multiple folder support** - Monitor and process from multiple raw document directories
 
-## Quick Start
+## 🚀 Quick Start
 
 ```bash
 # Install with uv (recommended)
-git clone https://github.com/tsilva/documentor.git
-cd documentor
+git clone https://github.com/tsilva/papertrail.git
+cd papertrail
 uv pip install -e .
 
 # Configure environment
@@ -46,12 +45,17 @@ cp .env.example .env
 # Edit .env with your OpenRouter API key and folder paths
 
 # Process PDFs
-documentor extract_new /path/to/processed --raw_path /path/to/raw
+python main.py extract_new /path/to/processed --raw_path /path/to/raw
 ```
 
-**Your first document will be classified and renamed in under 10 seconds.**
+### Output Example
 
-## Installation
+```
+Raw file:  scan_20250115_001.pdf
+Becomes:   2025-01-15 - invoice - anthropic - claude-api - 120 eur - a1b2c3d4.pdf
+```
+
+## 📦 Installation
 
 ### Prerequisites
 
@@ -62,15 +66,9 @@ documentor extract_new /path/to/processed --raw_path /path/to/raw
 ### Standard Installation
 
 ```bash
-# Clone repository
-git clone https://github.com/tsilva/documentor.git
-cd documentor
-
-# Install with uv (recommended)
+git clone https://github.com/tsilva/papertrail.git
+cd papertrail
 uv pip install -e .
-
-# Or with pip
-pip install -e .
 ```
 
 ### Configuration
@@ -79,17 +77,47 @@ Create a `.env` file in the repository root:
 
 ```env
 # OpenRouter configuration
-OPENROUTER_MODEL_ID=openai/gpt-4.1              # or google/gemini-2.5-flash
-OPENROUTER_API_KEY=sk-or-v1-...                 # Your API key
-OPENROUTER_BASE_URL=https://openrouter.ai/api/v1
+OPENROUTER_MODEL_ID=google/gemini-2.5-flash
+OPENROUTER_API_KEY=sk-or-v1-...
 
 # Document directories (multiple paths separated by ';')
-RAW_FILES_DIR=/path/to/raw/pdfs;/optional/second/path
+RAW_FILES_DIR=/path/to/raw/pdfs
 PROCESSED_FILES_DIR=/path/to/processed
 EXPORT_FILES_DIR=/path/to/export
 ```
 
-**Cost estimate**: Using GPT-4 Vision, processing a 2-page invoice costs approximately $0.02-0.05 per document.
+**Cost estimate**: Using GPT-4 Vision, processing a 2-page invoice costs approximately $0.02-0.05 per document. Gemini Flash is 10-20x cheaper.
+
+### Profile-Based Configuration (Recommended)
+
+Profiles simplify multi-environment management with YAML files:
+
+```bash
+# Create a profile from template
+cp profiles/default.yaml.example profiles/default.yaml
+
+# Run with profile
+python main.py --profile default extract_new /path/to/processed
+```
+
+**Example Profile** (`profiles/default.yaml`):
+
+```yaml
+profile:
+  name: "default"
+  description: "Default configuration"
+
+paths:
+  raw: ["/path/to/raw/documents"]
+  processed: "/path/to/processed"
+  export: "/path/to/export"
+
+openrouter:
+  model_id: "google/gemini-2.5-flash"
+  api_key: "${OPENROUTER_API_KEY}"
+```
+
+See [profiles/README.md](profiles/README.md) for detailed documentation.
 
 <details>
 <summary><strong>Gmail Integration Setup (Optional)</strong></summary>
@@ -107,146 +135,49 @@ To automatically download PDF attachments from Gmail:
    cp config/gmail_settings.json.example config/gmail_settings.json
    ```
 
-3. **Edit settings** for MIME types and label filters:
-   ```json
-   {
-     "mime_types": ["application/pdf"],
-     "label_ids": ["INBOX"],
-     "max_results": 100
-   }
-   ```
-
-4. **First run** will open browser for OAuth authorization and save token to `config/gmail_token.json`
+3. **First run** will open browser for OAuth authorization
 
 </details>
 
-### Configuration Profiles (Recommended)
-
-**New in v0.2**: Profiles simplify configuration management with YAML files. Use profiles to manage multiple environments (personal, work, testing) with a single file per environment.
-
-**Quick Start:**
-
-```bash
-# 1. Create a profile from template
-cp profiles/default.yaml.example profiles/default.yaml
-
-# 2. Edit with your settings
-vim profiles/default.yaml
-
-# 3. Run with profile
-documentor --profile default extract_new /path/to/processed
-```
-
-**Example Profile** (`profiles/default.yaml`):
-
-```yaml
-profile:
-  name: "default"
-  description: "Default configuration"
-
-paths:
-  raw: ["/path/to/raw/documents"]
-  processed: "/path/to/processed"
-  export: "/path/to/export"
-
-openrouter:
-  model_id: "google/gemini-2.5-flash"
-  api_key: "${OPENROUTER_API_KEY}"  # References .env for security
-  base_url: "https://openrouter.ai/api/v1"
-
-document_types:
-  predefined: null  # Dynamic loading from processed metadata
-
-gmail:
-  enabled: true
-  credentials_file: "../config/gmail_credentials.json"
-  token_file: "../config/gmail_token.json"
-  settings:
-    attachment_mime_types: ["application/pdf"]
-    max_results_per_query: 500
-```
-
-**Using Profiles:**
-
-```bash
-# Auto-detect (uses default.yaml if available, otherwise .env)
-documentor extract_new /path/to/processed
-
-# Explicit profile selection
-documentor --profile personal pipeline
-documentor --profile work export_excel /path/to/processed --excel_output_path output.xlsx
-```
-
-**Multiple Environments:**
-
-```
-profiles/
-├── default.yaml        # Personal documents
-├── work.yaml          # Work documents
-└── test.yaml          # Testing
-```
-
-See [profiles/README.md](profiles/README.md) for detailed documentation.
-
-**Note:** The legacy `.env` configuration still works for backward compatibility. Profiles are optional but recommended for easier multi-environment management.
-
-## Usage
+## 📖 Usage
 
 ### Basic Workflow
 
 ```bash
 # 1. Process new PDFs from raw folder
-documentor extract_new /path/to/processed --raw_path /path/to/raw
+python main.py extract_new /path/to/processed --raw_path /path/to/raw
 
 # 2. Rename files based on extracted metadata
-documentor rename_files /path/to/processed
+python main.py rename_files /path/to/processed
 
 # 3. Export to Excel for accounting
-documentor export_excel /path/to/processed --excel_output_path invoices_2025.xlsx
+python main.py export_excel /path/to/processed --excel_output_path invoices_2025.xlsx
 ```
 
 ### Available Commands
 
-| Command | Description | Example |
-|---------|-------------|---------|
-| `extract_new` | Process new PDFs from raw folder | `documentor extract_new /processed --raw_path /raw` |
-| `rename_files` | Rename files based on metadata | `documentor rename_files /processed` |
-| `validate_metadata` | Check metadata consistency | `documentor validate_metadata /processed` |
-| `export_excel` | Export to Excel spreadsheet | `documentor export_excel /processed --excel_output_path out.xlsx` |
-| `copy_matching` | Copy files matching regex pattern | `documentor copy_matching /processed --regex_pattern "anthropic" --copy_dest_folder /dest` |
-| `export_all_dates` | Export files by date ranges | `documentor export_all_dates /processed --export_base_dir /export` |
-| `check_files_exist` | Validate against schema | `documentor check_files_exist /processed --check_schema_path schema.json` |
-| `pipeline` | Full end-to-end workflow | `documentor pipeline /processed --export_date 2025-01` |
-| `gmail_download` | Download Gmail attachments | `documentor gmail_download /processed` |
-| `bootstrap_mappings` | Populate mappings from existing metadata | `documentor bootstrap_mappings /processed` |
-| `review_mappings` | Interactive review of auto-added mappings | `documentor review_mappings /processed` |
-| `add_canonical` | Add a new canonical value | `documentor add_canonical /processed --field issuing_party --canonical "new-vendor"` |
+| Command | Description |
+|---------|-------------|
+| `extract_new` | Process new PDFs from raw folder |
+| `rename_files` | Rename files based on metadata |
+| `validate_metadata` | Check metadata consistency |
+| `export_excel` | Export to Excel spreadsheet |
+| `copy_matching` | Copy files matching regex pattern |
+| `export_all_dates` | Export files by date ranges |
+| `pipeline` | Full end-to-end workflow |
+| `gmail_download` | Download Gmail attachments |
+| `bootstrap_mappings` | Populate mappings from existing metadata |
+| `review_mappings` | Interactive review of auto-added mappings |
+| `add_canonical` | Add a new canonical value |
 
-### Debug Tools
-
-```bash
-# Debug classification for a specific PDF (shows full LLM response with images)
-python scripts/debug_classification.py /path/to/document.pdf
-
-# Check both fast hash and content hash for a file
-check-hash /path/to/document.pdf
-```
-
-### Example: Full Pipeline
+### Full Pipeline
 
 ```bash
 # Run complete pipeline: download from Gmail → extract → rename → export
-documentor pipeline /path/to/processed --export_date 2025-01
+python main.py pipeline /path/to/processed --export_date 2025-01
 ```
 
-This will:
-1. Download new PDF attachments from Gmail
-2. Process any new documents in raw folders
-3. Rename files according to metadata
-4. Validate metadata consistency
-5. Export to Excel for the specified month
-
-## How It Works
+## 🏗️ How It Works
 
 ### Two-Phase Extraction Pipeline
 
@@ -260,353 +191,63 @@ graph LR
     F --> G[Renamed File]
 ```
 
-**Phase 1 - Raw Extraction**: Renders the first 2 pages as JPEG images, sends them to a vision-capable LLM (GPT-4 Vision, Gemini, etc.), and extracts metadata exactly as it appears on the document.
+**Phase 1 - Raw Extraction**: Renders PDF pages as images, sends to vision LLM, extracts metadata exactly as it appears.
 
-**Phase 2 - Normalization**: Maps raw extracted values to canonical enums using fuzzy matching and predefined mappings (e.g., "Anthropic, PBC" → "Anthropic", "€" → "EUR").
+**Phase 2 - Normalization**: Maps raw values to canonical forms using learned mappings (e.g., "Anthropic, PBC" → "anthropic").
 
-### Two-Tier Hashing System
+### Two-Tier Normalization
 
-Documentor uses a sophisticated dual-hash approach to detect duplicates:
-
-| Hash Type | Algorithm | Purpose | Performance |
-|-----------|-----------|---------|-------------|
-| **Fast hash** | SHA256 of raw bytes (8 chars) | Quick duplicate filtering during ingestion | Instant |
-| **Content hash** | SHA256 of rendered pixels at 150 DPI | Detect true duplicates even if PDF metadata differs | ~1-2 sec/doc |
-
-**Why both?** The fast hash quickly filters obvious duplicates. The content hash detects duplicates that have been re-saved, edited, or have different metadata but identical visual content.
-
-### Dynamic Classification
-
-Document types and issuing parties are not hardcoded. They are dynamically loaded from existing metadata JSON files in your processed directory. This means:
-
-- Your first few documents establish the classification patterns
-- New document types are automatically added as you process documents
-- The system adapts to your specific use case (invoices, receipts, statements, contracts, etc.)
-- Always includes `$UNKNOWN$` fallback for unrecognized values
-
-### File Naming Convention
-
-Generated filenames follow a consistent, sortable pattern:
+papertrail learns from your documents. When it sees "Anthropic, PBC" the first time, it normalizes to `anthropic` and remembers. Next time - instant lookup, no LLM call.
 
 ```
-YYYY-MM-DD - document-type - issuing-party - [service] - [amount currency] - hash.pdf
+Raw: "Anthropic, PBC" → Check mappings.yaml → Found! → Return "anthropic" (no LLM)
+Raw: "New Vendor Inc" → Check mappings.yaml → Not found → LLM → "new-vendor" → Save
 ```
 
-**Examples**:
-- `2025-01-02 - invoice - anthropic - claude-api - 120 eur - a1b2c3d4.pdf`
-- `2024-12-15 - receipt - aws - ec2 - 450 usd - e5f6g7h8.pdf`
-- `2025-01-10 - bank-statement - chase - checking - 0 usd - i9j0k1l2.pdf`
+### Two-Tier Hashing
 
-All components are lowercase, sanitized, and safe for all filesystems.
+| Hash Type | Purpose | Speed |
+|-----------|---------|-------|
+| **Fast hash** | Quick duplicate filtering | Instant |
+| **Content hash** | True duplicates (different metadata, same content) | ~1-2 sec/doc |
 
-### Two-Tier Normalization System
-
-Documentor uses a mapping persistence system to ensure deterministic normalization without repeated LLM calls:
-
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                      Raw Value Extraction                       │
-│                   "Anthropic, PBC" from PDF                     │
-└────────────────────────────┬────────────────────────────────────┘
-                             │
-                             ▼
-┌─────────────────────────────────────────────────────────────────┐
-│  TIER 1: Mappings Lookup (config/mappings.yaml)                 │
-│  ├── confirmed: { "Anthropic, PBC": "anthropic" } ← Found!      │
-│  └── Return "anthropic" immediately (no LLM call)               │
-└─────────────────────────────────────────────────────────────────┘
-
-┌─────────────────────────────────────────────────────────────────┐
-│  TIER 2: LLM Fallback (only if not in mappings)                 │
-│  ├── Ask LLM: "New Company LLC" → "new-company"                 │
-│  └── Save to mappings.yaml as 'auto' for future reuse           │
-└─────────────────────────────────────────────────────────────────┘
-```
-
-**Benefits:**
-- Known values normalize instantly without API calls
-- New values are learned and remembered
-- Review auto-added mappings to ensure accuracy
-
-**Mappings file structure** (`config/mappings.yaml`):
-- `confirmed`: User-validated mappings (trusted)
-- `auto`: LLM-generated mappings (pending review)
-- `canonicals`: Master list of valid canonical values
-
-**Workflow:**
-```bash
-# 1. Bootstrap from existing processed documents
-documentor bootstrap_mappings /path/to/processed
-
-# 2. Review auto-added mappings interactively
-documentor review_mappings /path/to/processed
-
-# 3. Add new canonical values as needed
-documentor add_canonical /path/to/processed --field issuing_party --canonical "new-vendor"
-```
-
-## Data Models
-
-Documentor uses Pydantic models for type-safe metadata handling:
-
-```python
-class DocumentMetadataRaw:
-    """Phase 1: Exact text from document"""
-    issue_date: str
-    document_type: str
-    issuing_party: str
-    service_name: Optional[str]
-    total_amount: Optional[float]
-    total_amount_currency: Optional[str]
-    confidence: float
-    reasoning: str
-
-class DocumentMetadata:
-    """Phase 2: Normalized with hashes and timestamps"""
-    issue_date: str
-    document_type: DocumentType        # Enum
-    issuing_party: IssuingParty        # Enum
-    service_name: Optional[str]
-    total_amount: Optional[float]
-    total_amount_currency: Optional[str]
-    confidence: float
-    reasoning: str
-    content_hash: str                  # 8-char content hash
-    file_hash: str                     # 8-char fast hash
-    create_date: datetime
-    update_date: datetime
-    document_type_raw: str             # Original extracted value
-    issuing_party_raw: str             # Original extracted value
-```
-
-Metadata is stored as JSON sidecar files alongside each PDF (e.g., `document.pdf` → `document.json`).
-
-## Project Structure
-
-```
-documentor/
-├── main.py                          # Core application (~1666 lines)
-│   ├── Classification pipeline      # Lines 567-650
-│   ├── Normalization logic          # Lines 487-565
-│   ├── Hashing functions            # Lines 348-385
-│   └── CLI task handlers            # Lines 1167-1578
-├── documentor/
-│   ├── config.py                    # Environment and OpenAI client
-│   ├── gmail.py                     # Gmail API integration
-│   ├── hashing.py                   # Two-tier hashing system
-│   ├── llm.py                       # LLM prompts and tools
-│   ├── logging_utils.py             # Failure logging
-│   ├── mappings.py                  # Two-tier normalization mappings
-│   ├── metadata.py                  # Metadata operations
-│   ├── models.py                    # Pydantic models
-│   └── pdf.py                       # PDF rendering utilities
-├── scripts/
-│   ├── debug_classification.py      # Debug LLM classification
-│   ├── check_hash.py                # Verify file hashes (CLI: check-hash)
-│   ├── update_hashes.py             # Batch update hashes
-│   └── migrate_duplicates.py        # Handle duplicate files
-├── config/                          # Configuration files (gitignored)
-│   ├── mappings.yaml                # Raw → canonical normalization mappings
-│   ├── passwords.txt.example        # ZIP extraction passwords
-│   ├── gmail_credentials.json       # OAuth2 credentials
-│   ├── gmail_settings.json.example  # Gmail download settings
-│   └── document_types.json.example  # Fallback document types
-├── pyproject.toml                   # Project metadata and dependencies
-├── CLAUDE.md                        # AI assistant context documentation
-└── README.md                        # This file
-```
-
-## Environment Variables
-
-| Variable | Required | Description | Example |
-|----------|----------|-------------|---------|
-| `OPENROUTER_MODEL_ID` | Yes | Vision model to use | `openai/gpt-4.1` or `google/gemini-2.5-flash` |
-| `OPENROUTER_API_KEY` | Yes | Your OpenRouter API key | `sk-or-v1-...` |
-| `OPENROUTER_BASE_URL` | No | API endpoint | `https://openrouter.ai/api/v1` (default) |
-| `RAW_FILES_DIR` | Yes | Source PDF directories (`;` separated) | `/path/to/raw;/another/path` |
-| `PROCESSED_FILES_DIR` | Yes | Destination for processed files | `/path/to/processed` |
-| `EXPORT_FILES_DIR` | Yes | Export directory for date-based exports | `/path/to/export` |
-
-## Supported Models
-
-Documentor works with any vision-capable model available on OpenRouter:
-
-| Model | Provider | Speed | Cost (per doc) | Recommended For |
-|-------|----------|-------|----------------|-----------------|
-| `openai/gpt-4.1` | OpenAI | Medium | $0.02-0.05 | Highest accuracy |
-| `google/gemini-2.5-flash` | Google | Fast | $0.001-0.005 | Cost-effective processing |
-| `anthropic/claude-3-5-sonnet` | Anthropic | Medium | $0.03-0.06 | Complex documents |
-| `openai/gpt-4o-mini` | OpenAI | Fast | $0.005-0.01 | Budget-friendly |
-
-Performance tested on 2-page invoices. Actual costs vary based on document complexity.
-
-## Common Workflows
-
-### Workflow 1: Process Monthly Invoices
+## 🛠️ Development
 
 ```bash
-# 1. Download from Gmail
-documentor gmail_download /path/to/processed
+# Debug a classification
+python scripts/debug_classification.py /path/to/document.pdf
 
-# 2. Process new documents
-documentor extract_new /path/to/processed --raw_path /path/to/raw
-
-# 3. Export to Excel for accounting
-documentor export_excel /path/to/processed --excel_output_path invoices_january_2025.xlsx
+# Check file hashes
+python scripts/check_hash.py /path/to/document.pdf
 ```
 
-### Workflow 2: Organize Historical Documents
+## 📊 Performance
 
-```bash
-# Process existing PDFs
-documentor extract_new /path/to/processed --raw_path /path/to/historical
+Benchmarked on M1 MacBook Pro:
 
-# Validate metadata consistency
-documentor validate_metadata /path/to/processed
+| Operation | Throughput |
+|-----------|------------|
+| Fast hash | 1200 docs/min |
+| Content hash | 50 docs/min |
+| LLM (GPT-4) | 12-20 docs/min |
+| LLM (Gemini Flash) | 30-60 docs/min |
 
-# Export by date ranges
-documentor export_all_dates /path/to/processed --export_base_dir /export
-```
+## 🔧 Troubleshooting
 
-### Workflow 3: Filter and Copy Specific Documents
+**Classification returns `$UNKNOWN$`**: Use `python scripts/debug_classification.py` to see what the LLM sees.
 
-```bash
-# Copy all documents from a specific company
-documentor copy_matching /path/to/processed \
-  --regex_pattern "anthropic" \
-  --copy_dest_folder /path/to/anthropic_docs
-```
+**Duplicates not detected**: Run `python scripts/update_hashes.py /processed` to update content hashes.
 
-## Advanced Features
+**High API costs**: Switch to `google/gemini-2.5-flash` for 10-20x cost reduction.
 
-### Password-Protected ZIPs
+## 📄 License
 
-Documentor can automatically extract PDFs from password-protected ZIP files. Add passwords to `config/passwords.txt`:
-
-```
-password1
-password2
-password3
-```
-
-The system will try each password when encountering encrypted archives.
-
-### Custom Document Types
-
-Document types are dynamically discovered from your existing metadata. To seed initial types, create `config/document_types.json`:
-
-```json
-[
-  "invoice",
-  "receipt",
-  "bank-statement",
-  "contract",
-  "tax-document",
-  "$UNKNOWN$"
-]
-```
-
-### Validation Schema
-
-Create custom validation rules in `config/file_check_validations.json`:
-
-```json
-{
-  "2025-01": {
-    "invoice - anthropic": {
-      "count": 1,
-      "amount": 120.00,
-      "currency": "EUR"
-    }
-  }
-}
-```
-
-Run validation: `documentor check_files_exist /processed --check_schema_path config/file_check_validations.json`
-
-## Troubleshooting
-
-### Common Issues
-
-**Problem**: Classification returns `$UNKNOWN$` for document type
-**Solution**: Ensure the first 2 pages of the PDF contain clear document type information. Use `python scripts/debug_classification.py` to see what the LLM is seeing.
-
-**Problem**: Duplicate files not detected
-**Solution**: Run content hash update: `python scripts/update_hashes.py /processed`. Content hashing is slower but more reliable.
-
-**Problem**: Gmail authentication fails
-**Solution**: Delete `config/gmail_token.json` and re-authenticate. Ensure Gmail API is enabled in Google Cloud Console.
-
-**Problem**: High API costs
-**Solution**: Switch to `google/gemini-2.5-flash` for 10-20x cost reduction with similar accuracy.
-
-### Debug Mode
-
-Enable verbose logging by examining the LLM's raw response:
-
-```bash
-python scripts/debug_classification.py /path/to/problem_document.pdf
-```
-
-This shows:
-- The exact images sent to the LLM
-- The full API response including reasoning
-- Extracted metadata before normalization
-- Any validation errors
-
-## Performance
-
-Benchmarked on M1 MacBook Pro with 100 2-page invoices:
-
-| Operation | Time | Throughput |
-|-----------|------|------------|
-| Fast hash calculation | 0.05s/doc | 1200 docs/min |
-| Content hash calculation | 1.2s/doc | 50 docs/min |
-| LLM classification (GPT-4) | 3-5s/doc | 12-20 docs/min |
-| LLM classification (Gemini Flash) | 1-2s/doc | 30-60 docs/min |
-| Excel export (1000 docs) | 2.1s | N/A |
-
-Network latency and API rate limits are the primary bottlenecks. Use Gemini Flash for maximum throughput.
-
-## Dependencies
-
-| Category | Packages | Purpose |
-|----------|----------|---------|
-| **Core** | `openai`, `PyMuPDF`, `pydantic` | LLM API, PDF rendering, data validation |
-| **Data** | `pandas`, `openpyxl` | Excel export, data manipulation |
-| **Utils** | `pillow`, `tqdm`, `python-dotenv` | Image processing, progress bars, config |
-| **Gmail** | `google-api-python-client`, `google-auth-*` | Email integration |
-
-Full dependency list in `pyproject.toml`.
-
-## Contributing
-
-Contributions are welcome. Please:
-
-1. Open an issue to discuss proposed changes before submitting a pull request
-2. Follow existing code style (Black formatter, type hints)
-3. Add tests for new features (when test suite is added)
-4. Update CLAUDE.md with any significant changes
-
-## Roadmap
-
-- [ ] Add test suite with pytest
-- [ ] Support for scanned documents (OCR integration)
-- [ ] Web interface for manual review and correction
-- [ ] Bulk metadata editing
-- [ ] Integration with accounting software (QuickBooks, Xero)
-- [ ] Support for non-PDF formats (images, Word docs)
-
-## License
-
-This project is licensed under the MIT License. See the [LICENSE](LICENSE) file for details.
+MIT License - see [LICENSE](LICENSE) for details.
 
 ---
 
 <div align="center">
   <strong>Built by <a href="https://github.com/tsilva">Tiago Silva</a></strong>
-  <br><br>
-  If this project helps you organize your documents, consider giving it a ⭐
   <br><br>
   <sub>Powered by <a href="https://openrouter.ai/">OpenRouter</a> • <a href="https://pymupdf.readthedocs.io/">PyMuPDF</a> • Vision LLMs</sub>
 </div>
