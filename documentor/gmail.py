@@ -69,12 +69,12 @@ class GmailDownloader:
 
         # Check profile first
         if profile and profile.gmail.enabled:
-            # Build settings dict from profile
+            # Build settings dict from profile (settings are flattened on GmailConfig)
             return {
-                "attachment_mime_types": profile.gmail.settings.attachment_mime_types,
-                "label_filter": profile.gmail.settings.label_filter,
-                "max_results_per_query": profile.gmail.settings.max_results_per_query,
-                "skip_already_downloaded": profile.gmail.settings.skip_already_downloaded,
+                "attachment_mime_types": profile.gmail.attachment_mime_types,
+                "label_filter": profile.gmail.label_filter,
+                "max_results_per_query": profile.gmail.max_results_per_query,
+                "skip_already_downloaded": profile.gmail.skip_already_downloaded,
             }
 
         # Fall back to settings file
