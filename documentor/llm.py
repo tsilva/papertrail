@@ -5,13 +5,13 @@ import os
 from datetime import datetime
 from typing import Optional, TYPE_CHECKING
 
-from documentor.logging_utils import get_logger
-from documentor.models import DocumentMetadataRaw, DOCUMENT_TYPES, ISSUING_PARTIES
+from papertrail.logging_utils import get_logger
+from papertrail.models import DocumentMetadataRaw, DOCUMENT_TYPES, ISSUING_PARTIES
 
 logger = get_logger('llm')
 
 if TYPE_CHECKING:
-    from documentor.mappings import MappingsManager
+    from papertrail.mappings import MappingsManager
 
 
 def _extract_json_from_response(content: str) -> str:

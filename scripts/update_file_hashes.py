@@ -9,8 +9,8 @@ from pathlib import Path
 
 from tqdm import tqdm
 
-from documentor.config import load_config
-from documentor.hashing import hash_file_fast
+from papertrail.config import load_config
+from papertrail.hashing import hash_file_fast
 
 
 def update_missing_file_hashes(processed_folder: str, dry_run: bool = True):

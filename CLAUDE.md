@@ -1,4 +1,4 @@
-# Documentor - Claude Code Context
+# papertrail - Claude Code Context
 
 AI-powered PDF document classification and organization tool using vision LLMs via OpenRouter.
 
@@ -44,13 +44,13 @@ Document types and issuing parties are loaded dynamically from existing metadata
 | File | Purpose | Key Lines |
 |------|---------|-----------|
 | `main.py` | Core app | Entry point, CLI tasks |
-| `documentor/models.py` | Pydantic models | `DocumentMetadataRaw`, `DocumentMetadata` |
-| `documentor/llm.py` | LLM classification | `normalize_metadata` with two-tier lookup |
-| `documentor/mappings.py` | Mapping persistence | `MappingsManager` class |
-| `documentor/hashing.py` | File hashing | `hash_file_fast`, `hash_file_content` |
+| `papertrail/models.py` | Pydantic models | `DocumentMetadataRaw`, `DocumentMetadata` |
+| `papertrail/llm.py` | LLM classification | `normalize_metadata` with two-tier lookup |
+| `papertrail/mappings.py` | Mapping persistence | `MappingsManager` class |
+| `papertrail/hashing.py` | File hashing | `hash_file_fast`, `hash_file_content` |
 | `scripts/debug_classification.py` | Debug LLM calls | Full API response with images |
 | `scripts/check_hash.py` | Verify hashes | CLI: `check-hash` |
-| `documentor/gmail.py` | Gmail API client | `GmailDownloader`, `download_gmail_attachments` |
+| `papertrail/gmail.py` | Gmail API client | `GmailDownloader`, `download_gmail_attachments` |
 
 ## Data Models (Pydantic)
 
@@ -99,8 +99,8 @@ profile:
 
 paths:
   raw: ["/Users/tsilva/Desktop/Takeout/"]
-  processed: "/Users/tsilva/Google Drive/My Drive/documentor-puzzle/processed/"
-  export: "/Users/tsilva/Google Drive/My Drive/documentor-puzzle/export/"
+  processed: "/Users/tsilva/Google Drive/My Drive/papertrail-puzzle/processed/"
+  export: "/Users/tsilva/Google Drive/My Drive/papertrail-puzzle/export/"
 
 openrouter:
   model_id: "google/gemini-2.5-flash"

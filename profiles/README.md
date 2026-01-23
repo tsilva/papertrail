@@ -1,6 +1,6 @@
 # Configuration Profiles
 
-Profile-based configuration system for managing multiple Documentor environments (personal, work, testing, etc.) with a single YAML file per environment.
+Profile-based configuration system for managing multiple papertrail environments (personal, work, testing, etc.) with a single YAML file per environment.
 
 ## Quick Start
 
@@ -14,9 +14,9 @@ Profile-based configuration system for managing multiple Documentor environments
    vim default.yaml  # or use your favorite editor
    ```
 
-3. **Run Documentor with your profile:**
+3. **Run papertrail with your profile:**
    ```bash
-   documentor --profile default extract_new /path/to/processed
+   papertrail --profile default extract_new /path/to/processed
    ```
 
 ## Credentials Storage
@@ -260,13 +260,13 @@ Use the `--profile` flag to select a profile:
 
 ```bash
 # Use the 'default' profile
-documentor --profile default extract_new /path/to/processed
+papertrail --profile default extract_new /path/to/processed
 
 # Use the 'personal' profile
-documentor --profile personal pipeline
+papertrail --profile personal pipeline
 
 # Use the 'work' profile
-documentor --profile work export_excel /path/to/processed --excel_output_path output.xlsx
+papertrail --profile work export_excel /path/to/processed --excel_output_path output.xlsx
 ```
 
 ### Auto-Detection
@@ -278,7 +278,7 @@ If `--profile` is not specified:
 
 ### Legacy .env Mode
 
-Profiles are optional. If no profiles exist or you don't specify `--profile`, Documentor falls back to the legacy `.env` configuration system.
+Profiles are optional. If no profiles exist or you don't specify `--profile`, papertrail falls back to the legacy `.env` configuration system.
 
 ## Creating Profiles
 
@@ -315,9 +315,9 @@ profiles/
 Switch between them:
 
 ```bash
-documentor --profile personal pipeline
-documentor --profile work pipeline --export_date 2025-01
-documentor --profile test extract_new /tmp/test-processed --raw_path /tmp/test-raw
+papertrail --profile personal pipeline
+papertrail --profile work pipeline --export_date 2025-01
+papertrail --profile test extract_new /tmp/test-processed --raw_path /tmp/test-raw
 ```
 
 ## Configuration Precedence
@@ -425,7 +425,7 @@ To migrate from legacy `.env` to profiles:
 
 3. **Test the profile:**
    ```bash
-   documentor --profile default validate_metadata /path/to/processed
+   papertrail --profile default validate_metadata /path/to/processed
    ```
 
 4. **Keep .env for secrets:**
@@ -552,6 +552,6 @@ task_defaults: {}
 
 ## Additional Resources
 
-- [Main README](../README.md) - General Documentor documentation
+- [Main README](../README.md) - General papertrail documentation
 - [CLAUDE.md](../CLAUDE.md) - Development context
 - [.env.example](../.env.example) - Legacy configuration example

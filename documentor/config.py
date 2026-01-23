@@ -7,7 +7,7 @@ from typing import Optional
 import openai
 from dotenv import load_dotenv
 
-from documentor.profiles import Profile
+from papertrail.profiles import Profile
 
 
 # ============================================================================
@@ -175,7 +175,7 @@ def get_passwords() -> tuple[list[str], str | None]:
         - If using file reference: (passwords, file_path)
         - If no passwords configured: ([], None)
     """
-    from documentor.profiles import get_passwords_from_profile
+    from papertrail.profiles import get_passwords_from_profile
 
     profile = get_current_profile()
 
@@ -195,7 +195,7 @@ def get_validations() -> tuple[dict, str | None]:
         - If using file reference: (validations_dict, file_path)
         - If no validations configured: ({}, None)
     """
-    from documentor.profiles import get_validations_from_profile
+    from papertrail.profiles import get_validations_from_profile
 
     profile = get_current_profile()
 

@@ -17,7 +17,7 @@ def setup_failure_logger(log_path: Optional[Path] = None) -> logging.Logger:
     Returns:
         Configured logger instance
     """
-    logger = logging.getLogger("documentor.failures")
+    logger = logging.getLogger("papertrail.failures")
     logger.setLevel(logging.ERROR)
 
     # Clear existing handlers
@@ -87,7 +87,7 @@ class VerboseFormatter(logging.Formatter):
 
 def setup_logging(verbose: bool = False, log_file: Optional[Path] = None) -> logging.Logger:
     """
-    Configure documentor logging system.
+    Configure papertrail logging system.
 
     Args:
         verbose: If True, show DEBUG messages with timestamps.
@@ -95,9 +95,9 @@ def setup_logging(verbose: bool = False, log_file: Optional[Path] = None) -> log
         log_file: Optional path to a log file for debug output.
 
     Returns:
-        The root 'documentor' logger instance.
+        The root 'papertrail' logger instance.
     """
-    root = logging.getLogger('documentor')
+    root = logging.getLogger('papertrail')
     root.setLevel(logging.DEBUG)
     root.handlers.clear()
 
@@ -125,12 +125,12 @@ def setup_logging(verbose: bool = False, log_file: Optional[Path] = None) -> log
 
 def get_logger(name: str) -> logging.Logger:
     """
-    Get a logger under the documentor namespace.
+    Get a logger under the papertrail namespace.
 
     Args:
-        name: Logger name (will be prefixed with 'documentor.')
+        name: Logger name (will be prefixed with 'papertrail.')
 
     Returns:
-        Logger instance for documentor.{name}
+        Logger instance for papertrail.{name}
     """
-    return logging.getLogger(f'documentor.{name}')
+    return logging.getLogger(f'papertrail.{name}')
