@@ -28,7 +28,7 @@ from tqdm import tqdm
 # Add parent directory to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from documentor.mappings import MappingsManager
+from papertrail.mappings import MappingsManager
 
 UNKNOWN_SENTINEL = "$UNKNOWN$"
 

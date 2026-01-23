@@ -1,5 +1,5 @@
 """
-Documentor - AI-powered PDF document classification and organization.
+papertrail - AI-powered PDF document classification and organization.
 
 Main CLI entry point for processing PDF documents.
 """
@@ -21,37 +21,37 @@ from typing import Optional
 import pandas as pd
 from tqdm import tqdm
 
-# Import from documentor package
-from documentor.config import (
+# Import from papertrail package
+from papertrail.config import (
     load_env,
     get_config_paths,
     get_openai_client,
     set_current_profile,
     get_current_profile,
 )
-from documentor.profiles import (
+from papertrail.profiles import (
     load_profile,
     list_available_profiles,
     get_profiles_dir,
     ProfileNotFoundError,
     ProfileError,
 )
-from documentor.hashing import hash_file_fast, hash_file_content
-from documentor.logging_utils import setup_failure_logger, log_failure, setup_logging, get_logger
-from documentor.models import (
+from papertrail.hashing import hash_file_fast, hash_file_content
+from papertrail.logging_utils import setup_failure_logger, log_failure, setup_logging, get_logger
+from papertrail.models import (
     DocumentMetadata,
     DocumentMetadataRaw,
     normalize_enum_field_in_dict,
 )
-from documentor.enums import reset_enum_cache
-from documentor.llm import (
+from papertrail.enums import reset_enum_cache
+from papertrail.llm import (
     get_system_prompt_raw_extraction,
     TOOLS_RAW_EXTRACTION,
     normalize_metadata,
 )
-from documentor.mappings import MappingsManager
-from documentor.pdf import render_pdf_to_images, find_pdf_files, get_page_count
-from documentor.metadata import (
+from papertrail.mappings import MappingsManager
+from papertrail.pdf import render_pdf_to_images, find_pdf_files, get_page_count
+from papertrail.metadata import (
     build_hash_index,
     get_unique_dates,
     save_metadata_json,
@@ -342,7 +342,7 @@ def validate_merged_pdf(folder_path: Path) -> bool:
 def export_metadata_to_excel(processed_path: Path, excel_output_path: str):
     """Export metadata to an Excel file."""
     from enum import Enum
-    from documentor.metadata import iter_json_files
+    from papertrail.metadata import iter_json_files
 
     metadata_list = []
 
@@ -864,7 +864,7 @@ def task_add_canonical(mappings_mgr, field: str, canonical: str):
 def task_gmail_download():
     """Download email attachments from Gmail."""
     from datetime import timedelta
-    from documentor.gmail import download_gmail_attachments
+    from papertrail.gmail import download_gmail_attachments
 
     profile = get_current_profile()
     if not profile:
@@ -968,7 +968,7 @@ def pipeline(export_date_arg=None):
     export_date_dir = os.path.join(EXPORT_FILES_DIR, export_date)
 
     # Get passwords from profile (inline or file reference)
-    from documentor.config import get_passwords, get_validations
+    from papertrail.config import get_passwords, get_validations
     passwords, passwords_file = get_passwords()
 
     # Track temp files for cleanup
@@ -1223,7 +1223,7 @@ def main():
     if args.task == "check_files_exist":
         if not check_schema_path:
             # Get validations from profile
-            from documentor.config import get_validations
+            from papertrail.config import get_validations
             validations, validations_file = get_validations()
             if validations and validations.get('rules'):
                 if validations_file:

@@ -7,7 +7,7 @@ import argparse
 import sys
 from pathlib import Path
 
-from documentor.hashing import hash_file_fast, hash_file_content
+from papertrail.hashing import hash_file_fast, hash_file_content
 
 
 def main():

@@ -11,7 +11,7 @@ from pathlib import Path
 from collections import defaultdict
 import argparse
 
-from documentor.hashing import hash_file_content
+from papertrail.hashing import hash_file_content
 
 
 def get_file_date(filename: str) -> str:

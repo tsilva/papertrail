@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Update all document metadata with new content-based hash (new_hash field).
-Uses the content-based hashing from documentor package.
+Uses the content-based hashing from papertrail package.
 """
 
 import json
@@ -11,8 +11,8 @@ from pathlib import Path
 
 from tqdm import tqdm
 
-from documentor.config import load_config
-from documentor.hashing import hash_file_content
+from papertrail.config import load_config
+from papertrail.hashing import hash_file_content
 
 
 def update_document_hashes(processed_folder: str, dry_run: bool = True):

@@ -7,7 +7,7 @@ from typing import Optional
 
 from pydantic import BaseModel, Field, field_validator
 
-from documentor.enums import (
+from papertrail.enums import (
     clean_enum_string,
     load_document_types,
     load_issuing_parties,
