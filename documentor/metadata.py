@@ -5,7 +5,7 @@ import re
 from pathlib import Path
 from typing import Iterator
 
-from documentor.models import DocumentMetadata
+from papertrail.models import DocumentMetadata
 
 
 def load_metadata_file(json_path: Path) -> DocumentMetadata:

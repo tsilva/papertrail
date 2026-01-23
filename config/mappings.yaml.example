@@ -27,7 +27,7 @@ document_types:
 
   auto:
     # Auto-added by LLM (pending review)
-    # Use 'documentor review_mappings' to approve/edit these
+    # Use 'papertrail review_mappings' to approve/edit these
     # Example:
     # "Tax Invoice": "invoice"
 

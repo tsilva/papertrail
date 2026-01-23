@@ -3,7 +3,7 @@
 
 profile:
   name: "default"
-  description: "Default configuration for Documentor"
+  description: "Default configuration for papertrail"
 
 # Directory paths for document processing
 paths:

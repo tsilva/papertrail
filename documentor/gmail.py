@@ -13,8 +13,8 @@ from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 from tqdm import tqdm
 
-from documentor.config import get_gmail_config_paths, get_current_profile
-from documentor.logging_utils import setup_failure_logger, get_logger
+from papertrail.config import get_gmail_config_paths, get_current_profile
+from papertrail.logging_utils import setup_failure_logger, get_logger
 
 logger = get_logger('gmail')
 

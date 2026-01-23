@@ -6,7 +6,7 @@ from enum import Enum
 from pathlib import Path
 from typing import Optional
 
-from documentor.config import get_current_profile
+from papertrail.config import get_current_profile
 
 
 # ============================================================================

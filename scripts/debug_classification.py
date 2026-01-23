@@ -5,10 +5,10 @@ import json
 import sys
 from pathlib import Path
 
-from documentor.config import load_config, get_openai_client
-from documentor.models import DocumentMetadataRaw
-from documentor.llm import get_system_prompt_raw_extraction, get_tools_raw_extraction
-from documentor.pdf import render_pdf_to_images
+from papertrail.config import load_config, get_openai_client
+from papertrail.models import DocumentMetadataRaw
+from papertrail.llm import get_system_prompt_raw_extraction, get_tools_raw_extraction
+from papertrail.pdf import render_pdf_to_images
 
 # Load config
 config = load_config()

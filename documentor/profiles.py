@@ -1,5 +1,5 @@
 """
-Profile-based configuration system for Documentor.
+Profile-based configuration system for papertrail.
 
 Provides YAML-based configuration profiles for managing multiple environments
 (personal, work, testing) with a single file per environment.
