@@ -2,6 +2,7 @@
 
 import json
 import re
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
 from typing import Iterator
 
@@ -76,6 +77,54 @@ def iter_json_files(
                 yield json_path, data
         except Exception:
             continue
+
+
+def _load_one_json(args: tuple[Path, bool]) -> tuple[Path, DocumentMetadata | dict]:
+    """Load a single JSON file. Top-level function for ProcessPoolExecutor pickling."""
+    json_path, validate = args
+    data = load_json_data(json_path)
+    if validate:
+        return json_path, DocumentMetadata.model_validate(data)
+    return json_path, data
+
+
+def load_json_files_parallel(
+    directory: Path,
+    validate: bool = False,
+    max_workers: int = None,
+    show_progress: bool = False,
+    progress_desc: str = "Loading metadata"
+) -> list[tuple[Path, DocumentMetadata | dict]]:
+    """
+    Load all JSON files in parallel using ProcessPoolExecutor.
+
+    Args:
+        directory: Directory to scan for JSON files
+        validate: If True, return (path, DocumentMetadata). If False, return (path, dict).
+        max_workers: Maximum number of parallel processes (default: CPU count)
+        show_progress: Whether to show a progress bar
+        progress_desc: Description for the progress bar
+
+    Returns:
+        List of tuples (json_path, DocumentMetadata | dict)
+    """
+    json_files = list(directory.rglob("*.json"))
+    results = []
+
+    with ProcessPoolExecutor(max_workers=max_workers) as executor:
+        futures = {executor.submit(_load_one_json, (p, validate)): p for p in json_files}
+        iterator = as_completed(futures)
+        if show_progress:
+            from tqdm import tqdm
+            iterator = tqdm(iterator, total=len(futures), desc=progress_desc)
+
+        for future in iterator:
+            try:
+                results.append(future.result())
+            except Exception:
+                continue
+
+    return results
 
 
 def build_hash_index(directory: Path) -> dict[str, Path]:

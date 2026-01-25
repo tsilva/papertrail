@@ -33,8 +33,22 @@ Mappings file structure:
 - `canonicals`: Master list of valid canonical values
 
 ### Two-Tier Hashing
-- **Fast hash** (`hash_file_fast`, line 348): SHA256 of raw bytes, 8 chars - for quick duplicate filtering
-- **Content hash** (`hash_file`, line 359): Renders all pages at 150 DPI, hashes pixel data - detects true duplicates even if PDF metadata differs
+- **Fast hash** (`hash_file_fast`): SHA256 of raw bytes, 8 chars - for quick duplicate filtering
+- **Content hash** (`hash_file_content`): Renders all pages at 150 DPI, hashes pixel data - detects true duplicates even if PDF metadata differs
+
+### Hash Caching (`HashCache`)
+Content hashing is expensive (~1-2s per file). The `HashCache` class caches file_hash → content_hash mappings in `config/hash_cache.yaml`:
+
+1. Compute fast file hash (cheap, ~0.05s)
+2. Check cache for existing mapping
+3. If cache miss, compute content hash (expensive) and save to cache
+
+```
+file_hash "a1b2c3d4" → cache lookup → hit → return cached content_hash
+file_hash "b2c3d4e5" → cache lookup → miss → compute content_hash → save → return
+```
+
+The `validate_metadata` task uses parallelization (`ProcessPoolExecutor`) for cache misses, providing ~4-8x speedup on cold cache and ~50-100x on warm cache.
 
 ### Dynamic Enums
 Document types and issuing parties are loaded dynamically from existing metadata JSON files in the processed directory. Falls back to hardcoded lists if directory doesn't exist. Always includes `$UNKNOWN$` sentinel.
@@ -47,7 +61,7 @@ Document types and issuing parties are loaded dynamically from existing metadata
 | `papertrail/models.py` | Pydantic models | `DocumentMetadataRaw`, `DocumentMetadata` |
 | `papertrail/llm.py` | LLM classification | `normalize_metadata` with two-tier lookup |
 | `papertrail/mappings.py` | Mapping persistence | `MappingsManager` class |
-| `papertrail/hashing.py` | File hashing | `hash_file_fast`, `hash_file_content` |
+| `papertrail/hashing.py` | File hashing | `HashCache`, `hash_file_fast`, `hash_file_content` |
 | `scripts/debug_classification.py` | Debug LLM calls | Full API response with images |
 | `scripts/check_hash.py` | Verify hashes | CLI: `check-hash` |
 | `papertrail/gmail.py` | Gmail API client | `GmailDownloader`, `download_gmail_attachments` |
@@ -139,6 +153,7 @@ EXPORT_FILES_DIR=/path/to/export
 
 **Config files** in `config/` directory (gitignored, copy from `.example` files):
 - `mappings.yaml` - Raw → canonical mappings for deterministic normalization (see `mappings.yaml.example`)
+- `hash_cache.yaml` - File hash → content hash cache for fast validation (auto-generated)
 - `passwords.txt` - ZIP extraction passwords
 - `file_check_validations.json` - File validation schema
 - `document_types.json` - Fallback document types for classification

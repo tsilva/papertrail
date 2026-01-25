@@ -36,7 +36,7 @@ from papertrail.profiles import (
     ProfileNotFoundError,
     ProfileError,
 )
-from papertrail.hashing import hash_file_fast, hash_file_content
+from papertrail.hashing import hash_file_fast, hash_file_content, HashCache
 from papertrail.logging_utils import setup_failure_logger, log_failure, setup_logging, get_logger
 from papertrail.models import (
     DocumentMetadata,
@@ -268,12 +268,26 @@ def rename_pdf_files(pdf_paths, file_hash_map, known_hashes, processed_path, fai
 
 
 def validate_metadata(output_path: Path):
-    """Validate metadata files and their corresponding PDFs."""
+    """Validate metadata files and their corresponding PDFs.
+
+    Uses caching and parallelization to speed up content hash computation:
+    1. Fast file hash is computed (cheap, ~0.05s)
+    2. Cache is checked for existing file_hash -> content_hash mapping
+    3. Cache misses are computed in parallel using ProcessPoolExecutor
+    """
+    from concurrent.futures import ProcessPoolExecutor, as_completed
+
     valid_entries = []
     errors = []
     json_files = list(output_path.rglob("*.json"))
 
-    for metadata_path in tqdm(json_files, desc="Validating metadata"):
+    # Initialize hash cache
+    cache = HashCache()
+    logger.info(f"Hash cache loaded with {len(cache)} entries")
+
+    # Phase 1: Collect all PDF paths and their expected hashes
+    pdf_info = []  # List of (metadata_path, pdf_path, expected_hash, metadata)
+    for metadata_path in json_files:
         try:
             with open(metadata_path, "r", encoding="utf-8") as f:
                 data = json.load(f)
@@ -281,23 +295,83 @@ def validate_metadata(output_path: Path):
 
             content_hash = metadata.content_hash
             if not content_hash:
-                raise ValueError("Missing 'content_hash' in metadata.")
+                errors.append((metadata_path, "Missing 'content_hash' in metadata."))
+                continue
 
             pdf_path = metadata_path.with_suffix(".pdf")
             if not pdf_path.exists():
-                raise FileNotFoundError(f"Missing PDF for metadata: {pdf_path.name}")
+                errors.append((metadata_path, f"Missing PDF for metadata: {pdf_path.name}"))
+                continue
 
-            actual_hash = hash_file_content(pdf_path)
-            if content_hash != actual_hash:
-                raise ValueError(f"Hash mismatch: metadata content_hash is '{content_hash}', actual is '{actual_hash}'.")
-
-            if content_hash not in pdf_path.name:
-                raise ValueError(f"Filename '{pdf_path.name}' does not include the expected hash '{content_hash}'.")
-
-            valid_entries.append((pdf_path, metadata))
+            pdf_info.append((metadata_path, pdf_path, content_hash, metadata))
 
         except Exception as e:
             errors.append((metadata_path, str(e)))
+
+    if not pdf_info:
+        if errors:
+            logger.warning("Validation errors found:")
+            for meta_path, err in errors:
+                logger.warning(f"- {meta_path}: {err}")
+        return valid_entries
+
+    # Phase 2: Compute fast hashes and check cache
+    logger.info(f"Computing fast hashes for {len(pdf_info)} PDFs...")
+    hash_results = {}  # pdf_path -> content_hash
+    uncached = []  # List of (pdf_path, file_hash)
+
+    for _, pdf_path, _, _ in tqdm(pdf_info, desc="Fast hashing"):
+        file_hash = hash_file_fast(pdf_path)
+        cached_content_hash = cache.get(file_hash)
+        if cached_content_hash:
+            hash_results[pdf_path] = cached_content_hash
+        else:
+            uncached.append((pdf_path, file_hash))
+
+    cache_hits = len(pdf_info) - len(uncached)
+    logger.info(f"  -> Cache hits: {cache_hits}, Cache misses: {len(uncached)}")
+
+    # Phase 3: Parallel content hashing for uncached PDFs
+    if uncached:
+        logger.info(f"Computing content hashes for {len(uncached)} uncached PDFs...")
+        with ProcessPoolExecutor() as executor:
+            # Submit all jobs
+            futures = {executor.submit(hash_file_content, pdf_path): (pdf_path, file_hash)
+                       for pdf_path, file_hash in uncached}
+
+            # Collect results with progress bar
+            for future in tqdm(as_completed(futures), total=len(futures), desc="Content hashing"):
+                pdf_path, file_hash = futures[future]
+                try:
+                    content_hash = future.result()
+                    hash_results[pdf_path] = content_hash
+                    cache.set(file_hash, content_hash)
+                except Exception as e:
+                    # Find the metadata_path for this pdf_path
+                    for metadata_path, p, _, _ in pdf_info:
+                        if p == pdf_path:
+                            errors.append((metadata_path, f"Content hashing failed: {e}"))
+                            break
+
+        # Save cache with new entries
+        cache.save()
+        logger.info(f"Hash cache saved with {len(cache)} entries")
+
+    # Phase 4: Validate using precomputed hashes
+    for metadata_path, pdf_path, expected_hash, metadata in pdf_info:
+        actual_hash = hash_results.get(pdf_path)
+        if actual_hash is None:
+            continue  # Error already recorded
+
+        if expected_hash != actual_hash:
+            errors.append((metadata_path, f"Hash mismatch: metadata content_hash is '{expected_hash}', actual is '{actual_hash}'."))
+            continue
+
+        if expected_hash not in pdf_path.name:
+            errors.append((metadata_path, f"Filename '{pdf_path.name}' does not include the expected hash '{expected_hash}'."))
+            continue
+
+        valid_entries.append((pdf_path, metadata))
 
     if errors:
         logger.warning("Validation errors found:")
@@ -342,11 +416,11 @@ def validate_merged_pdf(folder_path: Path) -> bool:
 def export_metadata_to_excel(processed_path: Path, excel_output_path: str):
     """Export metadata to an Excel file."""
     from enum import Enum
-    from papertrail.metadata import iter_json_files
+    from papertrail.metadata import load_json_files_parallel
 
     metadata_list = []
 
-    for metadata_path, metadata in iter_json_files(processed_path, show_progress=True, progress_desc="Collecting metadata", validate=True):
+    for metadata_path, metadata in load_json_files_parallel(processed_path, validate=True, show_progress=True, progress_desc="Collecting metadata"):
         metadata_dict = metadata.model_dump()
 
         metadata_dict.pop("reasoning", None)
@@ -586,11 +660,13 @@ def task_extract_new(processed_path: Path, raw_paths: list[Path]):
 
 def task_rename_files(processed_path: Path):
     """Rename existing PDF files based on metadata."""
+    from papertrail.metadata import load_json_files_parallel
+
     logger.info("Renaming existing PDF files and metadata based on metadata...")
 
     valid_entries = []
 
-    for metadata_path, metadata in iter_json_files(processed_path, show_progress=True, progress_desc="Validating metadata", validate=True):
+    for metadata_path, metadata in load_json_files_parallel(processed_path, validate=True, show_progress=True, progress_desc="Validating metadata"):
         pdf_path = metadata_path.with_suffix(".pdf")
         if not pdf_path.exists():
             logger.warning(f"Skipping {metadata_path.name}: PDF file not found")

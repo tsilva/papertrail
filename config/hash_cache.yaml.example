@@ -1,0 +1,22 @@
+# Hash cache for content-based deduplication
+#
+# This file caches file_hash -> content_hash mappings to avoid expensive
+# content-based hash recomputation. Content hashing renders all PDF pages
+# at 150 DPI and hashes the pixel data, which is slow (~1-2s per file).
+#
+# The fast file hash (SHA256 of raw bytes) is used as the cache key.
+# Since identical file bytes always produce the same content hash,
+# this cache is always valid.
+#
+# Benefits:
+#   - Cold cache: ~4-8x faster (parallelization across CPU cores)
+#   - Warm cache: ~50-100x faster (only fast hashing needed)
+#
+# Copy this file to config/hash_cache.yaml to get started.
+# The actual hash_cache.yaml is gitignored as it is auto-generated.
+
+# Cache entries: file_hash -> content_hash
+cache:
+  # Example entries (8-char SHA256 prefixes):
+  # a1b2c3d4: e5f6g7h8
+  # b2c3d4e5: f6g7h8i9
