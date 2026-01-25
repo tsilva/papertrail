@@ -2,11 +2,26 @@
 
 import json
 import re
-from concurrent.futures import ProcessPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Iterator
 
 from papertrail.models import DocumentMetadata
+
+# Use orjson for faster JSON parsing (3-10x faster than stdlib json)
+try:
+    import orjson
+
+    def _load_json_fast(path: Path) -> dict:
+        """Load JSON using orjson (fast, releases GIL)."""
+        with open(path, "rb") as f:
+            return orjson.loads(f.read())
+
+except ImportError:
+    def _load_json_fast(path: Path) -> dict:
+        """Fallback to stdlib json if orjson not available."""
+        with open(path, "r", encoding="utf-8") as f:
+            return json.load(f)
 
 
 def load_metadata_file(json_path: Path) -> DocumentMetadata:
@@ -22,8 +37,7 @@ def load_metadata_file(json_path: Path) -> DocumentMetadata:
     Raises:
         Various validation errors if the file is invalid
     """
-    with open(json_path, "r", encoding="utf-8") as f:
-        data = json.load(f)
+    data = _load_json_fast(json_path)
     return DocumentMetadata.model_validate(data)
 
 
@@ -37,8 +51,7 @@ def load_json_data(json_path: Path) -> dict:
     Returns:
         Dictionary with the JSON data
     """
-    with open(json_path, "r", encoding="utf-8") as f:
-        return json.load(f)
+    return _load_json_fast(json_path)
 
 
 def iter_json_files(
@@ -79,29 +92,40 @@ def iter_json_files(
             continue
 
 
-def _load_one_json(args: tuple[Path, bool]) -> tuple[Path, DocumentMetadata | dict]:
-    """Load a single JSON file. Top-level function for ProcessPoolExecutor pickling."""
-    json_path, validate = args
-    data = load_json_data(json_path)
-    if validate:
-        return json_path, DocumentMetadata.model_validate(data)
-    return json_path, data
+def _load_one_json_only(json_path: Path) -> tuple[Path, dict] | None:
+    """Load a single JSON file without validation, returning None on error.
+
+    Uses orjson for fast parsing. Safe for ThreadPoolExecutor since orjson
+    releases the GIL during parsing.
+    """
+    try:
+        data = _load_json_fast(json_path)
+        return json_path, data
+    except Exception:
+        return None
 
 
 def load_json_files_parallel(
     directory: Path,
     validate: bool = False,
-    max_workers: int = None,
+    max_workers: int = 16,
     show_progress: bool = False,
     progress_desc: str = "Loading metadata"
 ) -> list[tuple[Path, DocumentMetadata | dict]]:
     """
-    Load all JSON files in parallel using ProcessPoolExecutor.
+    Load all JSON files in parallel using ThreadPoolExecutor + orjson.
+
+    Uses a two-phase approach when validation is needed:
+    1. Phase 1: Load all JSON files in parallel (I/O bound, threads work well)
+    2. Phase 2: Validate sequentially (CPU bound, GIL prevents thread parallelism)
+
+    This is faster than validating in threads because Pydantic validation
+    is CPU-bound and can't be parallelized with threads.
 
     Args:
         directory: Directory to scan for JSON files
         validate: If True, return (path, DocumentMetadata). If False, return (path, dict).
-        max_workers: Maximum number of parallel processes (default: CPU count)
+        max_workers: Maximum number of parallel threads (default: 16)
         show_progress: Whether to show a progress bar
         progress_desc: Description for the progress bar
 
@@ -109,20 +133,32 @@ def load_json_files_parallel(
         List of tuples (json_path, DocumentMetadata | dict)
     """
     json_files = list(directory.rglob("*.json"))
+    if not json_files:
+        return []
+
+    # Phase 1: Load all JSON files in parallel (I/O bound - threads work well)
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        raw_results = list(executor.map(_load_one_json_only, json_files))
+
+    # Filter out failures
+    loaded = [r for r in raw_results if r is not None]
+
+    if not validate:
+        return loaded
+
+    # Phase 2: Validate sequentially (CPU bound - GIL prevents thread parallelism)
     results = []
+    iterator = loaded
+    if show_progress:
+        from tqdm import tqdm
+        iterator = tqdm(loaded, desc=progress_desc)
 
-    with ProcessPoolExecutor(max_workers=max_workers) as executor:
-        futures = {executor.submit(_load_one_json, (p, validate)): p for p in json_files}
-        iterator = as_completed(futures)
-        if show_progress:
-            from tqdm import tqdm
-            iterator = tqdm(iterator, total=len(futures), desc=progress_desc)
-
-        for future in iterator:
-            try:
-                results.append(future.result())
-            except Exception:
-                continue
+    for json_path, data in iterator:
+        try:
+            metadata = DocumentMetadata.model_validate(data)
+            results.append((json_path, metadata))
+        except Exception:
+            continue
 
     return results
 

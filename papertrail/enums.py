@@ -15,13 +15,17 @@ from papertrail.config import get_current_profile
 
 _DOCUMENT_TYPE_ENUM: Enum | None = None
 _ISSUING_PARTY_ENUM: Enum | None = None
+_DOCUMENT_TYPES_LIST: list[str] | None = None
+_ISSUING_PARTIES_LIST: list[str] | None = None
 
 
 def reset_enum_cache() -> None:
     """Reset the enum cache, forcing re-evaluation on next access."""
-    global _DOCUMENT_TYPE_ENUM, _ISSUING_PARTY_ENUM
+    global _DOCUMENT_TYPE_ENUM, _ISSUING_PARTY_ENUM, _DOCUMENT_TYPES_LIST, _ISSUING_PARTIES_LIST
     _DOCUMENT_TYPE_ENUM = None
     _ISSUING_PARTY_ENUM = None
+    _DOCUMENT_TYPES_LIST = None
+    _ISSUING_PARTIES_LIST = None
 
 
 def get_document_type_enum() -> Enum:
@@ -210,12 +214,18 @@ def load_issuing_parties(processed_files_dir: Optional[str] = None) -> list[str]
     return sorted(values_set)
 
 
-# Convenience functions for backward compatibility
+# Convenience functions with caching for fast repeated access
 def get_document_types() -> list[str]:
-    """Get document types list."""
-    return load_document_types()
+    """Get document types list (cached after first call)."""
+    global _DOCUMENT_TYPES_LIST
+    if _DOCUMENT_TYPES_LIST is None:
+        _DOCUMENT_TYPES_LIST = load_document_types()
+    return _DOCUMENT_TYPES_LIST
 
 
 def get_issuing_parties() -> list[str]:
-    """Get issuing parties list."""
-    return load_issuing_parties()
+    """Get issuing parties list (cached after first call)."""
+    global _ISSUING_PARTIES_LIST
+    if _ISSUING_PARTIES_LIST is None:
+        _ISSUING_PARTIES_LIST = load_issuing_parties()
+    return _ISSUING_PARTIES_LIST
