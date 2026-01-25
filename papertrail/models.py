@@ -69,6 +69,9 @@ class DocumentMetadata(BaseModel):
     document_type_raw: Optional[str] = Field(default=None, description="Original document type as extracted.")
     issuing_party_raw: Optional[str] = Field(default=None, description="Original issuing party as extracted.")
 
+    # Document properties
+    page_count: Optional[int] = Field(default=None, description="Number of pages in the PDF document.")
+
     class Config:
         populate_by_name = True
 

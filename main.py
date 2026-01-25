@@ -232,6 +232,7 @@ def classify_pdf_document(pdf_path: Path, file_hash: str, failure_logger=None) -
         now = datetime.now().strftime("%Y-%m-%d")
         metadata.create_date = now
         metadata.update_date = now
+        metadata.page_count = get_page_count(pdf_path)
         return metadata
     except Exception as e:
         log_failure(failure_logger, pdf_path, e)
@@ -448,7 +449,7 @@ def export_metadata_to_excel(processed_path: Path, excel_output_path: str):
         df = pd.DataFrame(metadata_list)
         ordered_cols = [
             "confidence", "issue_date", "year", "month", "content_hash", "file_hash",
-            "filename", "filename_length", "document_type", "document_type_raw",
+            "filename", "filename_length", "page_count", "document_type", "document_type_raw",
             "issuing_party", "issuing_party_raw", "service_name",
             "total_amount", "total_amount_currency"
         ]
@@ -762,6 +763,53 @@ def task_export_all_dates(
                     logger.error(f"  Merge failed with exit code {result.returncode}")
 
     logger.info("Export all dates complete.")
+
+
+def task_backfill_page_count(processed_path: Path):
+    """Backfill page_count for existing metadata files that don't have it."""
+    json_files = list(processed_path.rglob("*.json"))
+    if not json_files:
+        logger.info(f"No metadata files found in {processed_path}")
+        return
+
+    updated = 0
+    skipped = 0
+    errors = 0
+
+    for metadata_path in tqdm(json_files, desc="Backfilling page_count"):
+        try:
+            with open(metadata_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+
+            # Skip if page_count already exists and is not null
+            if data.get("page_count") is not None:
+                skipped += 1
+                continue
+
+            # Find corresponding PDF
+            pdf_path = metadata_path.with_suffix(".pdf")
+            if not pdf_path.exists():
+                logger.warning(f"Missing PDF for metadata: {metadata_path.name}")
+                errors += 1
+                continue
+
+            # Get page count and update metadata
+            page_count = get_page_count(pdf_path)
+            data["page_count"] = page_count
+
+            # Update the update_date
+            data["update_date"] = datetime.now().strftime("%Y-%m-%d")
+
+            with open(metadata_path, "w", encoding="utf-8") as f:
+                json.dump(data, f, indent=2)
+
+            updated += 1
+
+        except Exception as e:
+            logger.error(f"Failed to process {metadata_path.name}: {e}")
+            errors += 1
+
+    logger.info(f"Backfill complete: {updated} updated, {skipped} skipped (already had page_count), {errors} errors")
 
 
 def task_bootstrap_mappings(processed_path: Path, mappings_mgr):
@@ -1193,7 +1241,8 @@ def main():
     parser.add_argument("task", type=str, choices=[
         'extract_new', 'rename_files', 'validate_metadata', 'export_excel',
         'copy_matching', 'export_all_dates', 'check_files_exist', 'pipeline',
-        'gmail_download', 'bootstrap_mappings', 'review_mappings', 'add_canonical'
+        'gmail_download', 'bootstrap_mappings', 'review_mappings', 'add_canonical',
+        'backfill_page_count'
     ], help="Task to perform.")
     parser.add_argument("processed_path", type=str, nargs='?', help="Path to output folder.")
     parser.add_argument("--raw_path", type=str, help="Path to documents folder(s). Use ';' to separate multiple paths.")
@@ -1245,6 +1294,14 @@ def main():
         if not os.path.exists(args.processed_path):
             parser.error(f"The processed_path '{args.processed_path}' does not exist.")
         task_bootstrap_mappings(Path(args.processed_path), get_ctx().mappings_manager)
+        return
+
+    if args.task == "backfill_page_count":
+        if not args.processed_path:
+            parser.error("backfill_page_count requires the processed_path argument.")
+        if not os.path.exists(args.processed_path):
+            parser.error(f"The processed_path '{args.processed_path}' does not exist.")
+        task_backfill_page_count(Path(args.processed_path))
         return
 
     if not args.processed_path:
