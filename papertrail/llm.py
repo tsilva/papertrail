@@ -3,15 +3,47 @@
 import json
 import os
 from datetime import datetime
+from pathlib import Path
 from typing import Optional, TYPE_CHECKING
 
 from papertrail.logging_utils import get_logger
 from papertrail.models import DocumentMetadataRaw, DOCUMENT_TYPES, ISSUING_PARTIES
+from papertrail.rejected import RejectedValuesManager
 
 logger = get_logger('llm')
 
 if TYPE_CHECKING:
     from papertrail.mappings import MappingsManager
+
+# Global rejected values manager (lazy-loaded)
+_rejected_manager: Optional[RejectedValuesManager] = None
+
+
+def _get_rejected_manager() -> RejectedValuesManager:
+    """Get or create the rejected values manager."""
+    global _rejected_manager
+    if _rejected_manager is None:
+        config_dir = Path(__file__).parent.parent / "config"
+        _rejected_manager = RejectedValuesManager(config_dir / "rejected_values.yaml")
+    return _rejected_manager
+
+
+def _log_rejected_value(field: str, normalized: str, raw: str) -> None:
+    """Log a rejected normalization for review.
+
+    Called when the LLM suggests a canonical value that's not in the allowed list.
+
+    Args:
+        field: Field name ('document_types' or 'issuing_parties')
+        normalized: The canonical value suggested by the LLM (rejected)
+        raw: The original raw value from extraction
+    """
+    manager = _get_rejected_manager()
+    is_new = manager.add_rejected(field, normalized, raw)
+    if is_new:
+        logger.info(f"New rejected {field} logged: '{normalized}' (raw: '{raw}')")
+    else:
+        logger.debug(f"Duplicate rejection: '{normalized}' (raw: '{raw}')")
 
 
 def _extract_json_from_response(content: str) -> str:
@@ -175,10 +207,12 @@ Respond in JSON format:
 
         # Validate that the returned values are actually in the canonical lists
         if llm_doc_type not in DOCUMENT_TYPES:
-            logger.debug(f"Normalized doc_type '{llm_doc_type}' not in canonical list, using $UNKNOWN$")
+            logger.warning(f"Rejected doc_type '{llm_doc_type}' (not in canonical list)")
+            _log_rejected_value("document_types", llm_doc_type, raw_metadata.document_type)
             llm_doc_type = "$UNKNOWN$"
         if llm_issuing_party not in ISSUING_PARTIES:
-            logger.debug(f"Normalized issuing_party '{llm_issuing_party}' not in canonical list, using $UNKNOWN$")
+            logger.warning(f"Rejected issuing_party '{llm_issuing_party}' (not in canonical list)")
+            _log_rejected_value("issuing_parties", llm_issuing_party, raw_metadata.issuing_party)
             llm_issuing_party = "$UNKNOWN$"
 
         # Use LLM results for fields that needed normalization
@@ -188,12 +222,13 @@ Respond in JSON format:
             issuing_party = llm_issuing_party
 
         # Save successful LLM mappings for reuse (as 'auto' pending review)
+        # IMPORTANT: Don't save mappings that result in $UNKNOWN$ - these are rejections, not valid mappings
         if mappings:
-            if need_doc_type and raw_metadata.document_type != "$UNKNOWN$":
+            if need_doc_type and raw_metadata.document_type != "$UNKNOWN$" and doc_type != "$UNKNOWN$":
                 mappings.add_mapping(
                     raw_metadata.document_type, doc_type, "document_types", confirmed=False
                 )
-            if need_issuing_party and raw_metadata.issuing_party != "$UNKNOWN$":
+            if need_issuing_party and raw_metadata.issuing_party != "$UNKNOWN$" and issuing_party != "$UNKNOWN$":
                 mappings.add_mapping(
                     raw_metadata.issuing_party, issuing_party, "issuing_parties", confirmed=False
                 )
