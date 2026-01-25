@@ -192,4 +192,7 @@ config/file_check_validations.json
 # Mappings file (contains personal vendor names)
 config/mappings.yaml
 
+# Hash cache (auto-generated)
+config/hash_cache.yaml
+
 .claude/settings.local.json
