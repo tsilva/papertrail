@@ -6,7 +6,57 @@ from enum import Enum
 from pathlib import Path
 from typing import Optional
 
+import yaml
+
 from papertrail.config import get_current_profile
+
+
+def _load_mappings_canonicals() -> tuple[set[str], set[str]]:
+    """Load canonical values from mappings.yaml.
+
+    Returns:
+        Tuple of (document_type_canonicals, issuing_party_canonicals)
+    """
+    # Find mappings.yaml in config directory
+    config_paths = [
+        Path(__file__).parent.parent / "config" / "mappings.yaml",
+        Path.cwd() / "config" / "mappings.yaml",
+    ]
+
+    doc_types = set()
+    issuing_parties = set()
+
+    for config_path in config_paths:
+        if config_path.exists():
+            try:
+                with open(config_path, "r", encoding="utf-8") as f:
+                    mappings = yaml.safe_load(f)
+
+                # Get document_types canonicals
+                if mappings and "document_types" in mappings:
+                    canonicals = mappings["document_types"].get("canonicals", [])
+                    if canonicals:
+                        doc_types.update(canonicals)
+                    # Also include values from confirmed and auto mappings
+                    for section in ["confirmed", "auto"]:
+                        if section in mappings["document_types"]:
+                            doc_types.update(mappings["document_types"][section].values())
+
+                # Get issuing_parties canonicals
+                if mappings and "issuing_parties" in mappings:
+                    canonicals = mappings["issuing_parties"].get("canonicals", [])
+                    if canonicals:
+                        issuing_parties.update(canonicals)
+                    # Also include values from confirmed and auto mappings
+                    for section in ["confirmed", "auto"]:
+                        if section in mappings["issuing_parties"]:
+                            issuing_parties.update(mappings["issuing_parties"][section].values())
+
+                break  # Found and loaded, stop searching
+            except Exception:
+                continue
+
+    return doc_types, issuing_parties
 
 
 # ============================================================================
@@ -139,26 +189,27 @@ def load_document_types(processed_files_dir: Optional[str] = None) -> list[str]:
         else:
             processed_files_dir = os.getenv("PROCESSED_FILES_DIR")
 
-    if not processed_files_dir or not Path(processed_files_dir).exists():
-        return FALLBACK_DOCUMENT_TYPES
+    # Start with fallback values
+    values_set = set(FALLBACK_DOCUMENT_TYPES)
 
-    # Scan processed files for dynamic values
-    values_set = set()
-    processed_path = Path(processed_files_dir)
+    # Scan processed files for dynamic values if path exists
+    if processed_files_dir and Path(processed_files_dir).exists():
+        processed_path = Path(processed_files_dir)
 
-    for json_file in processed_path.rglob("*.json"):
-        try:
-            with open(json_file, "r", encoding="utf-8") as f:
-                data = json.load(f)
-                value = data.get("document_type")
-                if value and isinstance(value, str):
-                    value = clean_enum_string(value, "DocumentType")
-                    values_set.add(value)
-        except Exception:
-            continue
+        for json_file in processed_path.rglob("*.json"):
+            try:
+                with open(json_file, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                    value = data.get("document_type")
+                    if value and isinstance(value, str):
+                        value = clean_enum_string(value, "DocumentType")
+                        values_set.add(value)
+            except Exception:
+                continue
 
-    if not values_set:
-        return FALLBACK_DOCUMENT_TYPES
+    # Merge in canonical values from mappings.yaml
+    doc_type_canonicals, _ = _load_mappings_canonicals()
+    values_set.update(doc_type_canonicals)
 
     values_set.add("$UNKNOWN$")
     return sorted(values_set)
@@ -189,26 +240,27 @@ def load_issuing_parties(processed_files_dir: Optional[str] = None) -> list[str]
         else:
             processed_files_dir = os.getenv("PROCESSED_FILES_DIR")
 
-    if not processed_files_dir or not Path(processed_files_dir).exists():
-        return FALLBACK_ISSUING_PARTIES
+    # Start with fallback values
+    values_set = set(FALLBACK_ISSUING_PARTIES)
 
-    # Scan processed files for dynamic values
-    values_set = set()
-    processed_path = Path(processed_files_dir)
+    # Scan processed files for dynamic values if path exists
+    if processed_files_dir and Path(processed_files_dir).exists():
+        processed_path = Path(processed_files_dir)
 
-    for json_file in processed_path.rglob("*.json"):
-        try:
-            with open(json_file, "r", encoding="utf-8") as f:
-                data = json.load(f)
-                value = data.get("issuing_party")
-                if value and isinstance(value, str):
-                    value = clean_enum_string(value, "IssuingParty")
-                    values_set.add(value)
-        except Exception:
-            continue
+        for json_file in processed_path.rglob("*.json"):
+            try:
+                with open(json_file, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                    value = data.get("issuing_party")
+                    if value and isinstance(value, str):
+                        value = clean_enum_string(value, "IssuingParty")
+                        values_set.add(value)
+            except Exception:
+                continue
 
-    if not values_set:
-        return FALLBACK_ISSUING_PARTIES
+    # Merge in canonical values from mappings.yaml
+    _, issuing_party_canonicals = _load_mappings_canonicals()
+    values_set.update(issuing_party_canonicals)
 
     values_set.add("$UNKNOWN$")
     return sorted(values_set)
