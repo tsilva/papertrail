@@ -15,7 +15,7 @@ dependencies = [
     "openai",
     "PyMuPDF",
     "pandas",
-    "pydantic",
+    "pydantic",uv
     "pyyaml>=6.0",
     "openpyxl",
     "pillow",
