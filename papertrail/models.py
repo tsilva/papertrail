@@ -99,12 +99,15 @@ class DocumentMetadata(BaseModel):
             return "$UNKNOWN$"
         if isinstance(value, str):
             value = clean_enum_string(value, "IssuingParty")
-            # Normalize to lowercase for matching
+            # Check if value exists in enum (case-insensitive)
+            valid_parties = get_issuing_parties()
+            valid_parties_lower = {p.lower(): p for p in valid_parties}
             value_lower = value.lower()
-            if value_lower not in get_issuing_parties():
+            if value_lower not in valid_parties_lower:
                 logger.warning(f"Pydantic rejected issuing_party '{value}' - not in enum")
                 return "$UNKNOWN$"
-            value = value_lower
+            # Return the canonical casing from the enum
+            return valid_parties_lower[value_lower]
         return value
 
     @field_validator('document_type', mode='before')
@@ -114,12 +117,15 @@ class DocumentMetadata(BaseModel):
             return "$UNKNOWN$"
         if isinstance(value, str):
             value = clean_enum_string(value, "DocumentType")
-            # Normalize to lowercase for matching
+            # Check if value exists in enum (case-insensitive)
+            valid_types = get_document_types()
+            valid_types_lower = {t.lower(): t for t in valid_types}
             value_lower = value.lower()
-            if value_lower not in get_document_types():
+            if value_lower not in valid_types_lower:
                 logger.warning(f"Pydantic rejected document_type '{value}' - not in enum")
                 return "$UNKNOWN$"
-            value = value_lower
+            # Return the canonical casing from the enum
+            return valid_types_lower[value_lower]
         return value
 
     @field_validator('total_amount', mode='before')
