@@ -15,6 +15,9 @@ from papertrail.enums import (
     get_document_types,
     get_issuing_parties,
 )
+from papertrail.logging_utils import get_logger
+
+logger = get_logger('models')
 
 
 # Load enum values at module level for initial type annotations
@@ -96,8 +99,12 @@ class DocumentMetadata(BaseModel):
             return "$UNKNOWN$"
         if isinstance(value, str):
             value = clean_enum_string(value, "IssuingParty")
-            if value not in get_issuing_parties():
+            # Normalize to lowercase for matching
+            value_lower = value.lower()
+            if value_lower not in get_issuing_parties():
+                logger.warning(f"Pydantic rejected issuing_party '{value}' - not in enum")
                 return "$UNKNOWN$"
+            value = value_lower
         return value
 
     @field_validator('document_type', mode='before')
@@ -107,8 +114,12 @@ class DocumentMetadata(BaseModel):
             return "$UNKNOWN$"
         if isinstance(value, str):
             value = clean_enum_string(value, "DocumentType")
-            if value not in get_document_types():
+            # Normalize to lowercase for matching
+            value_lower = value.lower()
+            if value_lower not in get_document_types():
+                logger.warning(f"Pydantic rejected document_type '{value}' - not in enum")
                 return "$UNKNOWN$"
+            value = value_lower
         return value
 
     @field_validator('total_amount', mode='before')
