@@ -72,7 +72,9 @@ class OpenRouterConfig:
     """OpenRouter API configuration."""
     model_id: Optional[str] = None
     api_key: Optional[str] = None
-    base_url: str = "https://openrouter.ai/api/v1"
+    base_url: str = field(default_factory=lambda: os.getenv(
+        "OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1"
+    ))
 
 
 @dataclass
@@ -298,7 +300,9 @@ def _parse_profile_dict(data: Dict[str, Any], profile_path: Path) -> Profile:
     openrouter = OpenRouterConfig(
         model_id=openrouter_data.get("model_id"),
         api_key=openrouter_data.get("api_key"),
-        base_url=openrouter_data.get("base_url", "https://openrouter.ai/api/v1")
+        base_url=openrouter_data.get("base_url") or os.getenv(
+            "OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1"
+        )
     )
 
     doc_types_data = data.get("document_types", {})

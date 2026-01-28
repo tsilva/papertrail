@@ -114,24 +114,41 @@ def get_gmail_config_paths() -> dict[str, Path]:
     return paths
 
 
-def load_env() -> Optional[Path]:
+def load_env(env_name: Optional[str] = None) -> tuple[Optional[Path], Optional[str]]:
     """
-    Load environment variables from repo root .env file.
+    Load environment variables from .env, or .env.{name} if specified.
 
     Used for environment variable expansion in profile values (e.g., ${OPENROUTER_API_KEY}).
-    Silently returns None if .env not found.
+    When env_name is provided, loads .env.{name} instead of .env (standalone behavior).
+
+    Args:
+        env_name: Optional environment name (loads .env.{name} instead of .env)
 
     Returns:
-        Path to the .env file, or None if not found
+        Tuple of (env_path, env_name) - env_path is the file that was loaded
     """
-    paths = get_config_paths()
-    env_path = paths["env"]
+    import logging
 
-    if not env_path.exists():
-        return None
+    repo_root = get_repo_root()
 
-    load_dotenv(dotenv_path=env_path, override=True)
-    return env_path
+    # Load environment file (standalone behavior)
+    if env_name:
+        # Only load .env.{name} when specified
+        env_path = repo_root / f".env.{env_name}"
+        if env_path.exists():
+            load_dotenv(dotenv_path=env_path, override=True)
+        else:
+            logging.getLogger('cli').warning(f"Environment file not found: {env_path}")
+            env_path = None
+    else:
+        # Load base .env when no env specified
+        env_path = repo_root / ".env"
+        if env_path.exists():
+            load_dotenv(dotenv_path=env_path, override=True)
+        else:
+            env_path = None
+
+    return (env_path, env_name)
 
 
 def get_openai_client() -> openai.OpenAI:

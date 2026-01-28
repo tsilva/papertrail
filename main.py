@@ -88,12 +88,13 @@ def get_ctx() -> AppContext:
     return _ctx
 
 
-def initialize_config(profile_name: Optional[str] = None) -> None:
+def initialize_config(profile_name: Optional[str] = None, env_name: Optional[str] = None) -> None:
     """
     Initialize configuration from profile.
 
     Args:
         profile_name: Profile name to load, or None for auto-detection (uses 'default')
+        env_name: Optional environment overlay name (loads .env.{name} on top of .env)
 
     Raises:
         ProfileNotFoundError: If specified profile doesn't exist
@@ -101,7 +102,7 @@ def initialize_config(profile_name: Optional[str] = None) -> None:
     """
     global _ctx
 
-    load_env()
+    load_env(env_name)
 
     profiles_dir = get_profiles_dir()
     profiles_exist = profiles_dir.exists() and any(profiles_dir.glob("*.yaml"))
@@ -1678,6 +1679,12 @@ def main():
              "If not specified, uses 'default' profile if available, otherwise legacy .env configuration."
     )
     parser.add_argument(
+        "--env",
+        type=str,
+        help="Environment to use (loads .env.{name} instead of .env). "
+             "Example: --env local loads .env.local for local LLM proxy."
+    )
+    parser.add_argument(
         "--verbose", "-v",
         action="store_true",
         help="Enable verbose output with timestamps and debug messages."
@@ -1707,7 +1714,7 @@ def main():
 
     # Initialize configuration (profile or legacy .env)
     try:
-        initialize_config(args.profile)
+        initialize_config(args.profile, env_name=args.env)
     except ProfileNotFoundError as e:
         parser.error(str(e))
     except ProfileError as e:
