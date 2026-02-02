@@ -1258,7 +1258,7 @@ def _collect_reextract_targets(processed_path: Path, all_unknown: bool = False,
     return targets
 
 
-def task_reextract(processed_path: Path, dry_run: bool = False, max_workers: int = 4,
+def task_reextract(processed_path: Path, dry_run: bool = False,
                    all_unknown: bool = False, filename: str = None, document_pattern: str = None):
     """Re-extract documents by re-running the full classification pipeline.
 
@@ -1270,13 +1270,10 @@ def task_reextract(processed_path: Path, dry_run: bool = False, max_workers: int
     Args:
         processed_path: Path to processed documents folder
         dry_run: If True, show what would be changed without modifying files
-        max_workers: Maximum parallel workers for LLM calls
         all_unknown: Target all files with $UNKNOWN$ values
         filename: Target a single file by name
         document_pattern: Target files matching a glob pattern
     """
-    from concurrent.futures import ThreadPoolExecutor, as_completed
-
     log_file_path = setup_task_logging(processed_path, "reextract")
     logger.info("=== REEXTRACT STARTED ===")
     logger.info(f"Log: {log_file_path}")
@@ -1292,7 +1289,7 @@ def task_reextract(processed_path: Path, dry_run: bool = False, max_workers: int
     logger.info(f"Found {len(targets)} files to re-extract")
 
     def classify_one(item):
-        """Worker function for parallel classification."""
+        """Classify a single document and return results."""
         metadata_path, pdf_path, old_data = item
 
         try:
@@ -1311,48 +1308,45 @@ def task_reextract(processed_path: Path, dry_run: bool = False, max_workers: int
         except Exception as e:
             return (metadata_path, old_data, None, str(e))
 
-    logger.info(f"Running parallel re-extraction with {max_workers} workers...")
+    logger.info("Running re-extraction...")
     fixed_count = 0
     still_unknown_count = 0
     failed_count = 0
 
-    with ThreadPoolExecutor(max_workers=max_workers) as executor:
-        futures = {executor.submit(classify_one, item): item for item in targets}
+    for item in tqdm(targets, desc="Re-extracting"):
+        metadata_path, old_data, new_metadata, error = classify_one(item)
 
-        for future in tqdm(as_completed(futures), total=len(futures), desc="Re-extracting"):
-            metadata_path, old_data, new_metadata, error = future.result()
+        if error:
+            logger.error(f"Failed {metadata_path.name}: {error}")
+            failed_count += 1
+            continue
 
-            if error:
-                logger.error(f"Failed {metadata_path.name}: {error}")
-                failed_count += 1
-                continue
+        # Compare old vs new
+        new_doc_type = new_metadata.document_type.value if hasattr(new_metadata.document_type, 'value') else new_metadata.document_type
+        new_issuer = new_metadata.issuing_party.value if hasattr(new_metadata.issuing_party, 'value') else new_metadata.issuing_party
+        new_date = new_metadata.issue_date
 
-            # Compare old vs new
-            new_doc_type = new_metadata.document_type.value if hasattr(new_metadata.document_type, 'value') else new_metadata.document_type
-            new_issuer = new_metadata.issuing_party.value if hasattr(new_metadata.issuing_party, 'value') else new_metadata.issuing_party
-            new_date = new_metadata.issue_date
+        changes = []
+        old_doc_type = old_data.get("document_type", "")
+        old_issuer = old_data.get("issuing_party", "")
+        old_date = old_data.get("issue_date", "")
 
-            changes = []
-            old_doc_type = old_data.get("document_type", "")
-            old_issuer = old_data.get("issuing_party", "")
-            old_date = old_data.get("issue_date", "")
+        if old_doc_type != new_doc_type:
+            changes.append(f"document_type: {old_doc_type} -> {new_doc_type}")
+        if old_issuer != new_issuer:
+            changes.append(f"issuing_party: {old_issuer} -> {new_issuer}")
+        if old_date != new_date:
+            changes.append(f"issue_date: {old_date} -> {new_date}")
 
-            if old_doc_type != new_doc_type:
-                changes.append(f"document_type: {old_doc_type} -> {new_doc_type}")
-            if old_issuer != new_issuer:
-                changes.append(f"issuing_party: {old_issuer} -> {new_issuer}")
-            if old_date != new_date:
-                changes.append(f"issue_date: {old_date} -> {new_date}")
+        if changes:
+            logger.info(f"Changed {metadata_path.name}: {', '.join(changes)}")
+            fixed_count += 1
+        else:
+            logger.debug(f"No changes: {metadata_path.name}")
+            still_unknown_count += 1
 
-            if changes:
-                logger.info(f"Changed {metadata_path.name}: {', '.join(changes)}")
-                fixed_count += 1
-            else:
-                logger.debug(f"No changes: {metadata_path.name}")
-                still_unknown_count += 1
-
-            if not dry_run:
-                save_metadata_json(metadata_path.with_suffix(".pdf"), new_metadata)
+        if not dry_run:
+            save_metadata_json(metadata_path.with_suffix(".pdf"), new_metadata)
 
     # Summary
     logger.info("=" * 40)
