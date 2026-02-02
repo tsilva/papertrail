@@ -60,7 +60,6 @@ def get_config_paths() -> dict[str, Path]:
 
     # Build base paths (legacy)
     paths = {
-        "env": repo_root / ".env",  # .env stays at repo root
         "passwords": config_dir / "passwords.txt",
         "validations": config_dir / "file_check_validations.json",
         "document_types": config_dir / "document_types.json",
@@ -114,39 +113,28 @@ def get_gmail_config_paths() -> dict[str, Path]:
     return paths
 
 
-def load_env(env_name: Optional[str] = None) -> tuple[Optional[Path], Optional[str]]:
+def load_env(env_name: str = "bridge") -> tuple[Optional[Path], str]:
     """
-    Load environment variables from .env, or .env.{name} if specified.
+    Load environment variables from .env.{name}.
 
-    Used for environment variable expansion in profile values (e.g., ${OPENROUTER_API_KEY}).
-    When env_name is provided, loads .env.{name} instead of .env (standalone behavior).
+    All env files are named (.env.{name}). The default is .env.bridge.
 
     Args:
-        env_name: Optional environment name (loads .env.{name} instead of .env)
+        env_name: Environment name (loads .env.{name}, default: "bridge")
 
     Returns:
-        Tuple of (env_path, env_name) - env_path is the file that was loaded
+        Tuple of (env_path, env_name) - env_path is the file that was loaded, or None if not found
     """
     import logging
 
     repo_root = get_repo_root()
+    env_path = repo_root / f".env.{env_name}"
 
-    # Load environment file (standalone behavior)
-    if env_name:
-        # Only load .env.{name} when specified
-        env_path = repo_root / f".env.{env_name}"
-        if env_path.exists():
-            load_dotenv(dotenv_path=env_path, override=True)
-        else:
-            logging.getLogger('cli').warning(f"Environment file not found: {env_path}")
-            env_path = None
+    if env_path.exists():
+        load_dotenv(dotenv_path=env_path, override=True)
     else:
-        # Load base .env when no env specified
-        env_path = repo_root / ".env"
-        if env_path.exists():
-            load_dotenv(dotenv_path=env_path, override=True)
-        else:
-            env_path = None
+        logging.getLogger('cli').warning(f"Environment file not found: {env_path}")
+        env_path = None
 
     return (env_path, env_name)
 
