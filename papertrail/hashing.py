@@ -6,7 +6,8 @@ from pathlib import Path
 from typing import Optional
 
 import fitz  # PyMuPDF
-import yaml
+
+from papertrail.yaml_utils import load_yaml, save_yaml
 
 from papertrail.logging_utils import get_logger
 
@@ -37,23 +38,17 @@ class HashCache:
 
     def _load(self) -> None:
         """Load cache from YAML file."""
-        if self.cache_path.exists():
-            try:
-                with open(self.cache_path, "r", encoding="utf-8") as f:
-                    data = yaml.safe_load(f) or {}
-                self._cache = data.get("cache", {})
-            except Exception:
-                self._cache = {}
-        else:
+        try:
+            data = load_yaml(self.cache_path)
+            self._cache = data.get("cache", {})
+        except Exception:
             self._cache = {}
 
     def save(self) -> None:
         """Save cache to YAML file if dirty."""
         if not self._dirty:
             return
-        self.cache_path.parent.mkdir(parents=True, exist_ok=True)
-        with open(self.cache_path, "w", encoding="utf-8") as f:
-            yaml.dump({"cache": self._cache}, f, default_flow_style=False)
+        save_yaml(self.cache_path, {"cache": self._cache})
         self._dirty = False
 
     def get(self, file_hash: str) -> Optional[str]:
