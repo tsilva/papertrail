@@ -56,7 +56,6 @@ from papertrail.metadata import (
     build_hash_index,
     get_unique_dates,
     save_metadata_json,
-    iter_json_files,
 )
 
 # ------------------- LOGGING -------------------
@@ -455,7 +454,6 @@ def validate_merged_pdf(folder_path: Path) -> bool:
 
 def export_metadata_to_excel(processed_path: Path, excel_output_path: str):
     """Export metadata to an Excel file."""
-    from enum import Enum
     from papertrail.metadata import load_json_files_parallel
 
     metadata_list = []
