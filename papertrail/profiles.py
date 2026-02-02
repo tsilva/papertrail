@@ -234,14 +234,6 @@ def list_available_profiles() -> List[str]:
     ])
 
 
-def get_default_profile_name() -> str:
-    """Get the default profile name."""
-    available = list_available_profiles()
-    if not available:
-        raise ProfileNotFoundError("No profiles found.")
-    return "default" if "default" in available else available[0]
-
-
 def load_profile(name: str) -> Profile:
     """Load a profile by name from the profiles directory."""
     if yaml is None:

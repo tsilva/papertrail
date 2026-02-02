@@ -257,18 +257,6 @@ class MappingsManager:
             return {}
         return dict(self.data.get(field, {}).get("auto", {}))
 
-    def get_confirmed_mappings(self, field: str) -> dict[str, str]:
-        """Get all confirmed mappings.
-
-        Args:
-            field: Field name ('document_types' or 'issuing_parties')
-
-        Returns:
-            Dict of raw_value -> canonical for confirmed mappings
-        """
-        if field not in self.FIELDS:
-            return {}
-        return dict(self.data.get(field, {}).get("confirmed", {}))
 
     def get_stats(self) -> dict:
         """Get statistics about the mappings.
