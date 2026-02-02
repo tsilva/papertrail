@@ -1,14 +1,16 @@
 """Hash functions for file deduplication."""
 
 import hashlib
-import logging
+import time
 from pathlib import Path
 from typing import Optional
 
 import fitz  # PyMuPDF
 import yaml
 
-logger = logging.getLogger(__name__)
+from papertrail.logging_utils import get_logger
+
+logger = get_logger('hashing')
 
 
 class HashCache:
@@ -113,6 +115,7 @@ def hash_file_content(path: Path) -> str:
     Returns:
         First 8 characters of SHA256 digest of rendered page content
     """
+    t0 = time.monotonic()
     try:
         page_hashes = []
 
@@ -122,6 +125,7 @@ def hash_file_content(path: Path) -> str:
         mat = fitz.Matrix(zoom, zoom)
 
         with fitz.open(str(path)) as doc:
+            num_pages = len(doc)
             for page in doc:
                 try:
                     # Render page as pixmap with deterministic settings
@@ -140,7 +144,10 @@ def hash_file_content(path: Path) -> str:
 
         # Create a digest of all page hashes combined (in order)
         combined = "".join(page_hashes)
-        return hashlib.sha256(combined.encode()).hexdigest()[:8]
+        result = hashlib.sha256(combined.encode()).hexdigest()[:8]
+        elapsed = time.monotonic() - t0
+        logger.debug(f"[HASH] {path.name}: {num_pages} pages in {elapsed:.2f}s")
+        return result
 
     except Exception as e:
         # If content-based hashing fails entirely, fall back to file hash
