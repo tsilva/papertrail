@@ -1503,18 +1503,24 @@ def pipeline(export_date_arg=None):
     from shutil import which
     from datetime import timedelta
 
-    RAW_FILES_DIR = os.getenv("RAW_FILES_DIR")
-    PROCESSED_FILES_DIR = os.getenv("PROCESSED_FILES_DIR")
-    EXPORT_FILES_DIR = os.getenv("EXPORT_FILES_DIR")
+    profile = get_current_profile()
+    if not profile:
+        logger.error("No profile is active.")
+        sys.exit(1)
 
-    required_vars = [
-        ("RAW_FILES_DIR", RAW_FILES_DIR),
-        ("PROCESSED_FILES_DIR", PROCESSED_FILES_DIR),
-        ("EXPORT_FILES_DIR", EXPORT_FILES_DIR),
-    ]
-    missing = [name for name, val in required_vars if not val]
+    raw_dirs = profile.paths.raw
+    PROCESSED_FILES_DIR = profile.paths.processed
+    EXPORT_FILES_DIR = profile.paths.export
+
+    missing = []
+    if not raw_dirs:
+        missing.append("paths.raw")
+    if not PROCESSED_FILES_DIR:
+        missing.append("paths.processed")
+    if not EXPORT_FILES_DIR:
+        missing.append("paths.export")
     if missing:
-        logger.error(f"Missing required .env variables: {', '.join(missing)}")
+        logger.error(f"Missing required profile settings: {', '.join(missing)}")
         sys.exit(1)
 
     for tool in ["mbox-extractor", "archive-extractor", "pdf-merger"]:
@@ -1583,7 +1589,6 @@ def pipeline(export_date_arg=None):
         validations_file_path = None
 
     processed_files_excel_path = Path(PROCESSED_FILES_DIR) / "processed_files.xlsx"
-    raw_dirs = [p for p in RAW_FILES_DIR.split(';') if p]
 
     run_step(f'"{sys.executable}" "{__file__}" gmail_download', "Step 1: Download Gmail attachments")
 

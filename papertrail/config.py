@@ -1,11 +1,9 @@
 """Configuration loading and environment management."""
 
-import os
 from pathlib import Path
 from typing import Optional
 
 import openai
-from dotenv import load_dotenv
 
 from papertrail.profiles import Profile
 
@@ -111,32 +109,6 @@ def get_gmail_config_paths() -> dict[str, Path]:
         # Note: settings are embedded in profile, not a separate file
 
     return paths
-
-
-def load_env(env_name: str = "bridge") -> tuple[Optional[Path], str]:
-    """
-    Load environment variables from .env.{name}.
-
-    All env files are named (.env.{name}). The default is .env.bridge.
-
-    Args:
-        env_name: Environment name (loads .env.{name}, default: "bridge")
-
-    Returns:
-        Tuple of (env_path, env_name) - env_path is the file that was loaded, or None if not found
-    """
-    import logging
-
-    repo_root = get_repo_root()
-    env_path = repo_root / f".env.{env_name}"
-
-    if env_path.exists():
-        load_dotenv(dotenv_path=env_path, override=True)
-    else:
-        logging.getLogger('cli').warning(f"Environment file not found: {env_path}")
-        env_path = None
-
-    return (env_path, env_name)
 
 
 def get_openai_client() -> openai.OpenAI:

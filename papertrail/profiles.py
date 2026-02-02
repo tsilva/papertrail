@@ -5,8 +5,6 @@ Provides YAML-based configuration profiles for managing multiple environments
 (personal, work, testing) with a single file per environment.
 """
 
-import os
-import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -42,11 +40,6 @@ class ProfileValidationError(ProfileError):
     pass
 
 
-class EnvironmentVariableError(ProfileError):
-    """Raised when a referenced environment variable is undefined."""
-    pass
-
-
 # ============================================================================
 # Data Models
 # ============================================================================
@@ -72,9 +65,7 @@ class OpenRouterConfig:
     """OpenRouter API configuration."""
     model_id: Optional[str] = None
     api_key: Optional[str] = None
-    base_url: str = field(default_factory=lambda: os.getenv(
-        "OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1"
-    ))
+    base_url: str = "https://openrouter.ai/api/v1"
 
 
 @dataclass
@@ -140,30 +131,6 @@ class Profile:
     pipeline: PipelineConfig = field(default_factory=PipelineConfig)
     task_defaults: Dict[str, Any] = field(default_factory=dict)
     _profile_path: Optional[Path] = field(default=None, repr=False)
-
-
-# ============================================================================
-# Environment Variable Expansion
-# ============================================================================
-
-
-def expand_env_vars(value: Any) -> Any:
-    """Recursively expand environment variables in strings (${VAR} syntax)."""
-    if isinstance(value, str):
-        pattern = r'\$\{([^}]+)\}'
-        matches = re.findall(pattern, value)
-        for var_name in matches:
-            if var_name not in os.environ:
-                raise EnvironmentVariableError(
-                    f"Environment variable '{var_name}' is not defined."
-                )
-            value = value.replace(f'${{{var_name}}}', os.environ[var_name])
-        return value
-    elif isinstance(value, list):
-        return [expand_env_vars(item) for item in value]
-    elif isinstance(value, dict):
-        return {k: expand_env_vars(v) for k, v in value.items()}
-    return value
 
 
 # ============================================================================
@@ -257,11 +224,6 @@ def load_profile(name: str) -> Profile:
     if not isinstance(data, dict):
         raise ProfileParseError(f"Profile '{name}' must be a YAML mapping")
 
-    try:
-        data = expand_env_vars(data)
-    except EnvironmentVariableError as e:
-        raise EnvironmentVariableError(f"Profile '{name}': {e}")
-
     profile = _parse_profile_dict(data, profile_path)
     resolve_paths_in_profile(profile)
     return profile
@@ -292,9 +254,7 @@ def _parse_profile_dict(data: Dict[str, Any], profile_path: Path) -> Profile:
     openrouter = OpenRouterConfig(
         model_id=openrouter_data.get("model_id"),
         api_key=openrouter_data.get("api_key"),
-        base_url=openrouter_data.get("base_url") or os.getenv(
-            "OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1"
-        )
+        base_url=openrouter_data.get("base_url") or "https://openrouter.ai/api/v1"
     )
 
     doc_types_data = data.get("document_types", {})

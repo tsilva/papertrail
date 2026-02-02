@@ -11,7 +11,6 @@ authors = [
 ]
 dependencies = [
     "tqdm",
-    "python-dotenv",
     "openai",
     "PyMuPDF",
     "pandas",
@@ -25,7 +24,7 @@ dependencies = [
     "gradio>=5.0.0",
     "orjson>=3.9.0",
 ]
-requires-python = ">=3.10"
+requires-python = ">=3.12"
 
 [project.scripts]
 papertrail = "main:main"

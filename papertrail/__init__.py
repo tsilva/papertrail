@@ -3,7 +3,6 @@
 from papertrail.config import (
     get_repo_root,
     get_config_paths,
-    load_env,
     get_openai_client,
 )
 from papertrail.hashing import hash_file_fast, hash_file_content
@@ -13,7 +12,6 @@ __all__ = [
     # Config
     "get_repo_root",
     "get_config_paths",
-    "load_env",
     "get_openai_client",
     # Hashing
     "hash_file_fast",
