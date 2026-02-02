@@ -147,7 +147,7 @@ python main.py pipeline              # loads .env.bridge (default)
 python main.py --env local pipeline  # loads .env.local
 ```
 
-- `.env.bridge` is committed to the repo (safe defaults, no secrets or uses env var references)
+- `.env.bridge` is gitignored — copy from `.env.bridge.example` to set up
 - All other `.env.*` files are gitignored (except `.env.*.example` templates)
 - Bare `.env` is no longer supported
 
