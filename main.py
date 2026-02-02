@@ -23,7 +23,6 @@ from tqdm import tqdm
 
 # Import from papertrail package
 from papertrail.config import (
-    load_env,
     get_config_paths,
     get_openai_client,
     set_current_profile,
@@ -88,21 +87,18 @@ def get_ctx() -> AppContext:
     return _ctx
 
 
-def initialize_config(profile_name: Optional[str] = None, env_name: str = "bridge") -> None:
+def initialize_config(profile_name: Optional[str] = None) -> None:
     """
     Initialize configuration from profile.
 
     Args:
         profile_name: Profile name to load, or None for auto-detection (uses 'default')
-        env_name: Environment name (loads .env.{name}, default: "bridge")
 
     Raises:
         ProfileNotFoundError: If specified profile doesn't exist
         ProfileError: If profile loading fails
     """
     global _ctx
-
-    load_env(env_name)
 
     profiles_dir = get_profiles_dir()
     profiles_exist = profiles_dir.exists() and any(profiles_dir.glob("*.yaml"))
@@ -1720,7 +1716,7 @@ def main():
 
     # Initialize configuration (profile or legacy .env)
     try:
-        initialize_config(args.profile, env_name=args.env or "bridge")
+        initialize_config(args.profile)
     except ProfileNotFoundError as e:
         parser.error(str(e))
     except ProfileError as e:
