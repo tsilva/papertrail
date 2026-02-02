@@ -1,11 +1,14 @@
 """Hash functions for file deduplication."""
 
 import hashlib
+import logging
 from pathlib import Path
 from typing import Optional
 
 import fitz  # PyMuPDF
 import yaml
+
+logger = logging.getLogger(__name__)
 
 
 class HashCache:
@@ -132,12 +135,14 @@ def hash_file_content(path: Path) -> str:
 
         if not page_hashes:
             # No pages could be rendered - fall back to file hash
+            logger.warning(f"No pages rendered for {path.name}, falling back to file hash")
             return hash_file_fast(path)
 
         # Create a digest of all page hashes combined (in order)
         combined = "".join(page_hashes)
         return hashlib.sha256(combined.encode()).hexdigest()[:8]
 
-    except Exception:
+    except Exception as e:
         # If content-based hashing fails entirely, fall back to file hash
+        logger.warning(f"Content hashing failed for {path.name} ({e}), falling back to file hash")
         return hash_file_fast(path)

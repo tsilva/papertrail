@@ -4,6 +4,7 @@ papertrail - AI-powered PDF document classification and organization.
 Main CLI entry point for processing PDF documents.
 """
 
+import fcntl
 import os
 import re
 import json
@@ -242,7 +243,8 @@ def classify_pdf_document(pdf_path: Path, file_hash: str, failure_logger=None) -
 
 # ------------------- RENAMING & PROCESSING -------------------
 
-def rename_single_pdf(pdf_path: Path, content_hash: str, processed_path: Path, known_hashes: set, failure_logger=None):
+def rename_single_pdf(pdf_path: Path, content_hash: str, processed_path: Path,
+                      known_content_hashes: set, known_file_hashes: set, failure_logger=None):
     """Process and rename a single PDF file."""
     try:
         file_hash = hash_file_fast(pdf_path)
@@ -252,21 +254,25 @@ def rename_single_pdf(pdf_path: Path, content_hash: str, processed_path: Path, k
         filename = file_name_from_metadata(metadata, content_hash)
         new_pdf_path = processed_path / filename
 
+        if new_pdf_path.exists():
+            logger.warning(f"Skipping {pdf_path.name}: destination already exists: {filename}")
+            return
+
         shutil.copy2(pdf_path, new_pdf_path)
         save_metadata_json(new_pdf_path, metadata)
 
-        known_hashes.add(content_hash)
-        known_hashes.add(file_hash)
+        known_content_hashes.add(content_hash)
+        known_file_hashes.add(file_hash)
         logger.info(f"Processed: {pdf_path.name} -> {filename}")
     except Exception as e:
         log_failure(failure_logger, pdf_path, e)
         logger.error(f"Failed to process {pdf_path.name}: {e}")
 
 
-def rename_pdf_files(pdf_paths, file_hash_map, known_hashes, processed_path, failure_logger=None):
+def rename_pdf_files(pdf_paths, file_hash_map, known_content_hashes, known_file_hashes, processed_path, failure_logger=None):
     """Rename multiple PDF files."""
     for pdf_path in tqdm(pdf_paths):
-        rename_single_pdf(pdf_path, file_hash_map[pdf_path], processed_path, known_hashes, failure_logger)
+        rename_single_pdf(pdf_path, file_hash_map[pdf_path], processed_path, known_content_hashes, known_file_hashes, failure_logger)
 
 
 def validate_metadata(output_path: Path):
@@ -618,12 +624,32 @@ def check_files_exist(target_folder: Path, validation_schema_path: Path):
 
 def task_extract_new(processed_path: Path, raw_paths: list[Path]):
     """Extract and classify new PDF files."""
+    lock_path = Path(__file__).parent / "config" / ".extract.lock"
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    lock_file = open(lock_path, "w")
+    try:
+        fcntl.flock(lock_file, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        logger.error("Another extract_new process is already running. Exiting.")
+        lock_file.close()
+        return
+    try:
+        _task_extract_new_locked(processed_path, raw_paths)
+    finally:
+        fcntl.flock(lock_file, fcntl.LOCK_UN)
+        lock_file.close()
+
+
+def _task_extract_new_locked(processed_path: Path, raw_paths: list[Path]):
+    """Extract and classify new PDF files (lock already held)."""
     log_path = processed_path / "classification_failures.log"
     failure_logger = setup_failure_logger(log_path)
     logger.debug(f"Logging failures to: {log_path}")
 
     logger.info("Building hash index from metadata files...")
-    known_hashes = set(build_hash_index(processed_path).keys())
+    known_content_hashes_idx, known_file_hashes_idx = build_hash_index(processed_path)
+    known_content_hashes = set(known_content_hashes_idx.keys())
+    known_file_hashes = set(known_file_hashes_idx.keys())
 
     logger.info("Scanning for new PDFs...")
     pdf_paths = find_pdf_files(raw_paths)
@@ -631,7 +657,7 @@ def task_extract_new(processed_path: Path, raw_paths: list[Path]):
 
     logger.info("Stage 1: Quick filtering using fast file hashes...")
     fast_hash_map = {pdf: hash_file_fast(pdf) for pdf in tqdm(pdf_paths, desc="Fast hashing")}
-    potentially_new = [pdf for pdf in pdf_paths if fast_hash_map[pdf] not in known_hashes]
+    potentially_new = [pdf for pdf in pdf_paths if fast_hash_map[pdf] not in known_file_hashes]
 
     already_processed = len(pdf_paths) - len(potentially_new)
     logger.info(f"  -> Skipped {already_processed} already-processed files")
@@ -651,11 +677,11 @@ def task_extract_new(processed_path: Path, raw_paths: list[Path]):
         except Exception as e:
             logger.error(f"Error hashing {pdf.name}: {e}")
 
-    files_to_process = [pdf for pdf in potentially_new if content_hash_map.get(pdf) not in known_hashes]
+    files_to_process = [pdf for pdf in potentially_new if content_hash_map.get(pdf) not in known_content_hashes]
     logger.info(f"Found {len(files_to_process)} truly new PDFs to process.")
 
     if files_to_process:
-        rename_pdf_files(files_to_process, content_hash_map, known_hashes, processed_path, failure_logger)
+        rename_pdf_files(files_to_process, content_hash_map, known_content_hashes, known_file_hashes, processed_path, failure_logger)
 
     logger.info("Extraction complete.")
 
