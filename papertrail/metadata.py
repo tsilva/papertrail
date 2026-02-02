@@ -223,7 +223,7 @@ def save_metadata_json(pdf_path: Path, metadata: DocumentMetadata) -> None:
     """
     json_path = pdf_path.with_suffix('.json')
     with open(json_path, "w", encoding="utf-8") as f:
-        json.dump(metadata.model_dump(by_alias=True), f, indent=4)
+        json.dump(metadata.model_dump(by_alias=True), f, indent=4, ensure_ascii=False)
 
 
 def get_field_with_aliases(data: dict, field_name: str, aliases: list[str]):
