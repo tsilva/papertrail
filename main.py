@@ -1117,15 +1117,12 @@ def _review_rejected_field(
             print("  Skipped.")
 
 
-def task_fix_unknown(processed_path: Path, dry_run: bool = False, max_workers: int = 8):
-    """Re-normalize documents with $UNKNOWN$ values using stored raw values.
+def task_reextract(processed_path: Path, dry_run: bool = False, max_workers: int = 4):
+    """Re-extract documents with $UNKNOWN$ values by re-running the full classification pipeline.
 
-    Scans metadata files for $UNKNOWN$ document_type or issuing_party,
-    then uses the stored _raw values to re-run normalization. If new
-    canonicals have been added or mappings updated, the values may now
-    normalize correctly.
-
-    Uses parallel processing for LLM normalization calls.
+    Scans metadata files for $UNKNOWN$ document_type, issuing_party, or issue_date,
+    then re-runs the full pipeline (PDF rendering + LLM extraction + normalization).
+    Preserves content_hash, file_hash, and create_date from old metadata.
 
     Args:
         processed_path: Path to processed documents folder
@@ -1133,8 +1130,6 @@ def task_fix_unknown(processed_path: Path, dry_run: bool = False, max_workers: i
         max_workers: Maximum parallel workers for LLM calls
     """
     from concurrent.futures import ThreadPoolExecutor, as_completed
-
-    ctx = get_ctx()
 
     # Find all metadata files with $UNKNOWN$ values
     json_files = list(processed_path.rglob("*.json"))
@@ -1148,193 +1143,13 @@ def task_fix_unknown(processed_path: Path, dry_run: bool = False, max_workers: i
             with open(metadata_path, "r", encoding="utf-8") as f:
                 data = json.load(f)
 
-            has_unknown_doc_type = data.get("document_type") == "$UNKNOWN$"
-            has_unknown_issuer = data.get("issuing_party") == "$UNKNOWN$"
-
-            if has_unknown_doc_type or has_unknown_issuer:
-                unknown_files.append((metadata_path, data, has_unknown_doc_type, has_unknown_issuer))
-        except Exception as e:
-            logger.warning(f"Skipping {metadata_path.name}: {e}")
-
-    if not unknown_files:
-        logger.info("No files with $UNKNOWN$ values found.")
-        return
-
-    logger.info(f"Found {len(unknown_files)} files with $UNKNOWN$ values")
-
-    # Phase 1: Check mappings first (fast, no LLM needed)
-    needs_llm = []
-    fixed_from_mappings = []
-
-    for metadata_path, data, has_unknown_doc_type, has_unknown_issuer in unknown_files:
-        doc_type_raw = data.get("document_type_raw") or "$UNKNOWN$"
-        issuing_party_raw = data.get("issuing_party_raw") or "$UNKNOWN$"
-
-        # Check mappings directly (tier 1)
-        new_doc_type = None
-        new_issuing_party = None
-
-        if has_unknown_doc_type and doc_type_raw != "$UNKNOWN$":
-            new_doc_type = ctx.mappings_manager.get_mapping(doc_type_raw, "document_types")
-        if has_unknown_issuer and issuing_party_raw != "$UNKNOWN$":
-            new_issuing_party = ctx.mappings_manager.get_mapping(issuing_party_raw, "issuing_parties")
-
-        # Check if mappings resolved it
-        doc_fixed = has_unknown_doc_type and new_doc_type and new_doc_type != "$UNKNOWN$"
-        issuer_fixed = has_unknown_issuer and new_issuing_party and new_issuing_party != "$UNKNOWN$"
-
-        if doc_fixed or issuer_fixed:
-            fixed_from_mappings.append((metadata_path, data, new_doc_type if doc_fixed else None, new_issuing_party if issuer_fixed else None))
-        else:
-            # Still needs LLM normalization
-            needs_llm.append((metadata_path, data, has_unknown_doc_type, has_unknown_issuer))
-
-    logger.info(f"  -> {len(fixed_from_mappings)} can be fixed from mappings (no LLM needed)")
-    logger.info(f"  -> {len(needs_llm)} need LLM normalization")
-
-    # Process mapping fixes immediately
-    fixed_count = 0
-    for metadata_path, data, new_doc_type, new_issuing_party in fixed_from_mappings:
-        changes = []
-        if new_doc_type:
-            changes.append(f"document_type: $UNKNOWN$ -> {new_doc_type}")
-            data["document_type"] = new_doc_type
-        if new_issuing_party:
-            changes.append(f"issuing_party: $UNKNOWN$ -> {new_issuing_party}")
-            data["issuing_party"] = new_issuing_party
-
-        logger.info(f"Fixed (from mappings) {metadata_path.name}: {', '.join(changes)}")
-
-        if not dry_run:
-            data["update_date"] = datetime.now().strftime("%Y-%m-%d")
-            with open(metadata_path, "w", encoding="utf-8") as f:
-                json.dump(data, f, indent=2)
-
-        fixed_count += 1
-
-    # Phase 2: Parallel LLM normalization for remaining files
-    if not needs_llm:
-        logger.info("=" * 40)
-        logger.info(f"Fixed: {fixed_count}")
-        logger.info(f"Still unknown: 0")
-        if dry_run:
-            logger.info("(dry run - no files were modified)")
-        return
-
-    def normalize_one(item):
-        """Worker function for parallel normalization."""
-        metadata_path, data, has_unknown_doc_type, has_unknown_issuer = item
-        doc_type_raw = data.get("document_type_raw") or "$UNKNOWN$"
-        issuing_party_raw = data.get("issuing_party_raw") or "$UNKNOWN$"
-
-        raw_metadata = DocumentMetadataRaw(
-            issue_date=data.get("issue_date") or "$UNKNOWN$",
-            document_type=doc_type_raw,
-            issuing_party=issuing_party_raw,
-            service_name=data.get("service_name"),
-            total_amount=data.get("total_amount"),
-            total_amount_currency=data.get("total_amount_currency"),
-            confidence=data.get("confidence", 0.0),
-            reasoning="Re-normalization of $UNKNOWN$ value",
-        )
-
-        try:
-            new_doc_type, new_issuing_party = normalize_metadata(
-                raw_metadata,
-                ctx.openai_client,
-                ctx.model_id,
-                mappings=ctx.mappings_manager
+            has_unknown = (
+                data.get("document_type") == "$UNKNOWN$"
+                or data.get("issuing_party") == "$UNKNOWN$"
+                or data.get("issue_date") == "$UNKNOWN$"
             )
-            return (metadata_path, data, has_unknown_doc_type, has_unknown_issuer, new_doc_type, new_issuing_party, None)
-        except Exception as e:
-            return (metadata_path, data, has_unknown_doc_type, has_unknown_issuer, None, None, str(e))
 
-    logger.info(f"Running parallel LLM normalization with {max_workers} workers...")
-    still_unknown = 0
-
-    with ThreadPoolExecutor(max_workers=max_workers) as executor:
-        futures = {executor.submit(normalize_one, item): item for item in needs_llm}
-
-        for future in tqdm(as_completed(futures), total=len(futures), desc="LLM normalizing"):
-            result = future.result()
-            metadata_path, data, has_unknown_doc_type, has_unknown_issuer, new_doc_type, new_issuing_party, error = result
-
-            if error:
-                logger.error(f"Normalization failed for {metadata_path.name}: {error}")
-                still_unknown += 1
-                continue
-
-            doc_type_fixed = has_unknown_doc_type and new_doc_type and new_doc_type != "$UNKNOWN$"
-            issuer_fixed = has_unknown_issuer and new_issuing_party and new_issuing_party != "$UNKNOWN$"
-
-            if not doc_type_fixed and not issuer_fixed:
-                still_unknown += 1
-                logger.debug(f"Still unknown: {metadata_path.name}")
-                continue
-
-            changes = []
-            if doc_type_fixed:
-                changes.append(f"document_type: $UNKNOWN$ -> {new_doc_type}")
-                data["document_type"] = new_doc_type
-            if issuer_fixed:
-                changes.append(f"issuing_party: $UNKNOWN$ -> {new_issuing_party}")
-                data["issuing_party"] = new_issuing_party
-
-            logger.info(f"Fixed {metadata_path.name}: {', '.join(changes)}")
-
-            if not dry_run:
-                data["update_date"] = datetime.now().strftime("%Y-%m-%d")
-                with open(metadata_path, "w", encoding="utf-8") as f:
-                    json.dump(data, f, indent=2)
-
-            fixed_count += 1
-
-    # Summary
-    logger.info("=" * 40)
-    logger.info(f"Fixed: {fixed_count}")
-    logger.info(f"Still unknown: {still_unknown}")
-    if dry_run:
-        logger.info("(dry run - no files were modified)")
-    else:
-        if fixed_count > 0:
-            logger.info("Run 'rename_files' task to update filenames based on new metadata.")
-
-
-def task_reclassify_unknown(processed_path: Path, dry_run: bool = False, max_workers: int = 4):
-    """Re-classify documents with $UNKNOWN$ values by re-processing the PDFs.
-
-    Unlike fix_unknown which only re-runs normalization using stored raw values,
-    this task re-runs the full classification pipeline (PDF rendering + LLM extraction
-    + normalization) on documents that have $UNKNOWN$ values.
-
-    Use this when documents have None for their _raw fields (legacy documents).
-
-    Args:
-        processed_path: Path to processed documents folder
-        dry_run: If True, show what would be changed without modifying files
-        max_workers: Maximum parallel workers for LLM calls (lower than fix_unknown
-                     because PDF classification is heavier)
-    """
-    from concurrent.futures import ThreadPoolExecutor, as_completed
-
-    ctx = get_ctx()
-
-    # Find all metadata files with $UNKNOWN$ values
-    json_files = list(processed_path.glob("*.json"))
-    if not json_files:
-        logger.info(f"No metadata files found in {processed_path}")
-        return
-
-    unknown_files = []
-    for metadata_path in tqdm(json_files, desc="Scanning for $UNKNOWN$"):
-        try:
-            with open(metadata_path, "r", encoding="utf-8") as f:
-                data = json.load(f)
-
-            has_unknown_doc_type = data.get("document_type") == "$UNKNOWN$"
-            has_unknown_issuer = data.get("issuing_party") == "$UNKNOWN$"
-
-            if has_unknown_doc_type or has_unknown_issuer:
+            if has_unknown:
                 pdf_path = metadata_path.with_suffix(".pdf")
                 if pdf_path.exists():
                     unknown_files.append((metadata_path, pdf_path, data))
@@ -1347,77 +1162,71 @@ def task_reclassify_unknown(processed_path: Path, dry_run: bool = False, max_wor
         logger.info("No files with $UNKNOWN$ values found.")
         return
 
-    logger.info(f"Found {len(unknown_files)} files with $UNKNOWN$ values to reclassify")
+    logger.info(f"Found {len(unknown_files)} files with $UNKNOWN$ values to re-extract")
 
     def classify_one(item):
         """Worker function for parallel classification."""
         metadata_path, pdf_path, old_data = item
 
         try:
-            # Get existing content_hash from metadata
-            content_hash = old_data.get("hash") or old_data.get("content_hash")
+            content_hash = old_data.get("content_hash") or old_data.get("hash")
             if not content_hash:
-                return (metadata_path, None, "No content_hash in metadata")
+                return (metadata_path, old_data, None, "No content_hash in metadata")
 
-            # Re-run full classification
             new_metadata = classify_pdf_document(pdf_path, content_hash)
 
-            # Preserve some fields from old metadata
-            new_metadata.file_hash = old_data.get("_old_hash") or old_data.get("file_hash")
+            # Preserve fields from old metadata
+            new_metadata.file_hash = old_data.get("file_hash") or old_data.get("_old_hash")
             new_metadata.create_date = old_data.get("create_date")
             new_metadata.update_date = datetime.now().strftime("%Y-%m-%d")
 
-            return (metadata_path, new_metadata, None)
+            return (metadata_path, old_data, new_metadata, None)
         except Exception as e:
-            return (metadata_path, None, str(e))
+            return (metadata_path, old_data, None, str(e))
 
-    logger.info(f"Running parallel PDF reclassification with {max_workers} workers...")
+    logger.info(f"Running parallel re-extraction with {max_workers} workers...")
     fixed_count = 0
+    still_unknown_count = 0
     failed_count = 0
 
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         futures = {executor.submit(classify_one, item): item for item in unknown_files}
 
-        for future in tqdm(as_completed(futures), total=len(futures), desc="Reclassifying"):
-            metadata_path, new_metadata, error = future.result()
+        for future in tqdm(as_completed(futures), total=len(futures), desc="Re-extracting"):
+            metadata_path, old_data, new_metadata, error = future.result()
 
             if error:
                 logger.error(f"Failed {metadata_path.name}: {error}")
                 failed_count += 1
                 continue
 
-            if new_metadata is None:
-                failed_count += 1
-                continue
-
-            # Check if we got better values
-            old_data = futures[future][2]
-            old_doc_type = old_data.get("document_type")
-            old_issuer = old_data.get("issuing_party")
+            # Compare old vs new
             new_doc_type = new_metadata.document_type.value if hasattr(new_metadata.document_type, 'value') else new_metadata.document_type
             new_issuer = new_metadata.issuing_party.value if hasattr(new_metadata.issuing_party, 'value') else new_metadata.issuing_party
+            new_date = new_metadata.issue_date
 
             changes = []
-            if old_doc_type == "$UNKNOWN$" and new_doc_type != "$UNKNOWN$":
+            if old_data.get("document_type") == "$UNKNOWN$" and new_doc_type != "$UNKNOWN$":
                 changes.append(f"document_type: $UNKNOWN$ -> {new_doc_type}")
-            if old_issuer == "$UNKNOWN$" and new_issuer != "$UNKNOWN$":
+            if old_data.get("issuing_party") == "$UNKNOWN$" and new_issuer != "$UNKNOWN$":
                 changes.append(f"issuing_party: $UNKNOWN$ -> {new_issuer}")
+            if old_data.get("issue_date") == "$UNKNOWN$" and new_date != "$UNKNOWN$":
+                changes.append(f"issue_date: $UNKNOWN$ -> {new_date}")
 
             if changes:
                 logger.info(f"Fixed {metadata_path.name}: {', '.join(changes)}")
                 fixed_count += 1
             else:
                 logger.debug(f"Still unknown: {metadata_path.name}")
+                still_unknown_count += 1
 
             if not dry_run:
-                # Save updated metadata
                 save_metadata_json(metadata_path.with_suffix(".pdf"), new_metadata)
 
     # Summary
-    still_unknown = len(unknown_files) - fixed_count - failed_count
     logger.info("=" * 40)
     logger.info(f"Fixed: {fixed_count}")
-    logger.info(f"Still unknown: {still_unknown}")
+    logger.info(f"Still unknown: {still_unknown_count}")
     logger.info(f"Failed: {failed_count}")
     if dry_run:
         logger.info("(dry run - no files were modified)")
@@ -1695,7 +1504,7 @@ def main():
         'extract_new', 'rename_files', 'validate_metadata', 'export_excel',
         'copy_matching', 'export_all_dates', 'check_files_exist', 'pipeline',
         'gmail_download', 'bootstrap_mappings', 'review_mappings', 'add_canonical',
-        'backfill_page_count', 'review_rejected', 'fix_unknown', 'reclassify_unknown'
+        'backfill_page_count', 'review_rejected', 'reextract'
     ], help="Task to perform.")
     parser.add_argument("processed_path", type=str, nargs='?', help="Path to output folder.")
     parser.add_argument("--raw_path", type=str, help="Path to documents folder(s). Use ';' to separate multiple paths.")
@@ -1708,7 +1517,7 @@ def main():
     parser.add_argument("--export_date", type=str, help="Export date in YYYY-MM format (for pipeline).")
     parser.add_argument("--field", type=str, help="Field name for add_canonical (document_type or issuing_party).")
     parser.add_argument("--canonical", type=str, help="Canonical value to add.")
-    parser.add_argument("--dry_run", action="store_true", help="Show what would be changed without modifying files (for fix_unknown).")
+    parser.add_argument("--dry_run", action="store_true", help="Show what would be changed without modifying files (for reextract).")
     args = parser.parse_args()
 
     # Initialize logging early (reconfigures the module-level logger)
@@ -1762,20 +1571,12 @@ def main():
         task_backfill_page_count(Path(args.processed_path))
         return
 
-    if args.task == "fix_unknown":
+    if args.task == "reextract":
         if not args.processed_path:
-            parser.error("fix_unknown requires the processed_path argument.")
+            parser.error("reextract requires the processed_path argument.")
         if not os.path.exists(args.processed_path):
             parser.error(f"The processed_path '{args.processed_path}' does not exist.")
-        task_fix_unknown(Path(args.processed_path), dry_run=args.dry_run)
-        return
-
-    if args.task == "reclassify_unknown":
-        if not args.processed_path:
-            parser.error("reclassify_unknown requires the processed_path argument.")
-        if not os.path.exists(args.processed_path):
-            parser.error(f"The processed_path '{args.processed_path}' does not exist.")
-        task_reclassify_unknown(Path(args.processed_path), dry_run=args.dry_run)
+        task_reextract(Path(args.processed_path), dry_run=args.dry_run)
         return
 
     if not args.processed_path:
