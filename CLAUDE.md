@@ -6,7 +6,6 @@ AI-powered PDF document classification and organization tool using vision LLMs v
 
 **Run**: `python main.py [--profile NAME] <task> <processed_path> [options]`
 **Install**: `uv pip install -e .`
-**Debug classification**: `python scripts/debug_classification.py <pdf_path>`
 **Check hashes**: `python scripts/check_hash.py <pdf_path>`
 **Profile docs**: `profiles/README.md` - Multi-environment configuration system
 
@@ -63,7 +62,6 @@ Document types and issuing parties are loaded dynamically from existing metadata
 | `papertrail/mappings.py` | Mapping persistence | `MappingsManager` class |
 | `papertrail/rejected.py` | Rejected values tracking | `RejectedValuesManager` class |
 | `papertrail/hashing.py` | File hashing | `HashCache`, `hash_file_fast`, `hash_file_content` |
-| `scripts/debug_classification.py` | Debug LLM calls | Full API response with images |
 | `scripts/check_hash.py` | Verify hashes | CLI: `check-hash` |
 | `papertrail/gmail.py` | Gmail API client | `GmailDownloader`, `download_gmail_attachments` |
 
@@ -179,7 +177,6 @@ EXPORT_FILES_DIR=/path/to/export
 
 **Add new document type**: Just process documents with that type - it's automatically added from metadata
 **Add new issuing party**: Same - dynamically loaded from processed metadata
-**Debug classification failure**: `python scripts/debug_classification.py <pdf>` shows full LLM response
 **Verify duplicate detection**: `check-hash <pdf>` shows both fast and content hashes
 
 ### Mappings Workflow
@@ -210,7 +207,7 @@ EXPORT_FILES_DIR=/path/to/export
 
 ## Testing
 
-No test suite currently. Debug scripts available in `scripts/`.
+No test suite currently.
 
 ## Dependencies
 
