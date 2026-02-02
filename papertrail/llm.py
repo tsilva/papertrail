@@ -6,7 +6,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional, TYPE_CHECKING
 
-from papertrail.logging_utils import get_logger
+from papertrail.logging_utils import get_logger, DocumentLogger
 from papertrail.models import DocumentMetadataRaw, DOCUMENT_TYPES, ISSUING_PARTIES
 from papertrail.rejected import RejectedValuesManager
 
@@ -116,7 +116,8 @@ def normalize_metadata(
     raw_metadata: DocumentMetadataRaw,
     client,
     model_id: Optional[str] = None,
-    mappings: Optional["MappingsManager"] = None
+    mappings: Optional["MappingsManager"] = None,
+    doc_logger: Optional[DocumentLogger] = None,
 ) -> tuple[str, str]:
     """
     Phase 2: Normalize raw extracted values to canonical enum values.
@@ -144,6 +145,11 @@ def normalize_metadata(
     if mappings:
         doc_type = mappings.get_mapping(raw_metadata.document_type, "document_types")
         issuing_party = mappings.get_mapping(raw_metadata.issuing_party, "issuing_parties")
+
+        if doc_type and doc_logger:
+            doc_logger.log_normalization("document_type", raw_metadata.document_type, doc_type, tier=1)
+        if issuing_party and doc_logger:
+            doc_logger.log_normalization("issuing_party", raw_metadata.issuing_party, issuing_party, tier=1)
 
         if doc_type and issuing_party:
             # Both found in mappings - no LLM needed!
@@ -192,6 +198,14 @@ Respond in JSON format:
             messages=[{"role": "user", "content": normalization_prompt}]
         )
 
+        # Log LLM usage
+        if doc_logger and response.usage:
+            doc_logger.log_llm_usage(
+                model_id,
+                response.usage.prompt_tokens,
+                response.usage.completion_tokens,
+            )
+
         content = response.choices[0].message.content
 
         if not content:
@@ -209,17 +223,25 @@ Respond in JSON format:
         if llm_doc_type not in DOCUMENT_TYPES:
             logger.warning(f"Rejected doc_type '{llm_doc_type}' (not in canonical list)")
             _log_rejected_value("document_types", llm_doc_type, raw_metadata.document_type)
+            if doc_logger:
+                doc_logger.log_rejected("document_type", raw_metadata.document_type, llm_doc_type)
             llm_doc_type = "$UNKNOWN$"
         if llm_issuing_party not in ISSUING_PARTIES:
             logger.warning(f"Rejected issuing_party '{llm_issuing_party}' (not in canonical list)")
             _log_rejected_value("issuing_parties", llm_issuing_party, raw_metadata.issuing_party)
+            if doc_logger:
+                doc_logger.log_rejected("issuing_party", raw_metadata.issuing_party, llm_issuing_party)
             llm_issuing_party = "$UNKNOWN$"
 
         # Use LLM results for fields that needed normalization
         if need_doc_type:
             doc_type = llm_doc_type
+            if doc_logger:
+                doc_logger.log_normalization("document_type", raw_metadata.document_type, doc_type, tier=2)
         if need_issuing_party:
             issuing_party = llm_issuing_party
+            if doc_logger:
+                doc_logger.log_normalization("issuing_party", raw_metadata.issuing_party, issuing_party, tier=2)
 
         # Save successful LLM mappings for reuse (as 'auto' pending review)
         # IMPORTANT: Don't save mappings that result in $UNKNOWN$ - these are rejections, not valid mappings
@@ -228,10 +250,14 @@ Respond in JSON format:
                 mappings.add_mapping(
                     raw_metadata.document_type, doc_type, "document_types", confirmed=False
                 )
+                if doc_logger:
+                    doc_logger.log_mapping_saved("document_types", raw_metadata.document_type, doc_type)
             if need_issuing_party and raw_metadata.issuing_party != "$UNKNOWN$" and issuing_party != "$UNKNOWN$":
                 mappings.add_mapping(
                     raw_metadata.issuing_party, issuing_party, "issuing_parties", confirmed=False
                 )
+                if doc_logger:
+                    doc_logger.log_mapping_saved("issuing_parties", raw_metadata.issuing_party, issuing_party)
 
         return doc_type, issuing_party
 

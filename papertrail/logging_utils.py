@@ -3,6 +3,7 @@
 import logging
 import sys
 import traceback
+from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
@@ -134,3 +135,106 @@ def get_logger(name: str) -> logging.Logger:
         Logger instance for papertrail.{name}
     """
     return logging.getLogger(f'papertrail.{name}')
+
+
+# ------------------- TASK LOGGING -------------------
+
+def setup_task_logging(processed_path: Path, task_name: str, verbose: bool = False) -> Path:
+    """
+    Setup file-based logging for a task run.
+
+    Creates a timestamped log file in {processed_path}/logs/ and adds a file
+    handler to the papertrail root logger so all DEBUG output is captured.
+
+    Args:
+        processed_path: Path to the processed documents directory
+        task_name: Name of the task (used in log filename)
+        verbose: Whether verbose console output is enabled
+
+    Returns:
+        Path to the created log file
+    """
+    logs_dir = processed_path / "logs"
+    logs_dir.mkdir(parents=True, exist_ok=True)
+
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    log_file_path = logs_dir / f"{task_name}_{timestamp}.log"
+
+    root = logging.getLogger('papertrail')
+    fh = logging.FileHandler(log_file_path, mode='w', encoding='utf-8')
+    fh.setLevel(logging.DEBUG)
+    fh.setFormatter(logging.Formatter(
+        '%(asctime)s [%(levelname)s] %(name)s - %(message)s',
+        datefmt='%Y-%m-%d %H:%M:%S'
+    ))
+    root.addHandler(fh)
+
+    return log_file_path
+
+
+# ------------------- DOCUMENT LOGGER -------------------
+
+class DocumentLogger:
+    """Structured per-document logging with markers for agent-reviewable auditing."""
+
+    def __init__(self, logger: Optional[logging.Logger] = None):
+        self._logger = logger or get_logger('cli')
+        self._current_doc: Optional[str] = None
+        self._timings: dict[str, float] = {}
+
+    def start_document(self, pdf_path: Path) -> None:
+        """Mark the start of processing a document."""
+        self._current_doc = pdf_path.name
+        self._timings = {}
+        self._logger.debug(f"=== DOCUMENT START: {self._current_doc} ===")
+
+    def log_extraction(self, raw_metadata_dict: dict) -> None:
+        """Log raw extracted metadata fields."""
+        parts = []
+        for key in ("document_type", "issuing_party", "issue_date", "confidence",
+                     "service_name", "total_amount", "total_amount_currency", "reasoning"):
+            val = raw_metadata_dict.get(key)
+            if val is not None:
+                parts.append(f'{key}="{val}"' if isinstance(val, str) else f"{key}={val}")
+        self._logger.debug(f"[RAW] {' '.join(parts)}")
+
+    def log_normalization(self, field: str, raw: str, normalized: str, tier: int) -> None:
+        """Log a normalization step with tier info."""
+        tag = f"[TIER-{tier}-HIT]" if tier == 1 else f"[TIER-{tier}-LLM]"
+        self._logger.debug(f"{tag} {field}: '{raw}' -> '{normalized}'")
+
+    def log_mapping_saved(self, field: str, raw: str, canonical: str) -> None:
+        """Log when a new mapping is saved."""
+        self._logger.debug(f"[MAPPING-SAVED] {field}: '{raw}' -> '{canonical}'")
+
+    def log_rejected(self, field: str, raw: str, normalized: str) -> None:
+        """Log when a normalization is rejected."""
+        self._logger.debug(f"[REJECTED] {field}: '{raw}' -> '{normalized}' (not in canonical list)")
+
+    def log_timing(self, operation: str, seconds: float) -> None:
+        """Log timing for an operation."""
+        self._timings[operation] = seconds
+        self._logger.debug(f"[TIMING] {operation}: {seconds:.2f}s")
+
+    def log_final(self, metadata_dict: dict) -> None:
+        """Log final saved metadata values."""
+        parts = []
+        for key in ("document_type", "issuing_party", "issue_date",
+                     "total_amount", "total_amount_currency", "service_name"):
+            val = metadata_dict.get(key)
+            if val is not None:
+                parts.append(f"{key}={val}")
+        self._logger.debug(f"[FINAL] {' '.join(parts)}")
+
+    def log_llm_usage(self, model: str, prompt_tokens: int, completion_tokens: int) -> None:
+        """Log LLM token usage."""
+        self._logger.debug(f"[LLM-USAGE] model={model} prompt_tokens={prompt_tokens} completion_tokens={completion_tokens}")
+
+    def end_document(self, status: str = "SUCCESS") -> None:
+        """Mark the end of processing a document."""
+        total = sum(self._timings.values())
+        if total > 0:
+            self._logger.debug(f"[TIMING] total: {total:.2f}s")
+        self._logger.debug(f"=== DOCUMENT END: {self._current_doc} -- {status} ===")
+        self._current_doc = None
+        self._timings = {}
