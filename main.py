@@ -88,13 +88,13 @@ def get_ctx() -> AppContext:
     return _ctx
 
 
-def initialize_config(profile_name: Optional[str] = None, env_name: Optional[str] = None) -> None:
+def initialize_config(profile_name: Optional[str] = None, env_name: str = "bridge") -> None:
     """
     Initialize configuration from profile.
 
     Args:
         profile_name: Profile name to load, or None for auto-detection (uses 'default')
-        env_name: Optional environment overlay name (loads .env.{name} on top of .env)
+        env_name: Environment name (loads .env.{name}, default: "bridge")
 
     Raises:
         ProfileNotFoundError: If specified profile doesn't exist
@@ -1681,7 +1681,8 @@ def main():
     parser.add_argument(
         "--env",
         type=str,
-        help="Environment to use (loads .env.{name} instead of .env). "
+        default="bridge",
+        help="Environment to use (loads .env.{name}). Default: bridge. "
              "Example: --env local loads .env.local for local LLM proxy."
     )
     parser.add_argument(
@@ -1714,7 +1715,7 @@ def main():
 
     # Initialize configuration (profile or legacy .env)
     try:
-        initialize_config(args.profile, env_name=args.env)
+        initialize_config(args.profile, env_name=args.env or "bridge")
     except ProfileNotFoundError as e:
         parser.error(str(e))
     except ProfileError as e:
