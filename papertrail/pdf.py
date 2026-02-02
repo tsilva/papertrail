@@ -3,10 +3,15 @@
 import io
 import os
 import base64
+import time
 from pathlib import Path
 
 import fitz  # PyMuPDF
 from PIL import Image, ImageEnhance
+
+from papertrail.logging_utils import get_logger
+
+logger = get_logger('pdf')
 
 
 def render_pdf_to_images(
@@ -27,10 +32,13 @@ def render_pdf_to_images(
     Returns:
         List of base64-encoded JPEG images
     """
+    t0 = time.monotonic()
     images_b64 = []
 
     with fitz.open(str(pdf_path)) as doc:
-        num_pages = min(max_pages, len(doc))
+        total_pages = len(doc)
+        num_pages = min(max_pages, total_pages)
+        logger.debug(f"[PDF-RENDER] {pdf_path.name}: {total_pages} pages, rendering {num_pages}")
 
         for i in range(num_pages):
             page = doc[i]
@@ -46,6 +54,8 @@ def render_pdf_to_images(
             img_b64 = base64.b64encode(img_buffer.getvalue()).decode("utf-8")
             images_b64.append(img_b64)
 
+    elapsed = time.monotonic() - t0
+    logger.debug(f"[PDF-RENDER] {pdf_path.name}: completed in {elapsed:.2f}s")
     return images_b64
 
 

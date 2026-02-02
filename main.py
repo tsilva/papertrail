@@ -37,7 +37,7 @@ from papertrail.profiles import (
     ProfileError,
 )
 from papertrail.hashing import hash_file_fast, hash_file_content, HashCache
-from papertrail.logging_utils import setup_failure_logger, log_failure, setup_logging, get_logger
+from papertrail.logging_utils import setup_failure_logger, log_failure, setup_logging, get_logger, setup_task_logging, DocumentLogger
 from papertrail.models import (
     DocumentMetadata,
     DocumentMetadataRaw,
@@ -173,14 +173,24 @@ def file_name_from_metadata(metadata: DocumentMetadata, file_hash: str) -> str:
 
 # ------------------- CLASSIFICATION -------------------
 
-def classify_pdf_document(pdf_path: Path, file_hash: str, failure_logger=None) -> DocumentMetadata:
+def classify_pdf_document(pdf_path: Path, file_hash: str, failure_logger=None,
+                          doc_logger: DocumentLogger = None) -> DocumentMetadata:
     """Classify a PDF document using the LLM."""
+    import time as _time
     ctx = get_ctx()
 
+    if doc_logger:
+        doc_logger.start_document(pdf_path)
+
     try:
+        t0 = _time.monotonic()
         images_b64 = render_pdf_to_images(pdf_path)
+        if doc_logger:
+            doc_logger.log_timing("pdf_render", _time.monotonic() - t0)
     except Exception as e:
         log_failure(failure_logger, pdf_path, e)
+        if doc_logger:
+            doc_logger.end_document("FAILED")
         raise RuntimeError(f"Failed to render PDF image: {pdf_path}") from e
 
     try:
@@ -197,6 +207,7 @@ def classify_pdf_document(pdf_path: Path, file_hash: str, failure_logger=None) -
             {"role": "user", "content": user_content},
         ]
 
+        t0 = _time.monotonic()
         response = ctx.openai_client.chat.completions.create(
             model=ctx.model_id,
             max_tokens=4096,
@@ -205,6 +216,10 @@ def classify_pdf_document(pdf_path: Path, file_hash: str, failure_logger=None) -
             tools=TOOLS_RAW_EXTRACTION,
             tool_choice={"type": "function", "function": {"name": "extract_document_metadata"}},
         )
+        if doc_logger:
+            doc_logger.log_timing("llm_extraction", _time.monotonic() - t0)
+            if response.usage:
+                doc_logger.log_llm_usage(ctx.model_id, response.usage.prompt_tokens, response.usage.completion_tokens)
 
         tool_calls = response.choices[0].message.tool_calls
         if not tool_calls:
@@ -213,9 +228,16 @@ def classify_pdf_document(pdf_path: Path, file_hash: str, failure_logger=None) -
         args = tool_calls[0].function.arguments
         raw_metadata = DocumentMetadataRaw.model_validate_json(args)
 
+        if doc_logger:
+            doc_logger.log_extraction(raw_metadata.model_dump())
+
+        t0 = _time.monotonic()
         normalized_doc_type, normalized_issuing_party = normalize_metadata(
-            raw_metadata, ctx.openai_client, ctx.model_id, mappings=ctx.mappings_manager
+            raw_metadata, ctx.openai_client, ctx.model_id, mappings=ctx.mappings_manager,
+            doc_logger=doc_logger,
         )
+        if doc_logger:
+            doc_logger.log_timing("normalization", _time.monotonic() - t0)
 
         metadata = DocumentMetadata(
             issue_date=raw_metadata.issue_date,
@@ -235,20 +257,28 @@ def classify_pdf_document(pdf_path: Path, file_hash: str, failure_logger=None) -
         metadata.create_date = now
         metadata.update_date = now
         metadata.page_count = get_page_count(pdf_path)
+
+        if doc_logger:
+            doc_logger.log_final(metadata.model_dump())
+            doc_logger.end_document("SUCCESS")
+
         return metadata
     except Exception as e:
         log_failure(failure_logger, pdf_path, e)
+        if doc_logger:
+            doc_logger.end_document("FAILED")
         raise RuntimeError(f"Classification failed for: {pdf_path}") from e
 
 
 # ------------------- RENAMING & PROCESSING -------------------
 
 def rename_single_pdf(pdf_path: Path, content_hash: str, processed_path: Path,
-                      known_content_hashes: set, known_file_hashes: set, failure_logger=None):
+                      known_content_hashes: set, known_file_hashes: set, failure_logger=None,
+                      doc_logger: DocumentLogger = None):
     """Process and rename a single PDF file."""
     try:
         file_hash = hash_file_fast(pdf_path)
-        metadata = classify_pdf_document(pdf_path, content_hash, failure_logger)
+        metadata = classify_pdf_document(pdf_path, content_hash, failure_logger, doc_logger=doc_logger)
         metadata.file_hash = file_hash
 
         filename = file_name_from_metadata(metadata, content_hash)
@@ -269,10 +299,12 @@ def rename_single_pdf(pdf_path: Path, content_hash: str, processed_path: Path,
         logger.error(f"Failed to process {pdf_path.name}: {e}")
 
 
-def rename_pdf_files(pdf_paths, file_hash_map, known_content_hashes, known_file_hashes, processed_path, failure_logger=None):
+def rename_pdf_files(pdf_paths, file_hash_map, known_content_hashes, known_file_hashes, processed_path,
+                     failure_logger=None, doc_logger: DocumentLogger = None):
     """Rename multiple PDF files."""
     for pdf_path in tqdm(pdf_paths):
-        rename_single_pdf(pdf_path, file_hash_map[pdf_path], processed_path, known_content_hashes, known_file_hashes, failure_logger)
+        rename_single_pdf(pdf_path, file_hash_map[pdf_path], processed_path, known_content_hashes, known_file_hashes,
+                          failure_logger, doc_logger=doc_logger)
 
 
 def validate_metadata(output_path: Path):
@@ -642,9 +674,19 @@ def task_extract_new(processed_path: Path, raw_paths: list[Path]):
 
 def _task_extract_new_locked(processed_path: Path, raw_paths: list[Path]):
     """Extract and classify new PDF files (lock already held)."""
-    log_path = processed_path / "classification_failures.log"
-    failure_logger = setup_failure_logger(log_path)
-    logger.debug(f"Logging failures to: {log_path}")
+    import time as _time
+
+    log_file_path = setup_task_logging(processed_path, "extract_new")
+    logger.info(f"=== EXTRACT_NEW STARTED ===")
+    logger.info(f"Log: {log_file_path}")
+
+    logs_dir = processed_path / "logs"
+    failure_log_path = logs_dir / "classification_failures.log"
+    failure_logger = setup_failure_logger(failure_log_path)
+    logger.debug(f"Logging failures to: {failure_log_path}")
+
+    doc_logger = DocumentLogger()
+    run_start = _time.monotonic()
 
     logger.info("Building hash index from metadata files...")
     known_content_hashes_idx, known_file_hashes_idx = build_hash_index(processed_path)
@@ -680,10 +722,17 @@ def _task_extract_new_locked(processed_path: Path, raw_paths: list[Path]):
     files_to_process = [pdf for pdf in potentially_new if content_hash_map.get(pdf) not in known_content_hashes]
     logger.info(f"Found {len(files_to_process)} truly new PDFs to process.")
 
-    if files_to_process:
-        rename_pdf_files(files_to_process, content_hash_map, known_content_hashes, known_file_hashes, processed_path, failure_logger)
+    success_count = len(known_content_hashes)
+    initial_count = success_count
 
-    logger.info("Extraction complete.")
+    if files_to_process:
+        rename_pdf_files(files_to_process, content_hash_map, known_content_hashes, known_file_hashes, processed_path,
+                         failure_logger, doc_logger=doc_logger)
+
+    new_processed = len(known_content_hashes) - initial_count
+    failed = len(files_to_process) - new_processed
+    elapsed = _time.monotonic() - run_start
+    logger.info(f"=== SUMMARY: {len(files_to_process)} attempted, {new_processed} success, {failed} failed, {elapsed:.1f}s total ===")
 
 
 def task_rename_files(processed_path: Path):
@@ -1143,52 +1192,106 @@ def _review_rejected_field(
             print("  Skipped.")
 
 
-def task_reextract(processed_path: Path, dry_run: bool = False, max_workers: int = 4):
-    """Re-extract documents with $UNKNOWN$ values by re-running the full classification pipeline.
+def _collect_reextract_targets(processed_path: Path, all_unknown: bool = False,
+                                filename: str = None, document_pattern: str = None) -> list[tuple]:
+    """Collect files to re-extract based on targeting mode.
 
-    Scans metadata files for $UNKNOWN$ document_type, issuing_party, or issue_date,
-    then re-runs the full pipeline (PDF rendering + LLM extraction + normalization).
-    Preserves content_hash, file_hash, and create_date from old metadata.
+    Returns list of (metadata_path, pdf_path, data) tuples.
+    """
+    import fnmatch
+
+    json_files = list(processed_path.rglob("*.json"))
+    if not json_files:
+        logger.info(f"No metadata files found in {processed_path}")
+        return []
+
+    targets = []
+
+    if filename:
+        # Single file mode
+        target_pdf = processed_path / filename
+        target_json = target_pdf.with_suffix(".json")
+        if not target_json.exists():
+            logger.error(f"Metadata file not found: {target_json}")
+            return []
+        if not target_pdf.exists():
+            logger.error(f"PDF file not found: {target_pdf}")
+            return []
+        with open(target_json, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        targets.append((target_json, target_pdf, data))
+
+    elif document_pattern:
+        # Pattern mode
+        for metadata_path in tqdm(json_files, desc="Matching pattern"):
+            pdf_path = metadata_path.with_suffix(".pdf")
+            if not fnmatch.fnmatch(pdf_path.name, document_pattern):
+                continue
+            if not pdf_path.exists():
+                logger.warning(f"PDF not found for {metadata_path.name}")
+                continue
+            try:
+                with open(metadata_path, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                targets.append((metadata_path, pdf_path, data))
+            except Exception as e:
+                logger.warning(f"Skipping {metadata_path.name}: {e}")
+
+    elif all_unknown:
+        # All unknown mode (original behavior)
+        for metadata_path in tqdm(json_files, desc="Scanning for $UNKNOWN$"):
+            try:
+                with open(metadata_path, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                has_unknown = (
+                    data.get("document_type") == "$UNKNOWN$"
+                    or data.get("issuing_party") == "$UNKNOWN$"
+                    or data.get("issue_date") == "$UNKNOWN$"
+                )
+                if has_unknown:
+                    pdf_path = metadata_path.with_suffix(".pdf")
+                    if pdf_path.exists():
+                        targets.append((metadata_path, pdf_path, data))
+                    else:
+                        logger.warning(f"PDF not found for {metadata_path.name}")
+            except Exception as e:
+                logger.warning(f"Skipping {metadata_path.name}: {e}")
+
+    return targets
+
+
+def task_reextract(processed_path: Path, dry_run: bool = False, max_workers: int = 4,
+                   all_unknown: bool = False, filename: str = None, document_pattern: str = None):
+    """Re-extract documents by re-running the full classification pipeline.
+
+    Requires at least one targeting flag:
+    - all_unknown: Re-extract all files with $UNKNOWN$ values
+    - filename: Re-extract a single file by name
+    - document_pattern: Re-extract files matching a glob pattern
 
     Args:
         processed_path: Path to processed documents folder
         dry_run: If True, show what would be changed without modifying files
         max_workers: Maximum parallel workers for LLM calls
+        all_unknown: Target all files with $UNKNOWN$ values
+        filename: Target a single file by name
+        document_pattern: Target files matching a glob pattern
     """
     from concurrent.futures import ThreadPoolExecutor, as_completed
 
-    # Find all metadata files with $UNKNOWN$ values
-    json_files = list(processed_path.rglob("*.json"))
-    if not json_files:
-        logger.info(f"No metadata files found in {processed_path}")
+    log_file_path = setup_task_logging(processed_path, "reextract")
+    logger.info("=== REEXTRACT STARTED ===")
+    logger.info(f"Log: {log_file_path}")
+
+    doc_logger = DocumentLogger()
+
+    targets = _collect_reextract_targets(processed_path, all_unknown=all_unknown,
+                                          filename=filename, document_pattern=document_pattern)
+    if not targets:
+        logger.info("No files to re-extract.")
         return
 
-    unknown_files = []
-    for metadata_path in tqdm(json_files, desc="Scanning for $UNKNOWN$"):
-        try:
-            with open(metadata_path, "r", encoding="utf-8") as f:
-                data = json.load(f)
-
-            has_unknown = (
-                data.get("document_type") == "$UNKNOWN$"
-                or data.get("issuing_party") == "$UNKNOWN$"
-                or data.get("issue_date") == "$UNKNOWN$"
-            )
-
-            if has_unknown:
-                pdf_path = metadata_path.with_suffix(".pdf")
-                if pdf_path.exists():
-                    unknown_files.append((metadata_path, pdf_path, data))
-                else:
-                    logger.warning(f"PDF not found for {metadata_path.name}")
-        except Exception as e:
-            logger.warning(f"Skipping {metadata_path.name}: {e}")
-
-    if not unknown_files:
-        logger.info("No files with $UNKNOWN$ values found.")
-        return
-
-    logger.info(f"Found {len(unknown_files)} files with $UNKNOWN$ values to re-extract")
+    logger.info(f"Found {len(targets)} files to re-extract")
 
     def classify_one(item):
         """Worker function for parallel classification."""
@@ -1199,7 +1302,7 @@ def task_reextract(processed_path: Path, dry_run: bool = False, max_workers: int
             if not content_hash:
                 return (metadata_path, old_data, None, "No content_hash in metadata")
 
-            new_metadata = classify_pdf_document(pdf_path, content_hash)
+            new_metadata = classify_pdf_document(pdf_path, content_hash, doc_logger=doc_logger)
 
             # Preserve fields from old metadata
             new_metadata.file_hash = old_data.get("file_hash") or old_data.get("_old_hash")
@@ -1216,7 +1319,7 @@ def task_reextract(processed_path: Path, dry_run: bool = False, max_workers: int
     failed_count = 0
 
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
-        futures = {executor.submit(classify_one, item): item for item in unknown_files}
+        futures = {executor.submit(classify_one, item): item for item in targets}
 
         for future in tqdm(as_completed(futures), total=len(futures), desc="Re-extracting"):
             metadata_path, old_data, new_metadata, error = future.result()
@@ -1232,18 +1335,22 @@ def task_reextract(processed_path: Path, dry_run: bool = False, max_workers: int
             new_date = new_metadata.issue_date
 
             changes = []
-            if old_data.get("document_type") == "$UNKNOWN$" and new_doc_type != "$UNKNOWN$":
-                changes.append(f"document_type: $UNKNOWN$ -> {new_doc_type}")
-            if old_data.get("issuing_party") == "$UNKNOWN$" and new_issuer != "$UNKNOWN$":
-                changes.append(f"issuing_party: $UNKNOWN$ -> {new_issuer}")
-            if old_data.get("issue_date") == "$UNKNOWN$" and new_date != "$UNKNOWN$":
-                changes.append(f"issue_date: $UNKNOWN$ -> {new_date}")
+            old_doc_type = old_data.get("document_type", "")
+            old_issuer = old_data.get("issuing_party", "")
+            old_date = old_data.get("issue_date", "")
+
+            if old_doc_type != new_doc_type:
+                changes.append(f"document_type: {old_doc_type} -> {new_doc_type}")
+            if old_issuer != new_issuer:
+                changes.append(f"issuing_party: {old_issuer} -> {new_issuer}")
+            if old_date != new_date:
+                changes.append(f"issue_date: {old_date} -> {new_date}")
 
             if changes:
-                logger.info(f"Fixed {metadata_path.name}: {', '.join(changes)}")
+                logger.info(f"Changed {metadata_path.name}: {', '.join(changes)}")
                 fixed_count += 1
             else:
-                logger.debug(f"Still unknown: {metadata_path.name}")
+                logger.debug(f"No changes: {metadata_path.name}")
                 still_unknown_count += 1
 
             if not dry_run:
@@ -1251,14 +1358,81 @@ def task_reextract(processed_path: Path, dry_run: bool = False, max_workers: int
 
     # Summary
     logger.info("=" * 40)
-    logger.info(f"Fixed: {fixed_count}")
-    logger.info(f"Still unknown: {still_unknown_count}")
+    logger.info(f"Changed: {fixed_count}")
+    logger.info(f"Unchanged: {still_unknown_count}")
     logger.info(f"Failed: {failed_count}")
     if dry_run:
         logger.info("(dry run - no files were modified)")
     else:
         if fixed_count > 0:
             logger.info("Run 'rename_files' task to update filenames based on new metadata.")
+
+
+def task_validate_extraction(processed_path: Path, document_pattern: str = None):
+    """Validate extraction quality by loading and inspecting metadata.
+
+    Flags $UNKNOWN$ values, low confidence, and missing fields.
+
+    Args:
+        processed_path: Path to processed documents directory
+        document_pattern: Optional glob pattern to filter files
+    """
+    import fnmatch
+
+    log_file_path = setup_task_logging(processed_path, "validate_extraction")
+    logger.info("=== VALIDATE_EXTRACTION STARTED ===")
+    logger.info(f"Log: {log_file_path}")
+
+    json_files = list(processed_path.rglob("*.json"))
+    if not json_files:
+        logger.info(f"No metadata files found in {processed_path}")
+        return
+
+    issues_count = 0
+    files_checked = 0
+
+    for metadata_path in tqdm(json_files, desc="Validating extractions"):
+        pdf_path = metadata_path.with_suffix(".pdf")
+
+        if document_pattern and not fnmatch.fnmatch(pdf_path.name, document_pattern):
+            continue
+
+        files_checked += 1
+        try:
+            with open(metadata_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+        except Exception as e:
+            logger.warning(f"Failed to read {metadata_path.name}: {e}")
+            issues_count += 1
+            continue
+
+        file_issues = []
+
+        # Check for $UNKNOWN$ values
+        for field in ("document_type", "issuing_party", "issue_date"):
+            if data.get(field) == "$UNKNOWN$":
+                file_issues.append(f"{field}=$UNKNOWN$")
+
+        # Check confidence
+        confidence = data.get("confidence")
+        if confidence is not None and confidence < 0.7:
+            file_issues.append(f"low_confidence={confidence}")
+
+        # Check missing fields
+        for field in ("content_hash", "file_hash", "issue_date", "document_type", "issuing_party"):
+            if not data.get(field):
+                file_issues.append(f"missing_{field}")
+
+        if file_issues:
+            issues_count += 1
+            logger.warning(f"[ISSUE] {pdf_path.name}: {', '.join(file_issues)}")
+
+        # Log all fields to debug log
+        logger.debug(f"[METADATA] {pdf_path.name}: " + " ".join(
+            f"{k}={v}" for k, v in data.items() if k != "reasoning"
+        ))
+
+    logger.info(f"=== SUMMARY: {files_checked} checked, {issues_count} with issues ===")
 
 
 def task_gmail_download():
@@ -1329,7 +1503,7 @@ def run_step(cmd, step_desc):
     logger.info(f"### {step_desc}... Finished.")
 
 
-def pipeline(export_date_arg=None):
+def pipeline(export_date_arg=None, processed_path_override=None):
     """Run the full document processing pipeline."""
     from shutil import which
     from datetime import timedelta
@@ -1353,6 +1527,10 @@ def pipeline(export_date_arg=None):
     if missing:
         logger.error(f"Missing required profile settings: {', '.join(missing)}")
         sys.exit(1)
+
+    log_file_path = setup_task_logging(Path(PROCESSED_FILES_DIR), "pipeline")
+    logger.info("=== PIPELINE STARTED ===")
+    logger.info(f"Log: {log_file_path}")
 
     for tool in ["mbox-extractor", "archive-extractor", "pdf-merger"]:
         if which(tool) is None:
@@ -1530,7 +1708,7 @@ def main():
         'extract_new', 'rename_files', 'validate_metadata', 'export_excel',
         'copy_matching', 'export_all_dates', 'check_files_exist', 'pipeline',
         'gmail_download', 'bootstrap_mappings', 'review_mappings', 'add_canonical',
-        'backfill_page_count', 'review_rejected', 'reextract'
+        'backfill_page_count', 'review_rejected', 'reextract', 'validate_extraction'
     ], help="Task to perform.")
     parser.add_argument("processed_path", type=str, nargs='?', help="Path to output folder.")
     parser.add_argument("--raw_path", type=str, help="Path to documents folder(s). Use ';' to separate multiple paths.")
@@ -1544,6 +1722,9 @@ def main():
     parser.add_argument("--field", type=str, help="Field name for add_canonical (document_type or issuing_party).")
     parser.add_argument("--canonical", type=str, help="Canonical value to add.")
     parser.add_argument("--dry_run", action="store_true", help="Show what would be changed without modifying files (for reextract).")
+    parser.add_argument("--all_unknown", action="store_true", help="Re-extract all files with $UNKNOWN$ values (for reextract).")
+    parser.add_argument("--filename", type=str, help="Single filename to re-extract (for reextract).")
+    parser.add_argument("--document_pattern", type=str, help="Glob pattern for matching files (for reextract/validate_extraction).")
     args = parser.parse_args()
 
     # Initialize logging early (reconfigures the module-level logger)
@@ -1602,7 +1783,21 @@ def main():
             parser.error("reextract requires the processed_path argument.")
         if not os.path.exists(args.processed_path):
             parser.error(f"The processed_path '{args.processed_path}' does not exist.")
-        task_reextract(Path(args.processed_path), dry_run=args.dry_run)
+        if not (args.all_unknown or args.filename or args.document_pattern):
+            parser.error("reextract requires at least one of: --all_unknown, --filename, --document_pattern")
+        task_reextract(
+            Path(args.processed_path), dry_run=args.dry_run,
+            all_unknown=args.all_unknown, filename=args.filename,
+            document_pattern=args.document_pattern,
+        )
+        return
+
+    if args.task == "validate_extraction":
+        if not args.processed_path:
+            parser.error("validate_extraction requires the processed_path argument.")
+        if not os.path.exists(args.processed_path):
+            parser.error(f"The processed_path '{args.processed_path}' does not exist.")
+        task_validate_extraction(Path(args.processed_path), document_pattern=args.document_pattern)
         return
 
     if not args.processed_path:
