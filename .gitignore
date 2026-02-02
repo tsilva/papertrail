@@ -130,7 +130,6 @@ celerybeat.pid
 # Environments
 .env
 .env.*
-!.env.bridge
 !.env.*.example
 .venv
 env/
