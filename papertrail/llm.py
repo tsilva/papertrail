@@ -55,27 +55,16 @@ def _extract_json_from_response(content: str) -> str:
     return content
 
 
-def get_tools_raw_extraction() -> list[dict]:
-    """
-    Get the tool definition for raw metadata extraction.
-
-    Returns:
-        List containing the extraction tool definition
-    """
-    return [
-        {
-            "type": "function",
-            "function": {
-                "name": "extract_document_metadata",
-                "description": "Extract metadata from a document exactly as it appears.",
-                "parameters": DocumentMetadataRaw.model_json_schema(),
-            },
-        }
-    ]
-
-
-# Static alias for backwards compatibility
-TOOLS_RAW_EXTRACTION = get_tools_raw_extraction()
+TOOLS_RAW_EXTRACTION = [
+    {
+        "type": "function",
+        "function": {
+            "name": "extract_document_metadata",
+            "description": "Extract metadata from a document exactly as it appears.",
+            "parameters": DocumentMetadataRaw.model_json_schema(),
+        },
+    }
+]
 
 
 def get_system_prompt_raw_extraction() -> str:
