@@ -197,6 +197,9 @@ config/mappings.yaml
 # Hash cache (auto-generated)
 config/hash_cache.yaml
 
+# Lock files (runtime state)
+config/.extract.lock
+
 .claude/settings.local.json
 # Sensitive data - credentials and secrets
 .env.local
