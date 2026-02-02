@@ -3,7 +3,7 @@
 from pathlib import Path
 from typing import Optional
 
-import yaml
+from papertrail.yaml_utils import load_yaml, save_yaml
 
 
 class MappingsManager:
@@ -29,11 +29,7 @@ class MappingsManager:
 
     def _load(self) -> dict:
         """Load mappings from YAML file, creating empty structure if missing."""
-        if self.path.exists():
-            with open(self.path, "r", encoding="utf-8") as f:
-                data = yaml.safe_load(f) or {}
-        else:
-            data = {}
+        data = load_yaml(self.path)
 
         # Ensure structure exists for all fields
         for field in self.FIELDS:
@@ -50,9 +46,7 @@ class MappingsManager:
 
     def _save(self) -> None:
         """Save mappings to YAML file."""
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        with open(self.path, "w", encoding="utf-8") as f:
-            yaml.dump(self.data, f, default_flow_style=False, allow_unicode=True, sort_keys=False)
+        save_yaml(self.path, self.data)
 
     def get_mapping(self, raw_value: str, field: str) -> Optional[str]:
         """Check if raw value has a known mapping.

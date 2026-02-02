@@ -29,6 +29,22 @@ DocumentType = create_dynamic_enum('DocumentType', DOCUMENT_TYPES)
 IssuingParty = create_dynamic_enum('IssuingParty', ISSUING_PARTIES)
 
 
+def _validate_enum_field(value, enum_name: str, getter, field_label: str):
+    """Shared validator for enum fields (issuing_party, document_type)."""
+    if value is None or (isinstance(value, str) and value.strip() == ""):
+        return "$UNKNOWN$"
+    if isinstance(value, str):
+        value = clean_enum_string(value, enum_name)
+        valid = getter()
+        valid_lower = {v.lower(): v for v in valid}
+        value_lower = value.lower()
+        if value_lower not in valid_lower:
+            logger.warning(f"Pydantic rejected {field_label} '{value}' - not in enum")
+            return "$UNKNOWN$"
+        return valid_lower[value_lower]
+    return value
+
+
 class DocumentMetadataRaw(BaseModel):
     """
     Raw extracted metadata without enum constraints - first phase extraction.
@@ -95,38 +111,12 @@ class DocumentMetadata(BaseModel):
     @field_validator('issuing_party', mode='before')
     @classmethod
     def validate_issuing_party(cls, value):
-        if value is None or (isinstance(value, str) and value.strip() == ""):
-            return "$UNKNOWN$"
-        if isinstance(value, str):
-            value = clean_enum_string(value, "IssuingParty")
-            # Check if value exists in enum (case-insensitive)
-            valid_parties = get_issuing_parties()
-            valid_parties_lower = {p.lower(): p for p in valid_parties}
-            value_lower = value.lower()
-            if value_lower not in valid_parties_lower:
-                logger.warning(f"Pydantic rejected issuing_party '{value}' - not in enum")
-                return "$UNKNOWN$"
-            # Return the canonical casing from the enum
-            return valid_parties_lower[value_lower]
-        return value
+        return _validate_enum_field(value, "IssuingParty", get_issuing_parties, "issuing_party")
 
     @field_validator('document_type', mode='before')
     @classmethod
     def validate_document_type(cls, value):
-        if value is None or (isinstance(value, str) and value.strip() == ""):
-            return "$UNKNOWN$"
-        if isinstance(value, str):
-            value = clean_enum_string(value, "DocumentType")
-            # Check if value exists in enum (case-insensitive)
-            valid_types = get_document_types()
-            valid_types_lower = {t.lower(): t for t in valid_types}
-            value_lower = value.lower()
-            if value_lower not in valid_types_lower:
-                logger.warning(f"Pydantic rejected document_type '{value}' - not in enum")
-                return "$UNKNOWN$"
-            # Return the canonical casing from the enum
-            return valid_types_lower[value_lower]
-        return value
+        return _validate_enum_field(value, "DocumentType", get_document_types, "document_type")
 
     @field_validator('total_amount', mode='before')
     @classmethod
