@@ -138,19 +138,18 @@ python main.py extract_new /path/to/processed  # Auto-uses default.yaml if avail
 
 **Full docs**: See `profiles/README.md` for complete YAML schema and examples
 
-### Legacy .env (Deprecated but Supported)
+### Named .env Files
 
-Still works for backward compatibility. `.env` at repo root:
+All env files use the named format `.env.{name}`. The default is `bridge`:
 
-```env
-OPENROUTER_MODEL_ID=google/gemini-2.5-flash
-OPENROUTER_API_KEY=sk-or-v1-...
-RAW_FILES_DIR=/path/to/raw;/optional/path2
-PROCESSED_FILES_DIR=/path/to/processed
-EXPORT_FILES_DIR=/path/to/export
+```bash
+python main.py pipeline              # loads .env.bridge (default)
+python main.py --env local pipeline  # loads .env.local
 ```
 
-**Note**: If both profiles and .env exist, profiles take precedence when `--profile` is specified.
+- `.env.bridge` is committed to the repo (safe defaults, no secrets or uses env var references)
+- All other `.env.*` files are gitignored (except `.env.*.example` templates)
+- Bare `.env` is no longer supported
 
 ### Config Files
 
