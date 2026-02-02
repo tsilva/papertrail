@@ -163,30 +163,31 @@ def load_json_files_parallel(
     return results
 
 
-def build_hash_index(directory: Path) -> dict[str, Path]:
+def build_hash_index(directory: Path) -> tuple[dict[str, Path], dict[str, Path]]:
     """
-    Build index of both content hashes and file hashes from metadata files.
+    Build separate indexes of content hashes and file hashes from metadata files.
 
     Args:
         directory: Directory containing metadata JSON files
 
     Returns:
-        Dictionary mapping hash -> PDF path
+        Tuple of (content_hash_index, file_hash_index) each mapping hash -> PDF path
     """
-    hash_index = {}
+    content_hash_index = {}
+    file_hash_index = {}
 
     for json_path, data in iter_json_files(directory):
         pdf_path = json_path.with_suffix(".pdf")
         # Index by content hash (primary) - support both old and new field names
         content_hash = data.get('content_hash') or data.get('hash')
         if content_hash:
-            hash_index[content_hash] = pdf_path
-        # Also index by file hash (for quick filtering)
+            content_hash_index[content_hash] = pdf_path
+        # Index by file hash (for quick filtering)
         file_hash = data.get('file_hash') or data.get('_old_hash')
         if file_hash:
-            hash_index[file_hash] = pdf_path
+            file_hash_index[file_hash] = pdf_path
 
-    return hash_index
+    return content_hash_index, file_hash_index
 
 
 def get_unique_dates(directory: Path) -> list[str]:
