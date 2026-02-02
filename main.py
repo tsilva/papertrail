@@ -737,6 +737,9 @@ def task_rename_files(processed_path: Path):
     """Rename existing PDF files based on metadata."""
     from papertrail.metadata import load_json_files_parallel
 
+    log_file_path = setup_task_logging(processed_path, "rename_files")
+    logger.info("=== RENAME_FILES STARTED ===")
+    logger.info(f"Log: {log_file_path}")
     logger.info("Renaming existing PDF files and metadata based on metadata...")
 
     valid_entries = []
@@ -783,6 +786,7 @@ def task_export_all_dates(
     processed_path = Path(processed_path)
     export_base_dir = Path(export_base_dir)
 
+    setup_task_logging(processed_path, "export_all_dates")
     logger.info("Scanning for unique dates in processed files...")
     all_dates = get_unique_dates(processed_path)
 
@@ -841,6 +845,7 @@ def task_export_all_dates(
 
 def task_backfill_page_count(processed_path: Path):
     """Backfill page_count for existing metadata files that don't have it."""
+    setup_task_logging(processed_path, "backfill_page_count")
     json_files = list(processed_path.rglob("*.json"))
     if not json_files:
         logger.info(f"No metadata files found in {processed_path}")
@@ -888,6 +893,7 @@ def task_backfill_page_count(processed_path: Path):
 
 def task_bootstrap_mappings(processed_path: Path, mappings_mgr):
     """Populate mappings from existing metadata JSON files."""
+    setup_task_logging(processed_path, "bootstrap_mappings")
     if mappings_mgr is None:
         logger.error("Mappings manager not initialized.")
         return
@@ -1440,6 +1446,10 @@ def task_gmail_download():
     raw_paths = profile.paths.raw
     processed_path_str = profile.paths.processed
 
+    # Setup logging if processed path is available
+    if processed_path_str:
+        setup_task_logging(Path(processed_path_str), "gmail_download")
+
     if not raw_paths or not processed_path_str:
         missing = []
         if not raw_paths:
@@ -1486,9 +1496,15 @@ def task_gmail_download():
 # ------------------- PIPELINE -------------------
 
 def run_step(cmd, step_desc):
-    """Run a pipeline step."""
+    """Run a pipeline step, capturing output to the pipeline log."""
     logger.info(f"### {step_desc}...")
-    result = subprocess.run(cmd, shell=True, text=True)
+    result = subprocess.run(cmd, shell=True, text=True, capture_output=True)
+    if result.stdout:
+        for line in result.stdout.rstrip().split('\n'):
+            logger.info(line)
+    if result.stderr:
+        for line in result.stderr.rstrip().split('\n'):
+            logger.info(line)
     if result.returncode != 0:
         logger.error(f"{step_desc} failed with exit code {result.returncode}.")
         sys.exit(result.returncode)
@@ -1644,10 +1660,12 @@ def process_folder(task: str, processed_path: str, raw_paths=None, excel_output_
     elif task == "rename_files":
         task_rename_files(processed_path)
     elif task == "validate_metadata":
+        setup_task_logging(processed_path, "validate_metadata")
         logger.info("Validating existing metadata and PDFs...")
         validate_metadata(processed_path)
         logger.info("Validation complete.")
     elif task == "export_excel":
+        setup_task_logging(processed_path, "export_excel")
         logger.info("Exporting metadata to Excel...")
         export_metadata_to_excel(processed_path, excel_output_path)
         logger.info("Excel export complete.")
@@ -1655,6 +1673,7 @@ def process_folder(task: str, processed_path: str, raw_paths=None, excel_output_
         if not regex_pattern or not copy_dest_folder:
             logger.error("For 'copy_matching', --regex_pattern and --copy_dest_folder are required.")
             return
+        setup_task_logging(processed_path, "copy_matching")
         stats = copy_matching_files(processed_path, regex_pattern, Path(copy_dest_folder))
         logger.info(f"Copied {stats['copied']} files matching '{regex_pattern}' to {copy_dest_folder}")
     elif task == "export_all_dates":
@@ -1663,6 +1682,7 @@ def process_folder(task: str, processed_path: str, raw_paths=None, excel_output_
         if not check_schema_path:
             logger.error("For 'check_files_exist', --check_schema_path is required.")
             return
+        setup_task_logging(processed_path, "check_files_exist")
         check_files_exist(processed_path, Path(check_schema_path))
         logger.info("File existence check complete.")
     else:
