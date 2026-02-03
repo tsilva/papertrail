@@ -65,9 +65,9 @@ from papertrail.enums import reset_enum_cache
 from papertrail.mappings import MappingsManager
 from papertrail.rejected import RejectedValuesManager
 from papertrail.nif_lookup import NIFLookupCache
-from papertrail.logging_utils import setup_logging, get_logger, setup_task_logging
+from papertrail.logging_utils import setup_logging, get_logger
 
-# Import all task functions
+# Import all task functions and utilities
 from papertrail.tasks import (
     task_extract_new,
     task_rename_files,
@@ -86,6 +86,7 @@ from papertrail.tasks import (
     task_gmail_download,
     pipeline,
     task_qr_inventory,
+    task_log_context,
 )
 
 # ------------------- LOGGING -------------------
@@ -195,31 +196,31 @@ def process_folder(task: str, processed_path: str, raw_paths=None, excel_output_
     elif task == "rename_files":
         task_rename_files(processed_path)
     elif task == "validate_metadata":
-        setup_task_logging(processed_path, "validate_metadata")
-        logger.info("Validating existing metadata and PDFs...")
-        validate_metadata(processed_path)
-        logger.info("Validation complete.")
+        with task_log_context(processed_path, "validate_metadata"):
+            logger.info("Validating existing metadata and PDFs...")
+            validate_metadata(processed_path)
+            logger.info("Validation complete.")
     elif task == "export_excel":
-        setup_task_logging(processed_path, "export_excel")
-        logger.info("Exporting metadata to Excel...")
-        export_metadata_to_excel(processed_path, excel_output_path)
-        logger.info("Excel export complete.")
+        with task_log_context(processed_path, "export_excel"):
+            logger.info("Exporting metadata to Excel...")
+            export_metadata_to_excel(processed_path, excel_output_path)
+            logger.info("Excel export complete.")
     elif task == "copy_matching":
         if not regex_pattern or not copy_dest_folder:
             logger.error("For 'copy_matching', --regex_pattern and --copy_dest_folder are required.")
             return
-        setup_task_logging(processed_path, "copy_matching")
-        stats = copy_matching_files(processed_path, regex_pattern, Path(copy_dest_folder))
-        logger.info(f"Copied {stats['copied']} files matching '{regex_pattern}' to {copy_dest_folder}")
+        with task_log_context(processed_path, "copy_matching"):
+            stats = copy_matching_files(processed_path, regex_pattern, Path(copy_dest_folder))
+            logger.info(f"Copied {stats['copied']} files matching '{regex_pattern}' to {copy_dest_folder}")
     elif task == "export_all_dates":
         task_export_all_dates(processed_path, Path(export_base_dir), run_merge)
     elif task == "check_files_exist":
         if not check_schema_path:
             logger.error("For 'check_files_exist', --check_schema_path is required.")
             return
-        setup_task_logging(processed_path, "check_files_exist")
-        check_files_exist(processed_path, Path(check_schema_path))
-        logger.info("File existence check complete.")
+        with task_log_context(processed_path, "check_files_exist"):
+            check_files_exist(processed_path, Path(check_schema_path))
+            logger.info("File existence check complete.")
     else:
         logger.error("Invalid task specified.")
 

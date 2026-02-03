@@ -1,12 +1,10 @@
 """Mappings management tasks."""
 
-import json
 from pathlib import Path
-
-from tqdm import tqdm
 
 from papertrail.logging_utils import get_logger, setup_task_logging
 from papertrail.mappings import MappingsManager
+from papertrail.metadata import load_validated_metadata
 from papertrail.rejected import RejectedValuesManager
 from papertrail.tasks import require_initialized
 
@@ -18,52 +16,45 @@ def task_bootstrap_mappings(processed_path: Path, mappings_mgr):
     setup_task_logging(processed_path, "bootstrap_mappings")
     require_initialized(mappings_mgr, "Mappings manager")
 
-    json_files = list(processed_path.rglob("*.json"))
-    if not json_files:
-        logger.info(f"No metadata files found in {processed_path}")
-        return
-
     doc_type_count = 0
     issuer_count = 0
-    skipped = 0
+    processed_count = 0
 
-    for metadata_path in tqdm(json_files, desc="Scanning metadata"):
-        try:
-            with open(metadata_path, "r", encoding="utf-8") as f:
-                data = json.load(f)
+    for metadata_path, _, data in load_validated_metadata(
+        processed_path, require_pdf=False, validate=False, show_progress=True, progress_desc="Scanning metadata"
+    ):
+        processed_count += 1
+        doc_type_raw = data.get("document_type_raw")
+        doc_type = data.get("document_type")
+        issuing_party_raw = data.get("issuing_party_raw")
+        issuing_party = data.get("issuing_party")
 
-            doc_type_raw = data.get("document_type_raw")
-            doc_type = data.get("document_type")
-            issuing_party_raw = data.get("issuing_party_raw")
-            issuing_party = data.get("issuing_party")
+        if doc_type_raw and doc_type and doc_type != "$UNKNOWN$":
+            existing = mappings_mgr.get_mapping(doc_type_raw, "document_types")
+            if existing is None:
+                mappings_mgr.add_mapping(
+                    doc_type_raw, doc_type, "document_types", confirmed=True, save=False
+                )
+                doc_type_count += 1
 
-            if doc_type_raw and doc_type and doc_type != "$UNKNOWN$":
-                existing = mappings_mgr.get_mapping(doc_type_raw, "document_types")
-                if existing is None:
-                    mappings_mgr.add_mapping(
-                        doc_type_raw, doc_type, "document_types", confirmed=True, save=False
-                    )
-                    doc_type_count += 1
+        if issuing_party_raw and issuing_party and issuing_party != "$UNKNOWN$":
+            existing = mappings_mgr.get_mapping(issuing_party_raw, "issuing_parties")
+            if existing is None:
+                mappings_mgr.add_mapping(
+                    issuing_party_raw, issuing_party, "issuing_parties", confirmed=True, save=False
+                )
+                issuer_count += 1
 
-            if issuing_party_raw and issuing_party and issuing_party != "$UNKNOWN$":
-                existing = mappings_mgr.get_mapping(issuing_party_raw, "issuing_parties")
-                if existing is None:
-                    mappings_mgr.add_mapping(
-                        issuing_party_raw, issuing_party, "issuing_parties", confirmed=True, save=False
-                    )
-                    issuer_count += 1
-
-        except Exception as e:
-            skipped += 1
-            if skipped <= 5:
-                logger.warning(f"Skipping {metadata_path.name}: {e}")
+    if processed_count == 0:
+        logger.info(f"No metadata files found in {processed_path}")
+        return
 
     mappings_mgr._save()
 
     logger.info("Bootstrap complete:")
     logger.info(f"  Document type mappings added: {doc_type_count}")
     logger.info(f"  Issuing party mappings added: {issuer_count}")
-    logger.info(f"  Files skipped: {skipped}")
+    logger.info(f"  Files processed: {processed_count}")
     logger.info(f"Mappings saved to: {mappings_mgr.path}")
 
     stats = mappings_mgr.get_stats()

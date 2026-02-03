@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import Optional
 
 from papertrail.cache_base import validate_field
+from papertrail.constants import FIELDS
 from papertrail.yaml_utils import load_yaml, save_yaml
 
 
@@ -17,7 +18,7 @@ class MappingsManager:
     Also maintains a list of valid canonical values per field.
     """
 
-    FIELDS = ("document_types", "issuing_parties")
+    FIELDS = FIELDS
 
     def __init__(self, mappings_path: Path):
         """Initialize the mappings manager.
