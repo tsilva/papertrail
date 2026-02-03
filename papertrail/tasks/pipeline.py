@@ -1,12 +1,14 @@
 """Pipeline task."""
 
 import json
+import logging
 import os
 import re
 import subprocess
 import sys
 import tempfile
 import time
+from contextlib import contextmanager
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -19,6 +21,28 @@ from papertrail.mbox import extract_mbox_attachments
 from papertrail.tasks.validation import validate_merged_pdf
 
 logger = get_logger('cli')
+
+
+@contextmanager
+def suppress_console_logging():
+    """Temporarily suppress console logging output.
+
+    Raises the level of all StreamHandlers on the root logger to suppress
+    console output while allowing file logging to continue.
+    """
+    root = logging.getLogger()
+    original_levels = []
+
+    for handler in root.handlers:
+        if isinstance(handler, logging.StreamHandler) and not isinstance(handler, logging.FileHandler):
+            original_levels.append((handler, handler.level))
+            handler.setLevel(logging.CRITICAL + 1)
+
+    try:
+        yield
+    finally:
+        for handler, level in original_levels:
+            handler.setLevel(level)
 
 
 def check_api_accessibility(base_url: str, timeout: int = 10) -> bool:
@@ -305,7 +329,8 @@ def pipeline(export_date_arg=None, processed_path_override=None):
         logger.debug("### Merge PDFs...")
         try:
             from pdf_gluer import merge_all_pdfs
-            merge_all_pdfs(export_date_dir)
+            with suppress_console_logging():
+                merge_all_pdfs(export_date_dir)
             step.success("Completed")
             logger.debug("### Merge PDFs... Finished.")
         except Exception as e:
@@ -313,7 +338,8 @@ def pipeline(export_date_arg=None, processed_path_override=None):
             logger.error(f"Merge PDFs failed: {e}")
             sys.exit(1)
 
-    validate_merged_pdf(Path(export_date_dir))
+    with suppress_console_logging():
+        validate_merged_pdf(Path(export_date_dir))
 
     # Validate exported files
     with console.step_progress("Validate exported files") as step:
