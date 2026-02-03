@@ -6,8 +6,7 @@ import time as _time
 from datetime import datetime
 from pathlib import Path
 
-from tqdm import tqdm
-
+from papertrail.console import get_console
 from papertrail.logging_utils import (
     setup_failure_logger,
     log_failure,
@@ -304,6 +303,8 @@ def _task_extract_new_locked(processed_path: Path, raw_paths: list[Path]):
     """Extract and classify new PDF files (lock already held)."""
     from papertrail.tasks.organization import rename_pdf_files
 
+    console = get_console()
+
     with task_log_context(processed_path, "extract_new"):
         logs_dir = processed_path / "logs"
         failure_log_path = logs_dir / "classification_failures.log"
@@ -313,39 +314,52 @@ def _task_extract_new_locked(processed_path: Path, raw_paths: list[Path]):
         doc_logger = DocumentLogger()
         run_start = _time.monotonic()
 
-        logger.info("Building hash index from metadata files...")
+        logger.debug("Building hash index from metadata files...")
         known_content_hashes_idx, known_file_hashes_idx = build_hash_index(processed_path)
         known_content_hashes = set(known_content_hashes_idx.keys())
         known_file_hashes = set(known_file_hashes_idx.keys())
 
-        logger.info("Scanning for new PDFs...")
+        logger.debug("Scanning for new PDFs...")
         pdf_paths = find_pdf_files(raw_paths)
-        logger.info(f"Found {len(pdf_paths)} PDFs in raw directories")
+        logger.debug(f"Found {len(pdf_paths)} PDFs in raw directories")
 
-        logger.info("Stage 1: Quick filtering using fast file hashes...")
-        fast_hash_map = {pdf: hash_file_fast(pdf) for pdf in tqdm(pdf_paths, desc="Fast hashing")}
+        logger.debug("Stage 1: Quick filtering using fast file hashes...")
+
+        # Stage 1: Fast hashing with Rich progress
+        fast_hash_map = {}
+        with console.progress("Fast hashing", total=len(pdf_paths)) as progress:
+            task = progress.add_task("Fast hashing", total=len(pdf_paths))
+            for pdf in pdf_paths:
+                fast_hash_map[pdf] = hash_file_fast(pdf)
+                progress.update(task, advance=1)
+
         potentially_new = [pdf for pdf in pdf_paths if fast_hash_map[pdf] not in known_file_hashes]
 
         already_processed = len(pdf_paths) - len(potentially_new)
-        logger.info(f"  -> Skipped {already_processed} already-processed files")
-        logger.info(f"  -> {len(potentially_new)} files need content-based hashing")
+        logger.debug(f"Skipped {already_processed} already-processed files")
+        logger.debug(f"{len(potentially_new)} files need content-based hashing")
 
         if not potentially_new:
-            logger.info("No new PDFs to process.")
+            console.success(f"{len(pdf_paths)} PDFs scanned, 0 new to process", indent=False)
+            logger.debug("No new PDFs to process.")
             return
 
-        logger.info(f"Stage 2: Content-based hashing for {len(potentially_new)} new files...")
+        logger.debug(f"Stage 2: Content-based hashing for {len(potentially_new)} new files...")
         content_hash_map = {}
 
-        for pdf in tqdm(potentially_new, desc="Content hashing"):
-            try:
-                content_hash = hash_file_content(pdf)
-                content_hash_map[pdf] = content_hash
-            except Exception as e:
-                logger.error(f"Error hashing {pdf.name}: {e}")
+        # Stage 2: Content hashing with Rich progress
+        with console.progress("Content hashing", total=len(potentially_new)) as progress:
+            task = progress.add_task("Content hashing", total=len(potentially_new))
+            for pdf in potentially_new:
+                try:
+                    content_hash = hash_file_content(pdf)
+                    content_hash_map[pdf] = content_hash
+                except Exception as e:
+                    logger.error(f"Error hashing {pdf.name}: {e}")
+                progress.update(task, advance=1)
 
         files_to_process = [pdf for pdf in potentially_new if content_hash_map.get(pdf) not in known_content_hashes]
-        logger.info(f"Found {len(files_to_process)} truly new PDFs to process.")
+        logger.debug(f"Found {len(files_to_process)} truly new PDFs to process.")
 
         success_count = len(known_content_hashes)
         initial_count = success_count
@@ -357,7 +371,16 @@ def _task_extract_new_locked(processed_path: Path, raw_paths: list[Path]):
         new_processed = len(known_content_hashes) - initial_count
         failed = len(files_to_process) - new_processed
         elapsed = _time.monotonic() - run_start
-        logger.info(f"=== SUMMARY: {len(files_to_process)} attempted, {new_processed} success, {failed} failed, {elapsed:.1f}s total ===")
+
+        # Console output
+        console.success(f"{len(pdf_paths)} PDFs scanned, {len(files_to_process)} new to process", indent=False)
+        if new_processed > 0 or failed > 0:
+            if failed > 0:
+                console.warning(f"{new_processed} processed, {failed} failed", indent=False)
+            else:
+                console.success(f"{new_processed} processed successfully", indent=False)
+
+        logger.debug(f"=== SUMMARY: {len(files_to_process)} attempted, {new_processed} success, {failed} failed, {elapsed:.1f}s total ===")
 
 
 def _collect_reextract_targets(processed_path: Path, all_unknown: bool = False,
@@ -365,9 +388,11 @@ def _collect_reextract_targets(processed_path: Path, all_unknown: bool = False,
     """Collect files to re-extract based on targeting mode."""
     import fnmatch
 
+    console = get_console()
+
     json_files = list(processed_path.rglob("*.json"))
     if not json_files:
-        logger.info(f"No metadata files found in {processed_path}")
+        logger.debug(f"No metadata files found in {processed_path}")
         return []
 
     targets = []
@@ -376,48 +401,56 @@ def _collect_reextract_targets(processed_path: Path, all_unknown: bool = False,
         target_pdf = processed_path / filename
         target_json = target_pdf.with_suffix(".json")
         if not target_json.exists():
-            logger.error(f"Metadata file not found: {target_json}")
+            console.error(f"Metadata file not found: {target_json}", indent=False)
             return []
         if not target_pdf.exists():
-            logger.error(f"PDF file not found: {target_pdf}")
+            console.error(f"PDF file not found: {target_pdf}", indent=False)
             return []
         with open(target_json, "r", encoding="utf-8") as f:
             data = json.load(f)
         targets.append((target_json, target_pdf, data))
 
     elif document_pattern:
-        for metadata_path in tqdm(json_files, desc="Matching pattern"):
-            pdf_path = metadata_path.with_suffix(".pdf")
-            if not fnmatch.fnmatch(pdf_path.name, document_pattern):
-                continue
-            if not pdf_path.exists():
-                logger.warning(f"PDF not found for {metadata_path.name}")
-                continue
-            try:
-                with open(metadata_path, "r", encoding="utf-8") as f:
-                    data = json.load(f)
-                targets.append((metadata_path, pdf_path, data))
-            except Exception as e:
-                logger.warning(f"Skipping {metadata_path.name}: {e}")
+        with console.progress("Matching pattern", total=len(json_files)) as progress:
+            task = progress.add_task("Matching pattern", total=len(json_files))
+            for metadata_path in json_files:
+                pdf_path = metadata_path.with_suffix(".pdf")
+                if not fnmatch.fnmatch(pdf_path.name, document_pattern):
+                    progress.update(task, advance=1)
+                    continue
+                if not pdf_path.exists():
+                    logger.warning(f"PDF not found for {metadata_path.name}")
+                    progress.update(task, advance=1)
+                    continue
+                try:
+                    with open(metadata_path, "r", encoding="utf-8") as f:
+                        data = json.load(f)
+                    targets.append((metadata_path, pdf_path, data))
+                except Exception as e:
+                    logger.warning(f"Skipping {metadata_path.name}: {e}")
+                progress.update(task, advance=1)
 
     elif all_unknown:
-        for metadata_path in tqdm(json_files, desc="Scanning for $UNKNOWN$"):
-            try:
-                with open(metadata_path, "r", encoding="utf-8") as f:
-                    data = json.load(f)
-                has_unknown = (
-                    data.get("document_type") == "$UNKNOWN$"
-                    or data.get("issuing_party") == "$UNKNOWN$"
-                    or data.get("issue_date") == "$UNKNOWN$"
-                )
-                if has_unknown:
-                    pdf_path = metadata_path.with_suffix(".pdf")
-                    if pdf_path.exists():
-                        targets.append((metadata_path, pdf_path, data))
-                    else:
-                        logger.warning(f"PDF not found for {metadata_path.name}")
-            except Exception as e:
-                logger.warning(f"Skipping {metadata_path.name}: {e}")
+        with console.progress("Scanning for $UNKNOWN$", total=len(json_files)) as progress:
+            task = progress.add_task("Scanning for $UNKNOWN$", total=len(json_files))
+            for metadata_path in json_files:
+                try:
+                    with open(metadata_path, "r", encoding="utf-8") as f:
+                        data = json.load(f)
+                    has_unknown = (
+                        data.get("document_type") == "$UNKNOWN$"
+                        or data.get("issuing_party") == "$UNKNOWN$"
+                        or data.get("issue_date") == "$UNKNOWN$"
+                    )
+                    if has_unknown:
+                        pdf_path = metadata_path.with_suffix(".pdf")
+                        if pdf_path.exists():
+                            targets.append((metadata_path, pdf_path, data))
+                        else:
+                            logger.warning(f"PDF not found for {metadata_path.name}")
+                except Exception as e:
+                    logger.warning(f"Skipping {metadata_path.name}: {e}")
+                progress.update(task, advance=1)
 
     return targets
 
@@ -425,16 +458,18 @@ def _collect_reextract_targets(processed_path: Path, all_unknown: bool = False,
 def task_reextract(processed_path: Path, dry_run: bool = False,
                    all_unknown: bool = False, filename: str = None, document_pattern: str = None):
     """Re-extract documents by re-running the full classification pipeline."""
+    console = get_console()
+
     with task_log_context(processed_path, "reextract"):
         doc_logger = DocumentLogger()
 
         targets = _collect_reextract_targets(processed_path, all_unknown=all_unknown,
                                               filename=filename, document_pattern=document_pattern)
         if not targets:
-            logger.info("No files to re-extract.")
+            console.warning("No files to re-extract", indent=False)
             return
 
-        logger.info(f"Found {len(targets)} files to re-extract")
+        logger.debug(f"Found {len(targets)} files to re-extract")
 
         def classify_one(item):
             metadata_path, pdf_path, old_data = item
@@ -450,104 +485,128 @@ def task_reextract(processed_path: Path, dry_run: bool = False,
             except Exception as e:
                 return (metadata_path, old_data, None, str(e))
 
-        logger.info("Running re-extraction...")
+        logger.debug("Running re-extraction...")
         fixed_count = 0
         still_unknown_count = 0
         failed_count = 0
 
-        for item in tqdm(targets, desc="Re-extracting"):
-            metadata_path, old_data, new_metadata, error = classify_one(item)
+        with console.progress("Re-extracting", total=len(targets)) as progress:
+            task = progress.add_task("Re-extracting", total=len(targets))
+            for item in targets:
+                metadata_path, old_data, new_metadata, error = classify_one(item)
 
-            if error:
-                logger.error(f"Failed {metadata_path.name}: {error}")
-                failed_count += 1
-                continue
+                if error:
+                    logger.error(f"Failed {metadata_path.name}: {error}")
+                    failed_count += 1
+                    progress.update(task, advance=1)
+                    continue
 
-            new_doc_type = enum_value(new_metadata.document_type)
-            new_issuer = enum_value(new_metadata.issuing_party)
-            new_date = new_metadata.issue_date
+                new_doc_type = enum_value(new_metadata.document_type)
+                new_issuer = enum_value(new_metadata.issuing_party)
+                new_date = new_metadata.issue_date
 
-            changes = []
-            old_doc_type = old_data.get("document_type", "")
-            old_issuer = old_data.get("issuing_party", "")
-            old_date = old_data.get("issue_date", "")
+                changes = []
+                old_doc_type = old_data.get("document_type", "")
+                old_issuer = old_data.get("issuing_party", "")
+                old_date = old_data.get("issue_date", "")
 
-            if old_doc_type != new_doc_type:
-                changes.append(f"document_type: {old_doc_type} -> {new_doc_type}")
-            if old_issuer != new_issuer:
-                changes.append(f"issuing_party: {old_issuer} -> {new_issuer}")
-            if old_date != new_date:
-                changes.append(f"issue_date: {old_date} -> {new_date}")
+                if old_doc_type != new_doc_type:
+                    changes.append(f"document_type: {old_doc_type} -> {new_doc_type}")
+                if old_issuer != new_issuer:
+                    changes.append(f"issuing_party: {old_issuer} -> {new_issuer}")
+                if old_date != new_date:
+                    changes.append(f"issue_date: {old_date} -> {new_date}")
 
-            if changes:
-                logger.info(f"Changed {metadata_path.name}: {', '.join(changes)}")
-                fixed_count += 1
-            else:
-                logger.debug(f"No changes: {metadata_path.name}")
-                still_unknown_count += 1
+                if changes:
+                    logger.debug(f"Changed {metadata_path.name}: {', '.join(changes)}")
+                    fixed_count += 1
+                else:
+                    logger.debug(f"No changes: {metadata_path.name}")
+                    still_unknown_count += 1
 
-            if not dry_run:
-                save_metadata_json(metadata_path.with_suffix(".pdf"), new_metadata)
+                if not dry_run:
+                    save_metadata_json(metadata_path.with_suffix(".pdf"), new_metadata)
 
-        logger.info("=" * 40)
-        logger.info(f"Changed: {fixed_count}")
-        logger.info(f"Unchanged: {still_unknown_count}")
-        logger.info(f"Failed: {failed_count}")
-        if dry_run:
-            logger.info("(dry run - no files were modified)")
+                progress.update(task, advance=1)
+
+        # Summary output
+        if failed_count > 0:
+            console.warning(f"{fixed_count} changed, {still_unknown_count} unchanged, {failed_count} failed", indent=False)
+        elif fixed_count > 0:
+            console.success(f"{fixed_count} changed, {still_unknown_count} unchanged", indent=False)
         else:
-            if fixed_count > 0:
-                logger.info("Run 'rename_files' task to update filenames based on new metadata.")
+            console.info(f"No changes ({still_unknown_count} files checked)", indent=False)
+
+        logger.debug(f"Changed: {fixed_count}, Unchanged: {still_unknown_count}, Failed: {failed_count}")
+
+        if dry_run:
+            console.detail("(dry run - no files were modified)", indent=False)
+        elif fixed_count > 0:
+            console.detail("Run 'rename_files' task to update filenames based on new metadata.", indent=False)
 
 
 def task_validate_extraction(processed_path: Path, document_pattern: str = None):
     """Validate extraction quality by loading and inspecting metadata."""
     import fnmatch
 
+    console = get_console()
+
     with task_log_context(processed_path, "validate_extraction"):
         json_files = list(processed_path.rglob("*.json"))
         if not json_files:
-            logger.info(f"No metadata files found in {processed_path}")
+            console.warning("No metadata files found", indent=False)
             return
 
         issues_count = 0
         files_checked = 0
 
-        for metadata_path in tqdm(json_files, desc="Validating extractions"):
-            pdf_path = metadata_path.with_suffix(".pdf")
+        with console.progress("Validating extractions", total=len(json_files)) as progress:
+            task = progress.add_task("Validating extractions", total=len(json_files))
+            for metadata_path in json_files:
+                pdf_path = metadata_path.with_suffix(".pdf")
 
-            if document_pattern and not fnmatch.fnmatch(pdf_path.name, document_pattern):
-                continue
+                if document_pattern and not fnmatch.fnmatch(pdf_path.name, document_pattern):
+                    progress.update(task, advance=1)
+                    continue
 
-            files_checked += 1
-            try:
-                with open(metadata_path, "r", encoding="utf-8") as f:
-                    data = json.load(f)
-            except Exception as e:
-                logger.warning(f"Failed to read {metadata_path.name}: {e}")
-                issues_count += 1
-                continue
+                files_checked += 1
+                try:
+                    with open(metadata_path, "r", encoding="utf-8") as f:
+                        data = json.load(f)
+                except Exception as e:
+                    logger.warning(f"Failed to read {metadata_path.name}: {e}")
+                    issues_count += 1
+                    progress.update(task, advance=1)
+                    continue
 
-            file_issues = []
+                file_issues = []
 
-            for field in ("document_type", "issuing_party", "issue_date"):
-                if data.get(field) == "$UNKNOWN$":
-                    file_issues.append(f"{field}=$UNKNOWN$")
+                for field in ("document_type", "issuing_party", "issue_date"):
+                    if data.get(field) == "$UNKNOWN$":
+                        file_issues.append(f"{field}=$UNKNOWN$")
 
-            confidence = data.get("confidence")
-            if confidence is not None and confidence < 0.7:
-                file_issues.append(f"low_confidence={confidence}")
+                confidence = data.get("confidence")
+                if confidence is not None and confidence < 0.7:
+                    file_issues.append(f"low_confidence={confidence}")
 
-            for field in ("content_hash", "file_hash", "issue_date", "document_type", "issuing_party"):
-                if not data.get(field):
-                    file_issues.append(f"missing_{field}")
+                for field in ("content_hash", "file_hash", "issue_date", "document_type", "issuing_party"):
+                    if not data.get(field):
+                        file_issues.append(f"missing_{field}")
 
-            if file_issues:
-                issues_count += 1
-                logger.warning(f"[ISSUE] {pdf_path.name}: {', '.join(file_issues)}")
+                if file_issues:
+                    issues_count += 1
+                    logger.warning(f"[ISSUE] {pdf_path.name}: {', '.join(file_issues)}")
 
-            logger.debug(f"[METADATA] {pdf_path.name}: " + " ".join(
-                f"{k}={v}" for k, v in data.items() if k != "reasoning"
-            ))
+                logger.debug(f"[METADATA] {pdf_path.name}: " + " ".join(
+                    f"{k}={v}" for k, v in data.items() if k != "reasoning"
+                ))
 
-        logger.info(f"=== SUMMARY: {files_checked} checked, {issues_count} with issues ===")
+                progress.update(task, advance=1)
+
+        # Summary output
+        if issues_count > 0:
+            console.warning(f"{files_checked} checked, {issues_count} with issues", indent=False)
+        else:
+            console.success(f"{files_checked} checked, no issues found", indent=False)
+
+        logger.debug(f"=== SUMMARY: {files_checked} checked, {issues_count} with issues ===")

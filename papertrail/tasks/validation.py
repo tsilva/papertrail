@@ -4,8 +4,7 @@ import json
 from datetime import datetime
 from pathlib import Path
 
-from tqdm import tqdm
-
+from papertrail.console import get_console
 from papertrail.hashing import hash_file_fast, hash_file_content, HashCache
 from papertrail.logging_utils import get_logger, setup_task_logging
 from papertrail.metadata import load_validated_metadata
@@ -19,11 +18,12 @@ def validate_metadata(output_path: Path):
     """Validate metadata files and their corresponding PDFs."""
     from concurrent.futures import ProcessPoolExecutor, as_completed
 
+    console = get_console()
     valid_entries = []
     errors = []
 
     cache = HashCache()
-    logger.info(f"Hash cache loaded with {len(cache)} entries")
+    logger.debug(f"Hash cache loaded with {len(cache)} entries")
 
     # Phase 1: Collect all PDF paths and their expected hashes using the helper
     pdf_info = []
@@ -47,48 +47,53 @@ def validate_metadata(output_path: Path):
 
     if not pdf_info:
         if errors:
-            logger.warning("Validation errors found:")
             for meta_path, err in errors:
-                logger.warning(f"- {meta_path}: {err}")
+                logger.warning(f"Validation error: {meta_path}: {err}")
         return valid_entries
 
     # Phase 2: Compute fast hashes and check cache
-    logger.info(f"Computing fast hashes for {len(pdf_info)} PDFs...")
+    logger.debug(f"Computing fast hashes for {len(pdf_info)} PDFs...")
     hash_results = {}
     uncached = []
 
-    for _, pdf_path, _, _ in tqdm(pdf_info, desc="Fast hashing"):
-        file_hash = hash_file_fast(pdf_path)
-        cached_content_hash = cache.get(file_hash)
-        if cached_content_hash:
-            hash_results[pdf_path] = cached_content_hash
-        else:
-            uncached.append((pdf_path, file_hash))
+    with console.progress("Fast hashing", total=len(pdf_info)) as progress:
+        task = progress.add_task("Fast hashing", total=len(pdf_info))
+        for _, pdf_path, _, _ in pdf_info:
+            file_hash = hash_file_fast(pdf_path)
+            cached_content_hash = cache.get(file_hash)
+            if cached_content_hash:
+                hash_results[pdf_path] = cached_content_hash
+            else:
+                uncached.append((pdf_path, file_hash))
+            progress.update(task, advance=1)
 
     cache_hits = len(pdf_info) - len(uncached)
-    logger.info(f"  -> Cache hits: {cache_hits}, Cache misses: {len(uncached)}")
+    logger.debug(f"Cache hits: {cache_hits}, Cache misses: {len(uncached)}")
 
     # Phase 3: Parallel content hashing for uncached PDFs
     if uncached:
-        logger.info(f"Computing content hashes for {len(uncached)} uncached PDFs...")
+        logger.debug(f"Computing content hashes for {len(uncached)} uncached PDFs...")
         with ProcessPoolExecutor() as executor:
             futures = {executor.submit(hash_file_content, pdf_path): (pdf_path, file_hash)
                        for pdf_path, file_hash in uncached}
 
-            for future in tqdm(as_completed(futures), total=len(futures), desc="Content hashing"):
-                pdf_path, file_hash = futures[future]
-                try:
-                    content_hash = future.result()
-                    hash_results[pdf_path] = content_hash
-                    cache.set(file_hash, content_hash)
-                except Exception as e:
-                    for metadata_path, p, _, _ in pdf_info:
-                        if p == pdf_path:
-                            errors.append((metadata_path, f"Content hashing failed: {e}"))
-                            break
+            with console.progress("Content hashing", total=len(futures)) as progress:
+                task = progress.add_task("Content hashing", total=len(futures))
+                for future in as_completed(futures):
+                    pdf_path, file_hash = futures[future]
+                    try:
+                        content_hash = future.result()
+                        hash_results[pdf_path] = content_hash
+                        cache.set(file_hash, content_hash)
+                    except Exception as e:
+                        for metadata_path, p, _, _ in pdf_info:
+                            if p == pdf_path:
+                                errors.append((metadata_path, f"Content hashing failed: {e}"))
+                                break
+                    progress.update(task, advance=1)
 
         cache.save()
-        logger.info(f"Hash cache saved with {len(cache)} entries")
+        logger.debug(f"Hash cache saved with {len(cache)} entries")
 
     # Phase 4: Validate using precomputed hashes
     for metadata_path, pdf_path, expected_hash, metadata in pdf_info:
@@ -107,11 +112,11 @@ def validate_metadata(output_path: Path):
         valid_entries.append((pdf_path, metadata))
 
     if errors:
-        logger.warning("Validation errors found:")
         for meta_path, err in errors:
-            logger.warning(f"- {meta_path}: {err}")
+            logger.warning(f"Validation error: {meta_path}: {err}")
+        console.warning(f"{len(valid_entries)} valid, {len(errors)} errors", indent=False)
     else:
-        logger.info("All metadata files passed validation.")
+        console.success(f"{len(valid_entries)} files validated", indent=False)
 
     return valid_entries
 
@@ -120,7 +125,7 @@ def validate_merged_pdf(folder_path: Path) -> bool:
     """Validate that merged_all.pdf has the correct page count."""
     merged_path = folder_path / "merged_all.pdf"
     if not merged_path.exists():
-        logger.info(f"  No merged_all.pdf found in {folder_path}")
+        logger.debug(f"No merged_all.pdf found in {folder_path}")
         return True
 
     source_pdfs = [p for p in folder_path.glob("*.pdf") if p.name != "merged_all.pdf"]
@@ -135,13 +140,15 @@ def validate_merged_pdf(folder_path: Path) -> bool:
             f"got {actual_pages} pages"
         )
 
-    logger.info(f"  Merge validation passed: {actual_pages} pages from {len(source_pdfs)} files")
+    logger.debug(f"Merge validation passed: {actual_pages} pages from {len(source_pdfs)} files")
     return True
 
 
 def check_files_exist(target_folder: Path, validation_schema_path: Path):
     """Validate files exist based on a schema."""
     from papertrail.metadata import load_json_data
+
+    console = get_console()
 
     with open(validation_schema_path, "r", encoding="utf-8") as f:
         checks = json.load(f)
@@ -158,25 +165,43 @@ def check_files_exist(target_folder: Path, validation_schema_path: Path):
         )
         check_results.append((found, idx, check))
 
-    all_passed = all(found for found, _, _ in check_results)
+    passed_count = sum(1 for found, _, _ in check_results if found)
+    missing_count = len(check_results) - passed_count
+    all_passed = missing_count == 0
 
+    # Build validation table rows
+    table_rows = []
     sorted_results = sorted(check_results, key=lambda x: (not x[0], x[1]))
     for found, idx, check in sorted_results:
-        status = "[OK]" if found else "[FAIL]"
-        result = "FOUND" if found else "NOT FOUND"
-        if found:
-            logger.info(f"{status} {check} -- {result}")
-        else:
-            logger.warning(f"{status} {check} -- {result}")
+        # Build a readable description from the check criteria
+        desc_parts = []
+        if "document_type" in check:
+            desc_parts.append(check["document_type"])
+        if "issuing_party" in check:
+            desc_parts.append(f"({check['issuing_party']})")
+        if "service_name" in check:
+            desc_parts.append(f"[{check['service_name']}]")
 
+        description = " ".join(desc_parts) if desc_parts else str(check)
+        status = "FOUND" if found else "MISSING"
+        table_rows.append({"description": description, "found": found})
+
+        # Log to file
+        logger.debug(f"{'[OK]' if found else '[FAIL]'} {check} -- {'FOUND' if found else 'NOT FOUND'}")
+
+    # Display validation table
+    console.validation_table("File Validation Results", table_rows)
+
+    # Summary
     if all_passed:
-        logger.info("All file existence checks passed.")
+        console.success(f"{passed_count} checks passed", indent=False)
     else:
-        logger.warning("Some file existence checks failed.")
+        console.warning(f"{passed_count} checks passed, {missing_count} missing", indent=False)
 
 
 def task_backfill_page_count(processed_path: Path):
     """Backfill page_count for existing metadata files that don't have it."""
+    console = get_console()
     setup_task_logging(processed_path, "backfill_page_count")
 
     updated = 0
@@ -205,7 +230,12 @@ def task_backfill_page_count(processed_path: Path):
             errors += 1
 
     if updated == 0 and skipped == 0 and errors == 0:
-        logger.info(f"No metadata files found in {processed_path}")
+        console.warning("No metadata files found", indent=False)
         return
 
-    logger.info(f"Backfill complete: {updated} updated, {skipped} skipped (already had page_count), {errors} errors")
+    if errors > 0:
+        console.warning(f"{updated} updated, {skipped} skipped, {errors} errors", indent=False)
+    else:
+        console.success(f"{updated} updated, {skipped} skipped (already had page_count)", indent=False)
+
+    logger.debug(f"Backfill complete: {updated} updated, {skipped} skipped, {errors} errors")

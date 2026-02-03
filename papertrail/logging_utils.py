@@ -7,6 +7,9 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
+from rich.console import Console
+from rich.logging import RichHandler
+
 
 def setup_failure_logger(log_path: Optional[Path] = None) -> logging.Logger:
     """
@@ -86,7 +89,11 @@ class VerboseFormatter(logging.Formatter):
         )
 
 
-def setup_logging(verbose: bool = False, log_file: Optional[Path] = None) -> logging.Logger:
+def setup_logging(
+    verbose: bool = False,
+    log_file: Optional[Path] = None,
+    use_rich: bool = True,
+) -> logging.Logger:
     """
     Configure papertrail logging system.
 
@@ -94,6 +101,7 @@ def setup_logging(verbose: bool = False, log_file: Optional[Path] = None) -> log
         verbose: If True, show DEBUG messages with timestamps.
                  If False, show INFO messages only (message-only format).
         log_file: Optional path to a log file for debug output.
+        use_rich: If True, use Rich for styled console output.
 
     Returns:
         The root 'papertrail' logger instance.
@@ -102,17 +110,34 @@ def setup_logging(verbose: bool = False, log_file: Optional[Path] = None) -> log
     root.setLevel(logging.DEBUG)
     root.handlers.clear()
 
-    # Console handler
-    console = logging.StreamHandler(sys.stderr)
-    if verbose:
-        console.setLevel(logging.DEBUG)
-        console.setFormatter(VerboseFormatter())
+    # Console handler - use Rich for styled output
+    if use_rich:
+        # Rich console handler with styled output
+        console_obj = Console(stderr=True)
+        console = RichHandler(
+            console=console_obj,
+            show_time=verbose,
+            show_path=False,
+            rich_tracebacks=True,
+            markup=True,
+            log_time_format="[%X]" if verbose else "",
+        )
+        if verbose:
+            console.setLevel(logging.DEBUG)
+        else:
+            console.setLevel(logging.INFO)
     else:
-        console.setLevel(logging.INFO)
-        console.setFormatter(CleanFormatter())
+        # Plain text console handler (for non-TTY or legacy mode)
+        console = logging.StreamHandler(sys.stderr)
+        if verbose:
+            console.setLevel(logging.DEBUG)
+            console.setFormatter(VerboseFormatter())
+        else:
+            console.setLevel(logging.INFO)
+            console.setFormatter(CleanFormatter())
     root.addHandler(console)
 
-    # Optional file handler
+    # Optional file handler (always plain text for parsing)
     if log_file:
         fh = logging.FileHandler(log_file, mode='a', encoding='utf-8')
         fh.setLevel(logging.DEBUG)
