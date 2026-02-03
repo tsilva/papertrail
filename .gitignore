@@ -194,8 +194,15 @@ config/file_check_validations.json
 # Mappings file (contains personal vendor names)
 config/mappings.yaml
 
+# Rejected values (auto-generated)
+config/rejected_values.yaml
+
 # Hash cache (auto-generated)
 config/hash_cache.yaml
+
+# QR inventory output (auto-generated)
+config/qr_inventory.yaml
+config/qr_inventory.checkpoint.yaml
 
 # Lock files (runtime state)
 config/.extract.lock

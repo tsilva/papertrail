@@ -26,6 +26,7 @@ from papertrail.qr.extractor import (
     extract_qr_codes_from_page,
     extract_all_qr_codes,
     extract_metadata_from_qr,
+    check_pyzbar_available,
 )
 from papertrail.qr.handlers import (
     QRHandler,
@@ -45,6 +46,7 @@ __all__ = [
     "extract_qr_codes_from_page",
     "extract_all_qr_codes",
     "extract_metadata_from_qr",
+    "check_pyzbar_available",
     # Handlers
     "QRHandler",
     "PortugueseInvoiceHandler",
