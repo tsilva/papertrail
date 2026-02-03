@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Optional
 
 from papertrail.cache_base import validate_field
+from papertrail.constants import FIELDS
 from papertrail.yaml_utils import load_yaml, save_yaml
 
 
@@ -16,7 +17,7 @@ class RejectedValuesManager:
     to review and either add new canonicals or create mappings.
     """
 
-    FIELDS = ("document_types", "issuing_parties")
+    FIELDS = FIELDS
 
     def __init__(self, rejected_path: Path):
         """Initialize the rejected values manager.

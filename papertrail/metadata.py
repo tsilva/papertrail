@@ -247,3 +247,52 @@ def get_field_with_aliases(data: dict, field_name: str, aliases: list[str]):
         if alias in data:
             return data[alias]
     return None
+
+
+def load_validated_metadata(
+    directory: Path,
+    require_pdf: bool = True,
+    validate: bool = False,
+    show_progress: bool = False,
+    progress_desc: str = "Loading metadata"
+) -> Iterator[tuple[Path, Path, DocumentMetadata | dict]]:
+    """
+    Load metadata files with optional PDF validation.
+
+    A common pattern across task files is to iterate metadata files,
+    check that corresponding PDFs exist, and skip orphaned metadata.
+    This helper consolidates that pattern.
+
+    Args:
+        directory: Directory to scan for JSON files
+        require_pdf: If True, skip metadata files without corresponding PDFs
+        validate: If True, yield DocumentMetadata. If False, yield dict.
+        show_progress: Whether to show a progress bar
+        progress_desc: Description for the progress bar
+
+    Yields:
+        Tuples of (json_path, pdf_path, metadata)
+        Note: pdf_path is always provided but may not exist if require_pdf=False
+    """
+    json_files = list(directory.rglob("*.json"))
+    if not json_files:
+        return
+
+    if show_progress:
+        from tqdm import tqdm
+        json_files = tqdm(json_files, desc=progress_desc)
+
+    for json_path in json_files:
+        pdf_path = json_path.with_suffix(".pdf")
+
+        if require_pdf and not pdf_path.exists():
+            continue
+
+        try:
+            data = _load_json_fast(json_path)
+            if validate:
+                yield json_path, pdf_path, DocumentMetadata.model_validate(data)
+            else:
+                yield json_path, pdf_path, data
+        except Exception:
+            continue
