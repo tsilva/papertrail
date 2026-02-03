@@ -138,8 +138,9 @@ class NIFLookupCache:
             with urllib.request.urlopen(url, timeout=10) as response:
                 html = response.read().decode('utf-8')
 
-            # Find <h2 class="search-title"><span>Company Name</span></h2>
-            match = re.search(r'class="search-title"[^>]*>.*?<span>([^<]+)</span>', html, re.DOTALL)
+            # Find <span class='search-title'>Company Name</span>
+            # Handle both single and double quotes
+            match = re.search(r'class=[\'"]search-title[\'"][^>]*>([^<]+)</span>', html, re.DOTALL)
             if match:
                 company_name = match.group(1).strip()
                 logger.debug(f"[NIF-WEB] {nif} → {company_name}")
