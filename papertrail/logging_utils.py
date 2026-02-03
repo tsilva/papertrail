@@ -272,6 +272,10 @@ class DocumentLogger:
         """Log when QR value overrides LLM value."""
         self._logger.debug(f"[QR-MERGE] {field}: QR={qr_value} overrides LLM={llm_value}")
 
+    def log_qr_skip(self, excluded_fields: set[str]) -> None:
+        """Log fields excluded from LLM extraction due to QR data."""
+        self._logger.debug(f"[QR-SKIP] Excluding from LLM: {sorted(excluded_fields)}")
+
     def log_nif_cache_hit(self, nif: str, issuer: str) -> None:
         """Log NIF cache hit (TIER 1)."""
         self._logger.debug(f"[NIF-CACHE-HIT] {nif} → {issuer}")
