@@ -230,6 +230,23 @@ class DocumentLogger:
         """Log LLM token usage."""
         self._logger.debug(f"[LLM-USAGE] model={model} prompt_tokens={prompt_tokens} completion_tokens={completion_tokens}")
 
+    def log_qr_extraction(self, qr_type: str, extracted_fields: dict, page_number: int = 0) -> None:
+        """Log QR code extraction results."""
+        field_parts = []
+        for key, val in extracted_fields.items():
+            if val is not None:
+                field_parts.append(f'{key}="{val}"' if isinstance(val, str) else f"{key}={val}")
+        fields_str = " ".join(field_parts) if field_parts else "(no fields)"
+        self._logger.debug(f"[QR-EXTRACT] type={qr_type} page={page_number} {fields_str}")
+
+    def log_qr_not_found(self) -> None:
+        """Log when no QR code was found."""
+        self._logger.debug("[QR-EXTRACT] No QR codes found")
+
+    def log_qr_merge(self, field: str, qr_value, llm_value) -> None:
+        """Log when QR value overrides LLM value."""
+        self._logger.debug(f"[QR-MERGE] {field}: QR={qr_value} overrides LLM={llm_value}")
+
     def end_document(self, status: str = "SUCCESS") -> None:
         """Mark the end of processing a document."""
         total = sum(self._timings.values())

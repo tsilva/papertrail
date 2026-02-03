@@ -24,6 +24,8 @@ dependencies = [
     "gradio>=5.0.0",
     "orjson>=3.9.0",
     "mbox-extractor",
+    "pyzbar>=0.1.9",
+    "archive-extractor",
 ]
 requires-python = ">=3.12"
 
