@@ -73,6 +73,7 @@ from papertrail.tasks import (
     task_rename_files,
     task_reextract,
     task_validate_extraction,
+    task_regenerate_orphans,
     validate_metadata,
     export_metadata_to_excel,
     copy_matching_files,
@@ -257,7 +258,7 @@ def main():
         'copy_matching', 'export_all_dates', 'check_files_exist', 'pipeline',
         'gmail_download', 'bootstrap_mappings', 'review_mappings', 'add_canonical',
         'backfill_page_count', 'review_rejected', 'reextract', 'validate_extraction',
-        'qr_inventory'
+        'qr_inventory', 'regenerate_orphans'
     ], help="Task to perform.")
     parser.add_argument("processed_path", type=str, nargs='?', help="Path to output folder.")
     parser.add_argument("--raw_path", type=str, help="Path to documents folder(s). Use ';' to separate multiple paths.")
@@ -349,6 +350,11 @@ def main():
                 parser.error("qr_inventory requires --export_path or export path in profile.")
         export = require_path(parser, export_path, "export_path")
         task_qr_inventory(export, resume=not args.no_resume)
+        return
+
+    if args.task == "regenerate_orphans":
+        processed = require_path(parser, args.processed_path, "processed_path")
+        task_regenerate_orphans(processed, dry_run=args.dry_run)
         return
 
     processed_path = require_path(parser, args.processed_path, "processed_path")

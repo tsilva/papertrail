@@ -55,6 +55,7 @@ from papertrail.tasks.extraction import (
     task_extract_new,
     task_reextract,
     task_validate_extraction,
+    task_regenerate_orphans,
 )
 from papertrail.tasks.organization import (
     task_rename_files,
