@@ -29,11 +29,12 @@ class QRExtractedMetadata:
     total_amount: Optional[float] = None
     total_amount_currency: Optional[str] = "EUR"
     issuer_nif: Optional[str] = None
-    issuer_tax_number: Optional[str] = None  # Prefixed with country code (e.g., PTISSUER-TAX-ID)
+    issuer_tax_number: Optional[str] = None  # Raw tax number without country prefix
     atcud: Optional[str] = None
     document_number: Optional[str] = None
     confidence: float = 1.0
     extraction_source: str = "qr"
+    locale: Optional[str] = None  # BCP-47 format (e.g., "pt-PT")
 
 
 @dataclass
@@ -105,14 +106,13 @@ class PortugueseInvoiceQR:
         }
         document_type = doc_type_map.get(self.document_type_code)
 
-        # Prefix NIF with country code for international standardization
-        issuer_tax_number = None
-        if self.issuer_nif:
-            country = self.country_code or "PT"
-            if not self.issuer_nif.upper().startswith(country):
-                issuer_tax_number = f"{country}{self.issuer_nif}"
-            else:
-                issuer_tax_number = self.issuer_nif.upper()
+        # Store raw tax number without country prefix
+        issuer_tax_number = self.issuer_nif if self.issuer_nif else None
+
+        # Derive locale from country code (BCP-47 format)
+        locale = None
+        if self.country_code:
+            locale = f"{self.country_code.lower()}-{self.country_code}"
 
         return QRExtractedMetadata(
             issue_date=issue_date,
@@ -125,4 +125,5 @@ class PortugueseInvoiceQR:
             document_number=self.document_number,
             confidence=1.0,
             extraction_source="qr",
+            locale=locale,
         )

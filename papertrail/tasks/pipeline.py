@@ -276,6 +276,23 @@ def pipeline(export_date_arg=None, processed_path_override=None):
             step.error(str(e))
             sys.exit(1)
 
+    # Regenerate orphaned PDFs
+    with console.step_progress("Regenerate orphaned PDFs") as step:
+        try:
+            stdout, _ = run_step(
+                f'"{sys.executable}" "{main_script}" regenerate_orphans "{PROCESSED_FILES_DIR}"',
+                "Regenerate orphaned PDFs"
+            )
+            if "No orphaned PDF files found" in stdout:
+                step.success("No orphans found")
+            elif match := re.search(r'(\d+)\s+orphaned files regenerated', stdout):
+                step.success(f"{match.group(1)} regenerated")
+            else:
+                step.success("Completed")
+        except RuntimeError as e:
+            step.error(str(e))
+            sys.exit(1)
+
     # Rename files
     with console.step_progress("Rename files") as step:
         try:

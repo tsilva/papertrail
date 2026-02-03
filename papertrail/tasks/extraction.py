@@ -37,21 +37,23 @@ def _merge_qr_metadata(
     total_amount: float | None,
     total_amount_currency: str | None,
     issuer_tax_number: str | None,
+    locale: str | None,
     doc_logger: DocumentLogger | None,
-) -> tuple[str, str, float | None, str | None, str | None]:
+) -> tuple[str, str, float | None, str | None, str | None, str | None]:
     """
     Merge QR-extracted metadata with LLM-extracted values.
 
     QR values override LLM values when present (100% confidence).
 
     Returns:
-        Tuple of (issue_date, document_type, total_amount, total_amount_currency, issuer_tax_number)
+        Tuple of (issue_date, document_type, total_amount, total_amount_currency, issuer_tax_number, locale)
     """
     final_date = issue_date
     final_doc_type = document_type
     final_amount = total_amount
     final_currency = total_amount_currency
     final_tax_number = issuer_tax_number
+    final_locale = locale
 
     if qr_metadata.issue_date:
         if doc_logger and final_date != qr_metadata.issue_date:
@@ -78,7 +80,12 @@ def _merge_qr_metadata(
             doc_logger.log_qr_merge("issuer_tax_number", qr_metadata.issuer_tax_number, final_tax_number)
         final_tax_number = qr_metadata.issuer_tax_number
 
-    return final_date, final_doc_type, final_amount, final_currency, final_tax_number
+    if qr_metadata.locale:
+        if doc_logger and final_locale != qr_metadata.locale:
+            doc_logger.log_qr_merge("locale", qr_metadata.locale, final_locale)
+        final_locale = qr_metadata.locale
+
+    return final_date, final_doc_type, final_amount, final_currency, final_tax_number, final_locale
 
 
 def classify_pdf_document(pdf_path: Path, file_hash: str, failure_logger=None,
@@ -115,6 +122,7 @@ def classify_pdf_document(pdf_path: Path, file_hash: str, failure_logger=None,
                         "issuer_nif": qr_metadata.issuer_nif,
                         "issuer_tax_number": qr_metadata.issuer_tax_number,
                         "atcud": qr_metadata.atcud,
+                        "locale": qr_metadata.locale,
                     },
                 )
             else:
@@ -183,22 +191,24 @@ def classify_pdf_document(pdf_path: Path, file_hash: str, failure_logger=None,
         if doc_logger:
             doc_logger.log_timing("normalization", _time.monotonic() - t0)
 
-        # Start with LLM values (no issuer_tax_number from LLM)
+        # Start with LLM values
         final_issue_date = raw_metadata.issue_date
         final_doc_type = normalized_doc_type
         final_amount = raw_metadata.total_amount
         final_currency = raw_metadata.total_amount_currency
-        final_tax_number = None
+        final_tax_number = raw_metadata.issuer_tax_number
+        final_locale = raw_metadata.locale
 
         # Merge: QR values override LLM values
         if qr_metadata:
-            final_issue_date, final_doc_type, final_amount, final_currency, final_tax_number = _merge_qr_metadata(
+            final_issue_date, final_doc_type, final_amount, final_currency, final_tax_number, final_locale = _merge_qr_metadata(
                 qr_metadata,
                 final_issue_date,
                 final_doc_type,
                 final_amount,
                 final_currency,
                 final_tax_number,
+                final_locale,
                 doc_logger,
             )
 
@@ -260,6 +270,7 @@ def classify_pdf_document(pdf_path: Path, file_hash: str, failure_logger=None,
             document_type_raw=raw_metadata.document_type,
             issuing_party_raw=raw_metadata.issuing_party,
             issuer_tax_number=final_tax_number,
+            locale=final_locale,
         )
 
         now = datetime.now().strftime("%Y-%m-%d")
@@ -610,3 +621,89 @@ def task_validate_extraction(processed_path: Path, document_pattern: str = None)
             console.success(f"{files_checked} checked, no issues found", indent=False)
 
         logger.debug(f"=== SUMMARY: {files_checked} checked, {issues_count} with issues ===")
+
+
+def find_orphaned_pdfs(processed_path: Path) -> list[Path]:
+    """Find PDF files in processed folder that have no corresponding JSON metadata file.
+
+    Args:
+        processed_path: Path to the processed documents directory.
+
+    Returns:
+        List of PDF paths that are missing their metadata JSON files.
+    """
+    orphans = []
+    for pdf_path in processed_path.rglob("*.pdf"):
+        json_path = pdf_path.with_suffix(".json")
+        if not json_path.exists():
+            orphans.append(pdf_path)
+    return orphans
+
+
+def task_regenerate_orphans(processed_path: Path, dry_run: bool = False):
+    """Regenerate metadata for orphaned PDF files (PDFs without JSON metadata).
+
+    Args:
+        processed_path: Path to the processed documents directory.
+        dry_run: If True, list orphaned files without processing them.
+    """
+    console = get_console()
+
+    with task_log_context(processed_path, "regenerate_orphans"):
+        logs_dir = processed_path / "logs"
+        failure_log_path = logs_dir / "classification_failures.log"
+        failure_logger = setup_failure_logger(failure_log_path)
+
+        doc_logger = DocumentLogger()
+
+        orphans = find_orphaned_pdfs(processed_path)
+
+        if not orphans:
+            console.info("No orphaned PDF files found", indent=False)
+            logger.debug("No orphaned PDF files found")
+            return
+
+        logger.debug(f"Found {len(orphans)} orphaned PDF files")
+
+        if dry_run:
+            console.info(f"Found {len(orphans)} orphaned PDF files (dry run)", indent=False)
+            for pdf_path in orphans:
+                console.detail(f"  {pdf_path.name}", indent=False)
+                logger.debug(f"[ORPHAN] {pdf_path.name}")
+            return
+
+        success_count = 0
+        failed_count = 0
+
+        with console.progress("Regenerating metadata", total=len(orphans)) as progress:
+            task = progress.add_task("Regenerating metadata", total=len(orphans))
+            for pdf_path in orphans:
+                try:
+                    file_hash = hash_file_fast(pdf_path)
+                    content_hash = hash_file_content(pdf_path)
+
+                    metadata = classify_pdf_document(
+                        pdf_path, content_hash,
+                        failure_logger=failure_logger,
+                        doc_logger=doc_logger,
+                    )
+                    metadata.file_hash = file_hash
+
+                    save_metadata_json(pdf_path, metadata)
+
+                    logger.debug(f"[REGENERATED] {pdf_path.name}")
+                    success_count += 1
+                except Exception as e:
+                    log_failure(failure_logger, pdf_path, e)
+                    logger.error(f"[FAILED] {pdf_path.name}: {e}")
+                    failed_count += 1
+
+                progress.update(task, advance=1)
+
+        # Summary output
+        if failed_count > 0:
+            console.warning(f"{success_count} orphaned files regenerated, {failed_count} failed", indent=False)
+        else:
+            console.success(f"{success_count} orphaned files regenerated", indent=False)
+
+        logger.debug(f"=== SUMMARY: {success_count} regenerated, {failed_count} failed ===")
