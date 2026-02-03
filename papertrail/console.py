@@ -1,6 +1,7 @@
 """Rich-based console utilities for papertrail CLI output."""
 
 from contextlib import contextmanager
+from dataclasses import dataclass
 from typing import Any, Generator, Sequence
 
 from rich.console import Console
@@ -15,8 +16,61 @@ from rich.progress import (
     TimeElapsedColumn,
 )
 from rich.rule import Rule
+from rich.status import Status
 from rich.table import Table
 from rich.text import Text
+
+
+@dataclass
+class StepResult:
+    """Result of a step execution."""
+
+    status: str = "pending"  # "success", "warning", "error", "pending"
+    message: str = ""
+
+
+class StepContext:
+    """Context object for step progress, allowing result reporting.
+
+    Provides methods to mark the step as successful, warning, or error,
+    which will be displayed when the context manager exits.
+    """
+
+    def __init__(self) -> None:
+        """Initialize the step context."""
+        self._result = StepResult()
+
+    def success(self, message: str = "") -> None:
+        """Mark the step as successful.
+
+        Args:
+            message: Optional success message to display.
+        """
+        self._result.status = "success"
+        self._result.message = message
+
+    def warning(self, message: str = "") -> None:
+        """Mark the step as a warning.
+
+        Args:
+            message: Warning message to display.
+        """
+        self._result.status = "warning"
+        self._result.message = message
+
+    def error(self, message: str = "") -> None:
+        """Mark the step as an error.
+
+        Args:
+            message: Error message to display.
+        """
+        self._result.status = "error"
+        self._result.message = message
+
+    @property
+    def result(self) -> StepResult:
+        """Get the step result."""
+        return self._result
 
 
 class PapertrailConsole:
@@ -115,6 +169,64 @@ class PapertrailConsole:
             number = self._step_counter
 
         self.console.print(f"[cyan]{number}.[/cyan] {message}")
+
+    @contextmanager
+    def step_progress(self, message: str) -> Generator[StepContext, None, None]:
+        """Context manager for a step with spinner progress indicator.
+
+        Shows a spinner while the step is running, then replaces it with
+        an appropriate symbol (✓/!/✗) when the step completes.
+
+        Args:
+            message: Step description to display.
+
+        Yields:
+            StepContext object with success(), warning(), and error() methods.
+
+        Example:
+            with console.step_progress("Download files") as step:
+                # do work...
+                step.success("Downloaded 5 files")
+            # Output: ✓ Download files — Downloaded 5 files
+        """
+        ctx = StepContext()
+
+        with self.console.status(f"[cyan]{message}[/cyan]", spinner="dots") as status:
+            try:
+                yield ctx
+            except Exception:
+                # If an exception occurs and no status was set, mark as error
+                if ctx.result.status == "pending":
+                    ctx.error("Failed with exception")
+                raise
+            finally:
+                # Clear the status line - the final message will be printed below
+                pass
+
+        # Print the final result line
+        result = ctx.result
+        if result.status == "success":
+            symbol = "[green]✓[/green]"
+            msg_style = "[green]"
+            detail_style = "[dim]"
+        elif result.status == "warning":
+            symbol = "[yellow]![/yellow]"
+            msg_style = "[yellow]"
+            detail_style = "[dim yellow]"
+        elif result.status == "error":
+            symbol = "[red]✗[/red]"
+            msg_style = "[red]"
+            detail_style = "[red]"
+        else:
+            # No result set, default to success
+            symbol = "[green]✓[/green]"
+            msg_style = "[green]"
+            detail_style = "[dim]"
+
+        if result.message:
+            self.console.print(f"{symbol} {msg_style}{message}[/] — {detail_style}{result.message}[/]")
+        else:
+            self.console.print(f"{symbol} {msg_style}{message}[/]")
 
     def success(self, message: str, indent: bool = True) -> None:
         """Display a success message with green checkmark.

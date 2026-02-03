@@ -37,20 +37,16 @@ def check_api_accessibility(base_url: str, timeout: int = 10) -> bool:
         return False
 
 
-def run_step(cmd: str, step_desc: str, step_num: int) -> tuple[str, str]:
+def run_step(cmd: str, step_desc: str) -> tuple[str, str]:
     """Run a pipeline step, capturing output to the pipeline log.
 
     Args:
         cmd: Command to execute.
         step_desc: Human-readable step description.
-        step_num: Step number for display.
 
     Returns:
         Tuple of (stdout, stderr) from the command.
     """
-    console = get_console()
-    console.step(step_desc, number=step_num)
-
     logger.debug(f"### {step_desc}...")
     result = subprocess.run(cmd, shell=True, text=True, capture_output=True)
 
@@ -63,9 +59,8 @@ def run_step(cmd: str, step_desc: str, step_num: int) -> tuple[str, str]:
             logger.debug(line)
 
     if result.returncode != 0:
-        console.error(f"Failed with exit code {result.returncode}")
         logger.error(f"{step_desc} failed with exit code {result.returncode}.")
-        sys.exit(result.returncode)
+        raise RuntimeError(f"Failed with exit code {result.returncode}")
 
     logger.debug(f"### {step_desc}... Finished.")
     return result.stdout, result.stderr
@@ -189,146 +184,161 @@ def pipeline(export_date_arg=None, processed_path_override=None):
     processed_files_excel_path = Path(PROCESSED_FILES_DIR) / "processed_files.xlsx"
 
     # Step 1: Gmail download
-    stdout, _ = run_step(
-        f'"{sys.executable}" "{main_script}" gmail_download',
-        "Download Gmail attachments",
-        step_num=1
-    )
-    # Parse and show result
-    if "messages processed" in stdout:
-        console.success(stdout.strip().split('\n')[-1] if stdout.strip() else "Completed")
-    else:
-        console.success("Completed")
-
-    step_num = 2
-    for rd in raw_dirs:
-        # Step 2: Mbox extraction
-        console.step("Google Takeout mbox extraction", number=step_num)
-        logger.debug(f"### Step {step_num}: Google Takeout mbox extraction...")
-        stats = extract_mbox_attachments(rd)
-        if stats['mbox_files'] > 0:
-            console.success(f"{stats['mbox_files']} mbox file(s), {stats['attachments_extracted']} attachment(s)")
-            logger.debug(f"Processed {stats['mbox_files']} mbox file(s), extracted {stats['attachments_extracted']} attachment(s)")
-        else:
-            console.warning("No mbox files found")
-        if stats['errors']:
-            console.error(f"{len(stats['errors'])} error(s)")
-            logger.error(f"Step {step_num} encountered {len(stats['errors'])} error(s)")
-            sys.exit(1)
-        logger.debug(f"### Step {step_num}: Google Takeout mbox extraction... Finished.")
-        step_num += 1
-
-        # Step 3: Archive extraction
-        console.step("Google Takeout archive extraction", number=step_num)
-        logger.debug(f"### Step {step_num}: Google Takeout archive extraction...")
-        results = extract_archives(rd, passwords=passwords if passwords else None)
-        total_extracted = 0
-        failures = 0
-        for archive_path, count in results.items():
-            if count == -1:
-                failures += 1
-                logger.debug(f"Failed to extract: {archive_path}")
+    with console.step_progress("Download Gmail attachments") as step:
+        try:
+            stdout, _ = run_step(
+                f'"{sys.executable}" "{main_script}" gmail_download',
+                "Download Gmail attachments"
+            )
+            # Parse and show result
+            if "messages processed" in stdout:
+                step.success(stdout.strip().split('\n')[-1] if stdout.strip() else "Completed")
             else:
-                total_extracted += count
-                logger.debug(f"Extracted {count} files from {archive_path}")
-        if total_extracted > 0:
-            console.success(f"Extracted {total_extracted} files from {len(results) - failures} archive(s)")
-        elif failures > 0:
-            console.warning(f"{failures} archive(s) failed")
-        else:
-            console.warning("No archives found")
-        logger.debug(f"### Step {step_num}: Google Takeout archive extraction... Finished.")
-        step_num += 1
+                step.success("Completed")
+        except RuntimeError as e:
+            step.error(str(e))
+            sys.exit(1)
 
-    # Step 4: Extract new documents
-    stdout, _ = run_step(
-        f'"{sys.executable}" "{main_script}" extract_new "{PROCESSED_FILES_DIR}" --raw_path "{";".join(raw_dirs)}"',
-        "Extract new documents",
-        step_num=step_num
-    )
-    stats = _parse_step_output(stdout, "")
-    if stats.get('scanned'):
-        console.success(f"{stats['scanned']} PDFs scanned, {stats.get('new', 0)} new to process")
-    else:
-        console.success("Completed")
-    step_num += 1
+    for rd in raw_dirs:
+        # Mbox extraction
+        with console.step_progress("Google Takeout mbox extraction") as step:
+            logger.debug("### Google Takeout mbox extraction...")
+            stats = extract_mbox_attachments(rd)
+            if stats['mbox_files'] > 0:
+                step.success(f"{stats['mbox_files']} mbox file(s), {stats['attachments_extracted']} attachment(s)")
+                logger.debug(f"Processed {stats['mbox_files']} mbox file(s), extracted {stats['attachments_extracted']} attachment(s)")
+            else:
+                step.warning("No mbox files found")
+            if stats['errors']:
+                step.error(f"{len(stats['errors'])} error(s)")
+                logger.error(f"Google Takeout mbox extraction encountered {len(stats['errors'])} error(s)")
+                sys.exit(1)
+            logger.debug("### Google Takeout mbox extraction... Finished.")
 
-    # Step 5: Rename files
-    stdout, _ = run_step(
-        f'"{sys.executable}" "{main_script}" rename_files "{PROCESSED_FILES_DIR}"',
-        "Rename files",
-        step_num=step_num
-    )
-    stats = _parse_step_output(stdout, "")
-    if stats.get('validated'):
-        console.success(f"{stats['validated']} files validated, {stats.get('renamed', 0)} renamed")
-    else:
-        console.success("Completed")
-    step_num += 1
+        # Archive extraction
+        with console.step_progress("Google Takeout archive extraction") as step:
+            logger.debug("### Google Takeout archive extraction...")
+            results = extract_archives(rd, passwords=passwords if passwords else None)
+            total_extracted = 0
+            failures = 0
+            for archive_path, count in results.items():
+                if count == -1:
+                    failures += 1
+                    logger.debug(f"Failed to extract: {archive_path}")
+                else:
+                    total_extracted += count
+                    logger.debug(f"Extracted {count} files from {archive_path}")
+            if total_extracted > 0:
+                step.success(f"Extracted {total_extracted} files from {len(results) - failures} archive(s)")
+            elif failures > 0:
+                step.warning(f"{failures} archive(s) failed")
+            else:
+                step.warning("No archives found")
+            logger.debug("### Google Takeout archive extraction... Finished.")
 
-    # Step 6: Export to Excel
-    stdout, _ = run_step(
-        f'"{sys.executable}" "{main_script}" export_excel "{PROCESSED_FILES_DIR}" --excel_output_path "{processed_files_excel_path}"',
-        "Export to Excel",
-        step_num=step_num
-    )
-    stats = _parse_step_output(stdout, "")
-    if stats.get('exported'):
-        console.success(f"Exported {stats['exported']} entries")
-    else:
-        console.success("Completed")
-    step_num += 1
+    # Extract new documents
+    with console.step_progress("Extract new documents") as step:
+        try:
+            stdout, _ = run_step(
+                f'"{sys.executable}" "{main_script}" extract_new "{PROCESSED_FILES_DIR}" --raw_path "{";".join(raw_dirs)}"',
+                "Extract new documents"
+            )
+            stats = _parse_step_output(stdout, "")
+            if stats.get('scanned'):
+                step.success(f"{stats['scanned']} PDFs scanned, {stats.get('new', 0)} new to process")
+            else:
+                step.success("Completed")
+        except RuntimeError as e:
+            step.error(str(e))
+            sys.exit(1)
 
-    # Step 7: Copy matching documents
-    stdout, _ = run_step(
-        f'"{sys.executable}" "{main_script}" copy_matching "{PROCESSED_FILES_DIR}" --regex_pattern "{export_date}" --copy_dest_folder "{export_date_dir}"',
-        f"Copy matching documents ({export_date})",
-        step_num=step_num
-    )
-    stats = _parse_step_output(stdout, "")
-    if stats.get('copied'):
-        console.success(f"Copied {stats['copied']} files to {Path(export_date_dir).name}")
-    else:
-        console.success("Completed")
-    step_num += 1
+    # Rename files
+    with console.step_progress("Rename files") as step:
+        try:
+            stdout, _ = run_step(
+                f'"{sys.executable}" "{main_script}" rename_files "{PROCESSED_FILES_DIR}"',
+                "Rename files"
+            )
+            stats = _parse_step_output(stdout, "")
+            if stats.get('validated'):
+                step.success(f"{stats['validated']} files validated, {stats.get('renamed', 0)} renamed")
+            else:
+                step.success("Completed")
+        except RuntimeError as e:
+            step.error(str(e))
+            sys.exit(1)
 
-    # Step 8: Merge PDFs using pdf_gluer package
-    console.step("Merge PDFs", number=step_num)
-    logger.debug(f"### Step {step_num}: Merge PDFs...")
-    try:
-        from pdf_gluer import merge_all_pdfs
-        merge_all_pdfs(export_date_dir)
-        console.success("Completed")
-        logger.debug(f"### Step {step_num}: Merge PDFs... Finished.")
-    except Exception as e:
-        console.error(f"PDF merge failed: {e}")
-        logger.error(f"Step {step_num}: Merge PDFs failed: {e}")
-        sys.exit(1)
+    # Export to Excel
+    with console.step_progress("Export to Excel") as step:
+        try:
+            stdout, _ = run_step(
+                f'"{sys.executable}" "{main_script}" export_excel "{PROCESSED_FILES_DIR}" --excel_output_path "{processed_files_excel_path}"',
+                "Export to Excel"
+            )
+            stats = _parse_step_output(stdout, "")
+            if stats.get('exported'):
+                step.success(f"Exported {stats['exported']} entries")
+            else:
+                step.success("Completed")
+        except RuntimeError as e:
+            step.error(str(e))
+            sys.exit(1)
+
+    # Copy matching documents
+    with console.step_progress(f"Copy matching documents ({export_date})") as step:
+        try:
+            stdout, _ = run_step(
+                f'"{sys.executable}" "{main_script}" copy_matching "{PROCESSED_FILES_DIR}" --regex_pattern "{export_date}" --copy_dest_folder "{export_date_dir}"',
+                f"Copy matching documents ({export_date})"
+            )
+            stats = _parse_step_output(stdout, "")
+            if stats.get('copied'):
+                step.success(f"Copied {stats['copied']} files to {Path(export_date_dir).name}")
+            else:
+                step.success("Completed")
+        except RuntimeError as e:
+            step.error(str(e))
+            sys.exit(1)
+
+    # Merge PDFs using pdf_gluer package
+    with console.step_progress("Merge PDFs") as step:
+        logger.debug("### Merge PDFs...")
+        try:
+            from pdf_gluer import merge_all_pdfs
+            merge_all_pdfs(export_date_dir)
+            step.success("Completed")
+            logger.debug("### Merge PDFs... Finished.")
+        except Exception as e:
+            step.error(f"PDF merge failed: {e}")
+            logger.error(f"Merge PDFs failed: {e}")
+            sys.exit(1)
 
     validate_merged_pdf(Path(export_date_dir))
-    step_num += 1
 
-    # Step 9: Validate exported files
-    if validations_file_path:
-        stdout, stderr = run_step(
-            f'"{sys.executable}" "{main_script}" check_files_exist "{export_date_dir}" --check_schema_path "{validations_file_path}"',
-            "Validate exported files",
-            step_num=step_num
-        )
-        # Parse validation results - look for pass/fail counts
-        combined = stdout + stderr
-        if match := re.search(r'(\d+)\s+checks?\s+passed.*?(\d+)\s+missing', combined):
-            passed, missing_count = int(match.group(1)), int(match.group(2))
-            if missing_count > 0:
-                console.warning(f"{passed} checks passed, {missing_count} missing")
-            else:
-                console.success(f"{passed} checks passed")
+    # Validate exported files
+    with console.step_progress("Validate exported files") as step:
+        if validations_file_path:
+            try:
+                stdout, stderr = run_step(
+                    f'"{sys.executable}" "{main_script}" check_files_exist "{export_date_dir}" --check_schema_path "{validations_file_path}"',
+                    "Validate exported files"
+                )
+                # Parse validation results - look for pass/fail counts
+                combined = stdout + stderr
+                if match := re.search(r'(\d+)\s+checks?\s+passed.*?(\d+)\s+missing', combined):
+                    passed, missing_count = int(match.group(1)), int(match.group(2))
+                    if missing_count > 0:
+                        step.warning(f"{passed} checks passed, {missing_count} missing")
+                    else:
+                        step.success(f"{passed} checks passed")
+                else:
+                    step.success("Validation completed")
+            except RuntimeError as e:
+                step.error(str(e))
+                sys.exit(1)
         else:
-            console.success("Validation completed")
-    else:
-        console.step("Validate exported files", number=step_num)
-        console.warning("Skipped (no validation rules configured)")
-        logger.debug("Skipping file validation (no validation rules configured in profile)")
+            step.warning("Skipped (no validation rules configured)")
+            logger.debug("Skipping file validation (no validation rules configured in profile)")
 
     if temp_validations_file:
         try:
