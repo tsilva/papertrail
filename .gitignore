@@ -252,3 +252,6 @@ Thumbs.db
 # Claude Code
 .claude-sandbox.json
 *.code-workspace
+
+
+*cache*
