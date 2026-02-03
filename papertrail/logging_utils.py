@@ -247,6 +247,22 @@ class DocumentLogger:
         """Log when QR value overrides LLM value."""
         self._logger.debug(f"[QR-MERGE] {field}: QR={qr_value} overrides LLM={llm_value}")
 
+    def log_nif_cache_hit(self, nif: str, issuer: str) -> None:
+        """Log NIF cache hit (TIER 1)."""
+        self._logger.debug(f"[NIF-CACHE-HIT] {nif} → {issuer}")
+
+    def log_nif_web_lookup(self, nif: str, issuer: str) -> None:
+        """Log NIF web lookup (TIER 2)."""
+        self._logger.debug(f"[NIF-WEB-LOOKUP] {nif} → {issuer} (cached)")
+
+    def log_nif_not_found(self, nif: str, reason: str) -> None:
+        """Log when NIF lookup fails."""
+        self._logger.debug(f"[NIF-NOT-FOUND] {nif} ({reason})")
+
+    def log_nif_enrichment(self, nif: str, official_issuer: str, normalized_issuer: str) -> None:
+        """Log NIF enrichment override."""
+        self._logger.debug(f"[NIF-ENRICH] {nif} → {official_issuer} → {normalized_issuer}")
+
     def end_document(self, status: str = "SUCCESS") -> None:
         """Mark the end of processing a document."""
         total = sum(self._timings.values())

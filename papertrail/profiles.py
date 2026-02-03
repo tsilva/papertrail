@@ -118,6 +118,12 @@ class PipelineConfig:
 
 
 @dataclass
+class NifApiConfig:
+    """NIF lookup configuration for Portuguese tax number lookups."""
+    enabled: bool = False
+
+
+@dataclass
 class Profile:
     """Complete profile configuration."""
     profile: ProfileMetadata
@@ -129,6 +135,7 @@ class Profile:
     passwords: PasswordsConfig = field(default_factory=PasswordsConfig)
     validations: ValidationsConfig = field(default_factory=ValidationsConfig)
     pipeline: PipelineConfig = field(default_factory=PipelineConfig)
+    nif_api: NifApiConfig = field(default_factory=NifApiConfig)
     task_defaults: Dict[str, Any] = field(default_factory=dict)
     _profile_path: Optional[Path] = field(default=None, repr=False)
 
@@ -300,6 +307,11 @@ def _parse_profile_dict(data: Dict[str, Any], profile_path: Path) -> Profile:
         default_export_date=pipeline_data.get("default_export_date", "last_month")
     )
 
+    nif_api_data = data.get("nif_api", {})
+    nif_api = NifApiConfig(
+        enabled=nif_api_data.get("enabled", False),
+    )
+
     return Profile(
         profile=profile_meta,
         paths=paths,
@@ -310,6 +322,7 @@ def _parse_profile_dict(data: Dict[str, Any], profile_path: Path) -> Profile:
         passwords=passwords,
         validations=validations,
         pipeline=pipeline,
+        nif_api=nif_api,
         task_defaults=data.get("task_defaults", {}),
         _profile_path=profile_path
     )

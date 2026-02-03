@@ -202,6 +202,51 @@ def classify_pdf_document(pdf_path: Path, file_hash: str, failure_logger=None,
                 doc_logger,
             )
 
+        # Phase 4: NIF Enrichment (if tax number available and NIF cache enabled)
+        if final_tax_number and ctx.nif_cache:
+            t0 = _time.monotonic()
+            official_issuer, lookup_source = ctx.nif_cache.lookup(final_tax_number)
+
+            if official_issuer:
+                # Log the lookup result
+                if doc_logger:
+                    if lookup_source == "cache":
+                        doc_logger.log_nif_cache_hit(final_tax_number, official_issuer)
+                    elif lookup_source == "web":
+                        doc_logger.log_nif_web_lookup(final_tax_number, official_issuer)
+
+                # Re-normalize the official name to canonical form
+                # Create a minimal raw metadata object for normalization
+                nif_raw = DocumentMetadataRaw(
+                    issue_date=final_issue_date,
+                    document_type=raw_metadata.document_type,
+                    issuing_party=official_issuer,
+                    service_name=raw_metadata.service_name,
+                    total_amount=final_amount,
+                    total_amount_currency=final_currency,
+                    confidence=1.0,
+                    reasoning="NIF lookup override",
+                )
+                _, nif_normalized_issuer = normalize_metadata(
+                    nif_raw, ctx.openai_client, ctx.model_id, mappings=ctx.mappings_manager,
+                )
+
+                # Only use the NIF-derived issuer if normalization succeeded
+                if nif_normalized_issuer != "$UNKNOWN$":
+                    if doc_logger:
+                        doc_logger.log_nif_enrichment(final_tax_number, official_issuer, nif_normalized_issuer)
+                    normalized_issuing_party = nif_normalized_issuer
+                else:
+                    logger.debug(f"[NIF-ENRICH] Keeping original issuer (NIF name didn't normalize): {official_issuer}")
+            elif doc_logger:
+                doc_logger.log_nif_not_found(final_tax_number, lookup_source)
+
+            if doc_logger:
+                doc_logger.log_timing("nif_enrichment", _time.monotonic() - t0)
+
+            # Save cache after enrichment
+            ctx.nif_cache.save()
+
         metadata = DocumentMetadata(
             issue_date=final_issue_date,
             document_type=final_doc_type,
