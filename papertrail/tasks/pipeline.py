@@ -9,6 +9,8 @@ import tempfile
 from datetime import datetime, timedelta
 from pathlib import Path
 
+from archive_extractor import extract_archives
+
 from papertrail.config import get_current_profile
 from papertrail.logging_utils import get_logger, setup_task_logging
 from papertrail.mbox import extract_mbox_attachments
@@ -65,10 +67,9 @@ def pipeline(export_date_arg=None, processed_path_override=None):
     logger.info("=== PIPELINE STARTED ===")
     logger.info(f"Log: {log_file_path}")
 
-    for tool in ["archive-extractor", "pdf-merger"]:
-        if which(tool) is None:
-            logger.error(f"Required tool '{tool}' not found in PATH. Please install it and try again.")
-            sys.exit(1)
+    if which("pdf-merger") is None:
+        logger.error("Required tool 'pdf-merger' not found in PATH. Please install it and try again.")
+        sys.exit(1)
 
     if export_date_arg:
         export_date = export_date_arg
@@ -84,25 +85,11 @@ def pipeline(export_date_arg=None, processed_path_override=None):
 
     export_date_dir = os.path.join(EXPORT_FILES_DIR, export_date)
 
-    passwords, passwords_file = get_passwords()
+    passwords, _ = get_passwords()
+    if not passwords:
+        logger.warning("No passwords configured. Password-protected archives will be skipped.")
 
-    temp_passwords_file = None
     temp_validations_file = None
-
-    if passwords:
-        if passwords_file:
-            zip_passwords_file_path = passwords_file
-            logger.debug(f"Using passwords file from profile: {zip_passwords_file_path}")
-        else:
-            temp_passwords = tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.txt')
-            temp_passwords.write('\n'.join(passwords))
-            temp_passwords.close()
-            zip_passwords_file_path = temp_passwords.name
-            temp_passwords_file = temp_passwords.name
-            logger.debug(f"Created temporary passwords file: {zip_passwords_file_path}")
-    else:
-        logger.warning("No passwords configured. Skipping password-protected archives.")
-        zip_passwords_file_path = None
 
     validations, validations_file = get_validations()
 
@@ -133,10 +120,15 @@ def pipeline(export_date_arg=None, processed_path_override=None):
             logger.error(f"Step 2 encountered {len(stats['errors'])} error(s)")
             sys.exit(1)
         logger.info("### Step 2: Google Takeout mbox extraction... Finished.")
-        if zip_passwords_file_path:
-            run_step(f'archive-extractor "{rd}" --passwords "{zip_passwords_file_path}"', "Step 3: Google Takeout zip extraction")
-        else:
-            run_step(f'archive-extractor "{rd}"', "Step 3: Google Takeout zip extraction")
+
+        logger.info("### Step 3: Google Takeout zip extraction...")
+        results = extract_archives(rd, passwords=passwords if passwords else None)
+        for archive_path, count in results.items():
+            if count == -1:
+                logger.warning(f"Failed to extract: {archive_path}")
+            else:
+                logger.info(f"Extracted {count} files from {archive_path}")
+        logger.info("### Step 3: Google Takeout zip extraction... Finished.")
 
     raw_dirs_arg = ";".join(raw_dirs)
     run_step(f'"{sys.executable}" "{main_script}" extract_new "{PROCESSED_FILES_DIR}" --raw_path "{raw_dirs_arg}"', "Step 4: Extract new documents")
@@ -149,13 +141,6 @@ def pipeline(export_date_arg=None, processed_path_override=None):
         run_step(f'"{sys.executable}" "{main_script}" check_files_exist "{export_date_dir}" --check_schema_path "{validations_file_path}"', "Step 9: Validate exported files")
     else:
         logger.info("Step 9: Skipping file validation (no validation rules configured in profile)")
-
-    if temp_passwords_file:
-        try:
-            os.unlink(temp_passwords_file)
-            logger.debug(f"Cleaned up temporary passwords file: {temp_passwords_file}")
-        except Exception as e:
-            logger.warning(f"Failed to cleanup temporary passwords file: {e}")
 
     if temp_validations_file:
         try:

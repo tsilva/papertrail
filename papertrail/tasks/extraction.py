@@ -25,19 +25,98 @@ from papertrail.pdf import render_pdf_to_images, find_pdf_files, get_page_count
 from papertrail.metadata import build_hash_index, save_metadata_json
 from papertrail.hashing import hash_file_fast, hash_file_content
 from papertrail.tasks import task_log_context
+from papertrail.qr import extract_metadata_from_qr, QRExtractedMetadata
 
 logger = get_logger('cli')
 
 
+def _merge_qr_metadata(
+    qr_metadata: QRExtractedMetadata,
+    issue_date: str,
+    document_type: str,
+    total_amount: float | None,
+    total_amount_currency: str | None,
+    doc_logger: DocumentLogger | None,
+) -> tuple[str, str, float | None, str | None]:
+    """
+    Merge QR-extracted metadata with LLM-extracted values.
+
+    QR values override LLM values when present (100% confidence).
+
+    Returns:
+        Tuple of (issue_date, document_type, total_amount, total_amount_currency)
+    """
+    final_date = issue_date
+    final_doc_type = document_type
+    final_amount = total_amount
+    final_currency = total_amount_currency
+
+    if qr_metadata.issue_date:
+        if doc_logger and final_date != qr_metadata.issue_date:
+            doc_logger.log_qr_merge("issue_date", qr_metadata.issue_date, final_date)
+        final_date = qr_metadata.issue_date
+
+    if qr_metadata.document_type:
+        if doc_logger and final_doc_type != qr_metadata.document_type:
+            doc_logger.log_qr_merge("document_type", qr_metadata.document_type, final_doc_type)
+        final_doc_type = qr_metadata.document_type
+
+    if qr_metadata.total_amount is not None:
+        if doc_logger and final_amount != qr_metadata.total_amount:
+            doc_logger.log_qr_merge("total_amount", qr_metadata.total_amount, final_amount)
+        final_amount = qr_metadata.total_amount
+
+    if qr_metadata.total_amount_currency:
+        if doc_logger and final_currency != qr_metadata.total_amount_currency:
+            doc_logger.log_qr_merge("total_amount_currency", qr_metadata.total_amount_currency, final_currency)
+        final_currency = qr_metadata.total_amount_currency
+
+    return final_date, final_doc_type, final_amount, final_currency
+
+
 def classify_pdf_document(pdf_path: Path, file_hash: str, failure_logger=None,
                           doc_logger: DocumentLogger = None) -> DocumentMetadata:
-    """Classify a PDF document using the LLM."""
+    """
+    Classify a PDF document using QR extraction and LLM.
+
+    Pipeline:
+    1. Phase 0: QR extraction (fast, 100% accurate when found)
+    2. Phase 1: LLM raw extraction (vision model)
+    3. Phase 2: Normalization (map raw values to canonicals)
+    4. Merge: QR values override LLM values
+    """
     import main
     ctx = main.get_ctx()
 
     if doc_logger:
         doc_logger.start_document(pdf_path)
 
+    # Phase 0: QR extraction (fast)
+    qr_metadata = None
+    try:
+        t0 = _time.monotonic()
+        qr_metadata = extract_metadata_from_qr(pdf_path)
+        if doc_logger:
+            doc_logger.log_timing("qr_extraction", _time.monotonic() - t0)
+            if qr_metadata:
+                doc_logger.log_qr_extraction(
+                    qr_metadata.extraction_source,
+                    {
+                        "issue_date": qr_metadata.issue_date,
+                        "document_type": qr_metadata.document_type,
+                        "total_amount": qr_metadata.total_amount,
+                        "issuer_nif": qr_metadata.issuer_nif,
+                        "atcud": qr_metadata.atcud,
+                    },
+                )
+            else:
+                doc_logger.log_qr_not_found()
+    except Exception as e:
+        logger.debug(f"QR extraction failed (continuing with LLM): {e}")
+        if doc_logger:
+            doc_logger.log_qr_not_found()
+
+    # Phase 1: Render PDF for LLM
     try:
         t0 = _time.monotonic()
         images_b64 = render_pdf_to_images(pdf_path)
@@ -87,6 +166,7 @@ def classify_pdf_document(pdf_path: Path, file_hash: str, failure_logger=None,
         if doc_logger:
             doc_logger.log_extraction(raw_metadata.model_dump())
 
+        # Phase 2: Normalization
         t0 = _time.monotonic()
         normalized_doc_type, normalized_issuing_party = normalize_metadata(
             raw_metadata, ctx.openai_client, ctx.model_id, mappings=ctx.mappings_manager,
@@ -95,14 +175,31 @@ def classify_pdf_document(pdf_path: Path, file_hash: str, failure_logger=None,
         if doc_logger:
             doc_logger.log_timing("normalization", _time.monotonic() - t0)
 
+        # Start with LLM values
+        final_issue_date = raw_metadata.issue_date
+        final_doc_type = normalized_doc_type
+        final_amount = raw_metadata.total_amount
+        final_currency = raw_metadata.total_amount_currency
+
+        # Merge: QR values override LLM values
+        if qr_metadata:
+            final_issue_date, final_doc_type, final_amount, final_currency = _merge_qr_metadata(
+                qr_metadata,
+                final_issue_date,
+                final_doc_type,
+                final_amount,
+                final_currency,
+                doc_logger,
+            )
+
         metadata = DocumentMetadata(
-            issue_date=raw_metadata.issue_date,
-            document_type=normalized_doc_type,
+            issue_date=final_issue_date,
+            document_type=final_doc_type,
             issuing_party=normalized_issuing_party,
             service_name=raw_metadata.service_name,
-            total_amount=raw_metadata.total_amount,
-            total_amount_currency=raw_metadata.total_amount_currency,
-            confidence=raw_metadata.confidence,
+            total_amount=final_amount,
+            total_amount_currency=final_currency,
+            confidence=1.0 if qr_metadata else raw_metadata.confidence,
             reasoning=raw_metadata.reasoning,
             content_hash=file_hash,
             document_type_raw=raw_metadata.document_type,
