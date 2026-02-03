@@ -35,10 +35,6 @@ from papertrail.tasks.extraction import (
 )
 from papertrail.tasks.organization import (
     task_rename_files,
-    rename_single_pdf,
-    rename_pdf_files,
-    file_name_from_metadata,
-    sanitize_filename_component,
     copy_matching_files,
 )
 from papertrail.tasks.validation import (
@@ -58,5 +54,5 @@ from papertrail.tasks.mappings_tasks import (
     task_review_rejected,
 )
 from papertrail.tasks.gmail_task import task_gmail_download
-from papertrail.tasks.pipeline import pipeline, run_step
+from papertrail.tasks.pipeline import pipeline
 from papertrail.tasks.qr_inventory import task_qr_inventory

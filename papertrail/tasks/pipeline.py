@@ -19,6 +19,19 @@ from papertrail.tasks.validation import validate_merged_pdf
 logger = get_logger('cli')
 
 
+def check_api_accessibility(base_url: str, timeout: int = 10) -> bool:
+    """Check if the API base URL is accessible."""
+    import urllib.request
+    import urllib.error
+
+    try:
+        req = urllib.request.Request(base_url, method='HEAD')
+        urllib.request.urlopen(req, timeout=timeout)
+        return True
+    except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError):
+        return False
+
+
 def run_step(cmd, step_desc):
     """Run a pipeline step, capturing output to the pipeline log."""
     logger.info(f"### {step_desc}...")
@@ -61,6 +74,14 @@ def pipeline(export_date_arg=None, processed_path_override=None):
         missing.append("paths.export")
     if missing:
         logger.error(f"Missing required profile settings: {', '.join(missing)}")
+        sys.exit(1)
+
+    # Check API accessibility before starting pipeline
+    base_url = profile.openrouter.base_url
+    logger.info(f"Checking API accessibility: {base_url}")
+    if not check_api_accessibility(base_url):
+        logger.error(f"API base URL is not accessible: {base_url}")
+        logger.error("Please check your network connection and the base_url in your profile.")
         sys.exit(1)
 
     log_file_path = setup_task_logging(Path(PROCESSED_FILES_DIR), "pipeline")
