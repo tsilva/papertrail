@@ -11,9 +11,11 @@ AI-powered PDF document classification and organization tool using vision LLMs v
 
 ## Architecture
 
-### Two-Phase Extraction Pipeline
-1. **Phase 1 - Raw Extraction** (`classify_pdf_document`): Renders first 2 pages as JPEG, sends to LLM with vision, extracts metadata EXACTLY as appears on document
-2. **Phase 2 - Normalization** (`normalize_metadata`): Maps raw values to canonical enums using two-tier lookup
+### Three-Phase Extraction Pipeline
+1. **Phase 0 - QR Extraction** (optional): Scans PDF for QR codes, extracts metadata with 100% confidence (e.g., Portuguese invoice QR codes)
+2. **Phase 1 - Raw Extraction** (`classify_pdf_document`): Renders first 2 pages as JPEG, sends to LLM with vision, extracts metadata EXACTLY as appears on document
+3. **Phase 2 - Normalization** (`normalize_metadata`): Maps raw values to canonical enums using two-tier lookup
+4. **Merge**: QR-extracted values override LLM values (QR is 100% accurate)
 
 ### Two-Tier Normalization (Mapping Persistence)
 Ensures deterministic normalization by persisting successful mappings:
@@ -49,6 +51,38 @@ file_hash "b2c3d4e5" → cache lookup → miss → compute content_hash → save
 
 The `validate_metadata` task uses parallelization (`ProcessPoolExecutor`) for cache misses, providing ~4-8x speedup on cold cache and ~50-100x on warm cache.
 
+### QR Code Extraction (`papertrail/qr/`)
+Modular QR code extraction with handler-based architecture for different QR formats.
+
+**Supported formats:**
+- **Portuguese Invoice QR** (Portaria 195/2020): `A:NIF*B:NIF*D:FT*F:YYYYMMDD*O:amount*...`
+
+**How it works:**
+```
+PDF → render pages at 300 DPI → pyzbar decode → detect QR type → parse with handler → QRExtractedMetadata
+```
+
+**Key components:**
+- `extract_metadata_from_qr(pdf_path)` - Main entry point
+- `QRHandler` - Abstract base class for format handlers
+- `PortugueseInvoiceHandler` - Parses PT invoice QR codes
+
+**Portuguese QR fields extracted:**
+- `issue_date` from F field (YYYYMMDD → YYYY-MM-DD)
+- `document_type` from D field (FT → invoice, NC → credit-note, etc.)
+- `total_amount` from O field (gross total)
+- `issuer_nif` from A field (tax ID)
+- `atcud` from H field (unique document code)
+
+**Dependencies:** Requires `pyzbar` Python package and `zbar` system library:
+```bash
+# macOS
+brew install zbar
+
+# Linux
+apt install libzbar0
+```
+
 ### Dynamic Enums
 Document types and issuing parties are loaded dynamically from existing metadata JSON files in the processed directory. Falls back to hardcoded lists if directory doesn't exist. Always includes `$UNKNOWN$` sentinel.
 
@@ -66,6 +100,7 @@ Document types and issuing parties are loaded dynamically from existing metadata
 | `scripts/check_hash.py` | Verify hashes | CLI: `check-hash` |
 | `papertrail/gmail.py` | Gmail API client | `GmailDownloader`, `download_gmail_attachments` |
 | `papertrail/mbox.py` | Mbox extraction | `extract_mbox_attachments` |
+| `papertrail/qr/` | QR code extraction | `extract_metadata_from_qr`, `PortugueseInvoiceHandler` |
 
 ## Data Models (Pydantic)
 
@@ -143,7 +178,7 @@ python main.py extract_new /path/to/processed  # Auto-uses default.yaml if avail
 ### Logs Directory
 
 Task runs create timestamped log files in `{processed_path}/logs/`:
-- `logs/extract_new_YYYYMMDD_HHMMSS.log` — per-document extraction details with `[RAW]`, `[TIER-1-HIT]`, `[TIER-2-LLM]`, `[TIMING]`, `[FINAL]` markers
+- `logs/extract_new_YYYYMMDD_HHMMSS.log` — per-document extraction details with `[QR-EXTRACT]`, `[QR-MERGE]`, `[RAW]`, `[TIER-1-HIT]`, `[TIER-2-LLM]`, `[TIMING]`, `[FINAL]` markers
 - `logs/reextract_YYYYMMDD_HHMMSS.log` — re-extraction with before/after diffs
 - `logs/pipeline_YYYYMMDD_HHMMSS.log` — full pipeline run
 - `logs/validate_extraction_YYYYMMDD_HHMMSS.log` — extraction quality audit
@@ -175,6 +210,7 @@ Task runs create timestamped log files in `{processed_path}/logs/`:
 **Add new document type**: Just process documents with that type - it's automatically added from metadata
 **Add new issuing party**: Same - dynamically loaded from processed metadata
 **Verify duplicate detection**: `check-hash <pdf>` shows both fast and content hashes
+**Add new QR handler**: Create handler in `papertrail/qr/handlers/`, implement `QRHandler` interface, register in `handlers/__init__.py`
 
 ### Mappings Workflow
 
@@ -209,5 +245,6 @@ No test suite currently.
 ## Dependencies
 
 Core: `openai`, `PyMuPDF (fitz)`, `pandas`, `pydantic`, `pyyaml`, `pillow`, `tqdm`, `openpyxl`, `mbox-extractor`
+QR extraction: `pyzbar` (requires system `zbar` library)
 Gmail: `google-api-python-client`, `google-auth-httplib2`, `google-auth-oauthlib`
 Build: `hatchling`, Package manager: `uv`
