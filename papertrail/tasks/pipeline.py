@@ -28,7 +28,10 @@ def check_api_accessibility(base_url: str, timeout: int = 10) -> bool:
         req = urllib.request.Request(base_url, method='HEAD')
         urllib.request.urlopen(req, timeout=timeout)
         return True
-    except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError):
+    except urllib.error.HTTPError:
+        # HTTP error responses (4xx, 5xx) still mean server is accessible
+        return True
+    except (urllib.error.URLError, TimeoutError):
         return False
 
 
