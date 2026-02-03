@@ -65,6 +65,7 @@ Document types and issuing parties are loaded dynamically from existing metadata
 | `papertrail/hashing.py` | File hashing | `HashCache`, `hash_file_fast`, `hash_file_content` |
 | `scripts/check_hash.py` | Verify hashes | CLI: `check-hash` |
 | `papertrail/gmail.py` | Gmail API client | `GmailDownloader`, `download_gmail_attachments` |
+| `papertrail/mbox.py` | Mbox extraction | `extract_mbox_attachments` |
 
 ## Data Models (Pydantic)
 
@@ -207,6 +208,6 @@ No test suite currently.
 
 ## Dependencies
 
-Core: `openai`, `PyMuPDF (fitz)`, `pandas`, `pydantic`, `pyyaml`, `pillow`, `tqdm`, `openpyxl`
+Core: `openai`, `PyMuPDF (fitz)`, `pandas`, `pydantic`, `pyyaml`, `pillow`, `tqdm`, `openpyxl`, `mbox-extractor`
 Gmail: `google-api-python-client`, `google-auth-httplib2`, `google-auth-oauthlib`
 Build: `hatchling`, Package manager: `uv`
