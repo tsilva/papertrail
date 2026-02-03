@@ -90,6 +90,7 @@ class DocumentMetadata(BaseModel):
 
     # Document properties
     page_count: Optional[int] = Field(default=None, description="Number of pages in the PDF document.")
+    issuer_tax_number: Optional[str] = Field(default=None, description="Issuer tax identification number (e.g., PT503782467).")
 
     class Config:
         populate_by_name = True

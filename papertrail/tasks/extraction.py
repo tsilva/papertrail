@@ -36,20 +36,22 @@ def _merge_qr_metadata(
     document_type: str,
     total_amount: float | None,
     total_amount_currency: str | None,
+    issuer_tax_number: str | None,
     doc_logger: DocumentLogger | None,
-) -> tuple[str, str, float | None, str | None]:
+) -> tuple[str, str, float | None, str | None, str | None]:
     """
     Merge QR-extracted metadata with LLM-extracted values.
 
     QR values override LLM values when present (100% confidence).
 
     Returns:
-        Tuple of (issue_date, document_type, total_amount, total_amount_currency)
+        Tuple of (issue_date, document_type, total_amount, total_amount_currency, issuer_tax_number)
     """
     final_date = issue_date
     final_doc_type = document_type
     final_amount = total_amount
     final_currency = total_amount_currency
+    final_tax_number = issuer_tax_number
 
     if qr_metadata.issue_date:
         if doc_logger and final_date != qr_metadata.issue_date:
@@ -71,7 +73,12 @@ def _merge_qr_metadata(
             doc_logger.log_qr_merge("total_amount_currency", qr_metadata.total_amount_currency, final_currency)
         final_currency = qr_metadata.total_amount_currency
 
-    return final_date, final_doc_type, final_amount, final_currency
+    if qr_metadata.issuer_tax_number:
+        if doc_logger and final_tax_number != qr_metadata.issuer_tax_number:
+            doc_logger.log_qr_merge("issuer_tax_number", qr_metadata.issuer_tax_number, final_tax_number)
+        final_tax_number = qr_metadata.issuer_tax_number
+
+    return final_date, final_doc_type, final_amount, final_currency, final_tax_number
 
 
 def classify_pdf_document(pdf_path: Path, file_hash: str, failure_logger=None,
@@ -106,6 +113,7 @@ def classify_pdf_document(pdf_path: Path, file_hash: str, failure_logger=None,
                         "document_type": qr_metadata.document_type,
                         "total_amount": qr_metadata.total_amount,
                         "issuer_nif": qr_metadata.issuer_nif,
+                        "issuer_tax_number": qr_metadata.issuer_tax_number,
                         "atcud": qr_metadata.atcud,
                     },
                 )
@@ -175,20 +183,22 @@ def classify_pdf_document(pdf_path: Path, file_hash: str, failure_logger=None,
         if doc_logger:
             doc_logger.log_timing("normalization", _time.monotonic() - t0)
 
-        # Start with LLM values
+        # Start with LLM values (no issuer_tax_number from LLM)
         final_issue_date = raw_metadata.issue_date
         final_doc_type = normalized_doc_type
         final_amount = raw_metadata.total_amount
         final_currency = raw_metadata.total_amount_currency
+        final_tax_number = None
 
         # Merge: QR values override LLM values
         if qr_metadata:
-            final_issue_date, final_doc_type, final_amount, final_currency = _merge_qr_metadata(
+            final_issue_date, final_doc_type, final_amount, final_currency, final_tax_number = _merge_qr_metadata(
                 qr_metadata,
                 final_issue_date,
                 final_doc_type,
                 final_amount,
                 final_currency,
+                final_tax_number,
                 doc_logger,
             )
 
@@ -204,6 +214,7 @@ def classify_pdf_document(pdf_path: Path, file_hash: str, failure_logger=None,
             content_hash=file_hash,
             document_type_raw=raw_metadata.document_type,
             issuing_party_raw=raw_metadata.issuing_party,
+            issuer_tax_number=final_tax_number,
         )
 
         now = datetime.now().strftime("%Y-%m-%d")

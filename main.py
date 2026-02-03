@@ -48,6 +48,7 @@ from papertrail.tasks import (
     task_review_rejected,
     task_gmail_download,
     pipeline,
+    task_qr_inventory,
 )
 
 # ------------------- LOGGING -------------------
@@ -201,7 +202,8 @@ def main():
         'extract_new', 'rename_files', 'validate_metadata', 'export_excel',
         'copy_matching', 'export_all_dates', 'check_files_exist', 'pipeline',
         'gmail_download', 'bootstrap_mappings', 'review_mappings', 'add_canonical',
-        'backfill_page_count', 'review_rejected', 'reextract', 'validate_extraction'
+        'backfill_page_count', 'review_rejected', 'reextract', 'validate_extraction',
+        'qr_inventory'
     ], help="Task to perform.")
     parser.add_argument("processed_path", type=str, nargs='?', help="Path to output folder.")
     parser.add_argument("--raw_path", type=str, help="Path to documents folder(s). Use ';' to separate multiple paths.")
@@ -218,6 +220,8 @@ def main():
     parser.add_argument("--all_unknown", action="store_true", help="Re-extract all files with $UNKNOWN$ values (for reextract).")
     parser.add_argument("--filename", type=str, help="Single filename to re-extract (for reextract).")
     parser.add_argument("--document_pattern", type=str, help="Glob pattern for matching files (for reextract/validate_extraction).")
+    parser.add_argument("--export_path", type=str, help="Path to export folder for qr_inventory task.")
+    parser.add_argument("--no_resume", action="store_true", help="Don't resume from checkpoint (for qr_inventory).")
     args = parser.parse_args()
 
     setup_logging(verbose=args.verbose)
@@ -289,6 +293,23 @@ def main():
         if not os.path.exists(args.processed_path):
             parser.error(f"The processed_path '{args.processed_path}' does not exist.")
         task_validate_extraction(Path(args.processed_path), document_pattern=args.document_pattern)
+        return
+
+    if args.task == "qr_inventory":
+        # Determine export path: use --export_path if provided, else use profile export path
+        export_path = args.export_path
+        if not export_path:
+            from papertrail.config import get_current_profile
+            profile = get_current_profile()
+            if profile and profile.paths.export:
+                export_path = profile.paths.export
+            else:
+                parser.error("qr_inventory requires --export_path or export path in profile.")
+        if not os.path.exists(export_path):
+            parser.error(f"The export_path '{export_path}' does not exist.")
+        if not os.path.isdir(export_path):
+            parser.error(f"The export_path '{export_path}' is not a directory.")
+        task_qr_inventory(Path(export_path), resume=not args.no_resume)
         return
 
     if not args.processed_path:
