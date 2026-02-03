@@ -135,6 +135,13 @@ def initialize_config(profile_name: Optional[str] = None) -> None:
         nif_cache=nif_cache,
     )
 
+    # When running as __main__, also register ourselves as 'main' module
+    # so that `import main; main.get_ctx()` works from other modules
+    if __name__ == "__main__":
+        import sys
+        # Register __main__ as 'main' so imports find us
+        sys.modules["main"] = sys.modules["__main__"]
+
 
 # ------------------- TASK DISPATCHER -------------------
 
