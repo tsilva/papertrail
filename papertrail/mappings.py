@@ -3,6 +3,7 @@
 from pathlib import Path
 from typing import Optional
 
+from papertrail.cache_base import validate_field
 from papertrail.yaml_utils import load_yaml, save_yaml
 
 
@@ -48,6 +49,7 @@ class MappingsManager:
         """Save mappings to YAML file."""
         save_yaml(self.path, self.data)
 
+    @validate_field(default_return=None)
     def get_mapping(self, raw_value: str, field: str) -> Optional[str]:
         """Check if raw value has a known mapping.
 
@@ -60,9 +62,6 @@ class MappingsManager:
         Returns:
             Canonical value if found, None otherwise
         """
-        if field not in self.FIELDS:
-            return None
-
         section = self.data.get(field, {})
         # Check confirmed first, then auto
         result = section.get("confirmed", {}).get(raw_value)
@@ -70,6 +69,7 @@ class MappingsManager:
             return result
         return section.get("auto", {}).get(raw_value)
 
+    @validate_field(default_return=None)
     def add_mapping(
         self,
         raw_value: str,
@@ -87,9 +87,6 @@ class MappingsManager:
             confirmed: If True, add to 'confirmed', else 'auto'
             save: If True, save to file immediately
         """
-        if field not in self.FIELDS:
-            return
-
         tier = "confirmed" if confirmed else "auto"
         self.data[field][tier][raw_value] = canonical
 
@@ -100,6 +97,7 @@ class MappingsManager:
         if save:
             self._save()
 
+    @validate_field(default_return=[])
     def get_canonicals(self, field: str) -> list[str]:
         """Get list of valid canonicals for a field.
 
@@ -109,10 +107,9 @@ class MappingsManager:
         Returns:
             List of canonical values
         """
-        if field not in self.FIELDS:
-            return []
         return self.data.get(field, {}).get("canonicals", [])
 
+    @validate_field(default_return=False)
     def add_canonical(self, field: str, canonical: str, save: bool = True) -> bool:
         """Add a new canonical value.
 
@@ -124,9 +121,6 @@ class MappingsManager:
         Returns:
             True if added, False if already exists
         """
-        if field not in self.FIELDS:
-            return False
-
         canonicals = self.data[field]["canonicals"]
         if canonical in canonicals:
             return False
@@ -136,6 +130,7 @@ class MappingsManager:
             self._save()
         return True
 
+    @validate_field(default_return=False)
     def confirm_mapping(self, raw_value: str, field: str, save: bool = True) -> bool:
         """Move a mapping from 'auto' to 'confirmed'.
 
@@ -147,9 +142,6 @@ class MappingsManager:
         Returns:
             True if moved, False if not found in auto
         """
-        if field not in self.FIELDS:
-            return False
-
         auto = self.data[field].get("auto", {})
         if raw_value not in auto:
             return False
@@ -161,6 +153,7 @@ class MappingsManager:
             self._save()
         return True
 
+    @validate_field(default_return=False)
     def reject_mapping(self, raw_value: str, field: str, save: bool = True) -> bool:
         """Remove a mapping from 'auto'.
 
@@ -172,9 +165,6 @@ class MappingsManager:
         Returns:
             True if removed, False if not found
         """
-        if field not in self.FIELDS:
-            return False
-
         auto = self.data[field].get("auto", {})
         if raw_value not in auto:
             return False
@@ -185,6 +175,7 @@ class MappingsManager:
             self._save()
         return True
 
+    @validate_field(default_return=False)
     def update_mapping(
         self,
         raw_value: str,
@@ -205,9 +196,6 @@ class MappingsManager:
         Returns:
             True if updated, False if not found
         """
-        if field not in self.FIELDS:
-            return False
-
         # Check both tiers
         auto = self.data[field].get("auto", {})
         confirmed = self.data[field].get("confirmed", {})
@@ -238,6 +226,7 @@ class MappingsManager:
             self._save()
         return True
 
+    @validate_field(default_return={})
     def get_auto_mappings(self, field: str) -> dict[str, str]:
         """Get all auto-added mappings pending review.
 
@@ -247,8 +236,6 @@ class MappingsManager:
         Returns:
             Dict of raw_value -> canonical for auto mappings
         """
-        if field not in self.FIELDS:
-            return {}
         return dict(self.data.get(field, {}).get("auto", {}))
 
 
@@ -267,6 +254,7 @@ class MappingsManager:
             }
         return stats
 
+    @validate_field(default_return=0)
     def confirm_all(self, field: str, save: bool = True) -> int:
         """Confirm all auto mappings for a field.
 
@@ -277,9 +265,6 @@ class MappingsManager:
         Returns:
             Number of mappings confirmed
         """
-        if field not in self.FIELDS:
-            return 0
-
         auto = self.data[field].get("auto", {})
         confirmed = self.data[field].get("confirmed", {})
 

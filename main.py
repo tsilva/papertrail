@@ -13,6 +13,42 @@ import tempfile
 from pathlib import Path
 from typing import Optional
 
+
+def require_path(
+    parser: argparse.ArgumentParser,
+    path: Optional[str],
+    name: str,
+    must_exist: bool = True,
+    must_be_dir: bool = True,
+    create_if_missing: bool = False,
+) -> Path:
+    """Validate a CLI path argument.
+
+    Args:
+        parser: ArgumentParser to call error() on
+        path: Path string to validate (may be None)
+        name: Human-readable name for error messages (e.g., "processed_path")
+        must_exist: If True, error if path doesn't exist
+        must_be_dir: If True, error if path is not a directory
+        create_if_missing: If True, create directory if it doesn't exist (requires must_be_dir)
+
+    Returns:
+        Path object if validation passes
+
+    Raises:
+        SystemExit via parser.error() if validation fails
+    """
+    if not path:
+        parser.error(f"the {name} argument is required.")
+    p = Path(path)
+    if create_if_missing and must_be_dir:
+        p.mkdir(parents=True, exist_ok=True)
+    if must_exist and not p.exists():
+        parser.error(f"The {name} '{path}' does not exist.")
+    if must_be_dir and p.exists() and not p.is_dir():
+        parser.error(f"The {name} '{path}' is not a directory.")
+    return p
+
 from papertrail.config import (
     get_config_paths,
     get_openai_client,
@@ -275,41 +311,29 @@ def main():
         return
 
     if args.task == "bootstrap_mappings":
-        if not args.processed_path:
-            parser.error("bootstrap_mappings requires the processed_path argument.")
-        if not os.path.exists(args.processed_path):
-            parser.error(f"The processed_path '{args.processed_path}' does not exist.")
-        task_bootstrap_mappings(Path(args.processed_path), get_ctx().mappings_manager)
+        processed = require_path(parser, args.processed_path, "processed_path")
+        task_bootstrap_mappings(processed, get_ctx().mappings_manager)
         return
 
     if args.task == "backfill_page_count":
-        if not args.processed_path:
-            parser.error("backfill_page_count requires the processed_path argument.")
-        if not os.path.exists(args.processed_path):
-            parser.error(f"The processed_path '{args.processed_path}' does not exist.")
-        task_backfill_page_count(Path(args.processed_path))
+        processed = require_path(parser, args.processed_path, "processed_path")
+        task_backfill_page_count(processed)
         return
 
     if args.task == "reextract":
-        if not args.processed_path:
-            parser.error("reextract requires the processed_path argument.")
-        if not os.path.exists(args.processed_path):
-            parser.error(f"The processed_path '{args.processed_path}' does not exist.")
+        processed = require_path(parser, args.processed_path, "processed_path")
         if not (args.all_unknown or args.filename or args.document_pattern):
             parser.error("reextract requires at least one of: --all_unknown, --filename, --document_pattern")
         task_reextract(
-            Path(args.processed_path), dry_run=args.dry_run,
+            processed, dry_run=args.dry_run,
             all_unknown=args.all_unknown, filename=args.filename,
             document_pattern=args.document_pattern,
         )
         return
 
     if args.task == "validate_extraction":
-        if not args.processed_path:
-            parser.error("validate_extraction requires the processed_path argument.")
-        if not os.path.exists(args.processed_path):
-            parser.error(f"The processed_path '{args.processed_path}' does not exist.")
-        task_validate_extraction(Path(args.processed_path), document_pattern=args.document_pattern)
+        processed = require_path(parser, args.processed_path, "processed_path")
+        task_validate_extraction(processed, document_pattern=args.document_pattern)
         return
 
     if args.task == "qr_inventory":
@@ -322,32 +346,20 @@ def main():
                 export_path = profile.paths.export
             else:
                 parser.error("qr_inventory requires --export_path or export path in profile.")
-        if not os.path.exists(export_path):
-            parser.error(f"The export_path '{export_path}' does not exist.")
-        if not os.path.isdir(export_path):
-            parser.error(f"The export_path '{export_path}' is not a directory.")
-        task_qr_inventory(Path(export_path), resume=not args.no_resume)
+        export = require_path(parser, export_path, "export_path")
+        task_qr_inventory(export, resume=not args.no_resume)
         return
 
-    if not args.processed_path:
-        parser.error("the processed_path argument is required.")
-    if not os.path.exists(args.processed_path):
-        parser.error(f"The processed_path '{args.processed_path}' does not exist.")
-    if not os.path.isdir(args.processed_path):
-        parser.error(f"The processed_path '{args.processed_path}' is not a directory.")
+    processed_path = require_path(parser, args.processed_path, "processed_path")
 
     raw_paths = None
     if args.task == "extract_new":
         if not args.raw_path:
             parser.error("the --raw_path argument is required when task is 'extract_new'.")
-        raw_paths = [p for p in args.raw_path.split(';') if p]
-        if not raw_paths:
+        raw_path_strs = [p for p in args.raw_path.split(';') if p]
+        if not raw_path_strs:
             parser.error("the --raw_path argument must contain at least one path.")
-        for rp in raw_paths:
-            if not os.path.exists(rp):
-                parser.error(f"The raw_path '{rp}' does not exist.")
-            if not os.path.isdir(rp):
-                parser.error(f"The raw_path '{rp}' is not a directory.")
+        raw_paths = [require_path(parser, rp, "raw_path") for rp in raw_path_strs]
 
     if args.task == "export_excel":
         if not args.excel_output_path:
@@ -358,23 +370,13 @@ def main():
     if args.task == "copy_matching":
         if not args.regex_pattern:
             parser.error("the --regex_pattern argument is required when task is 'copy_matching'.")
-        if not args.copy_dest_folder:
-            parser.error("the --copy_dest_folder argument is required when task is 'copy_matching'.")
-        if not os.path.exists(args.copy_dest_folder):
-            os.makedirs(args.copy_dest_folder, exist_ok=True)
-        if not os.path.isdir(args.copy_dest_folder):
-            parser.error(f"The copy_dest_folder '{args.copy_dest_folder}' is not a directory.")
+        require_path(parser, args.copy_dest_folder, "copy_dest_folder", create_if_missing=True)
 
     export_base_dir = args.export_base_dir
     if args.task == "export_all_dates":
         if not export_base_dir:
             export_base_dir = os.getenv("EXPORT_FILES_DIR")
-            if not export_base_dir:
-                parser.error("the --export_base_dir argument is required when task is 'export_all_dates'.")
-        if not os.path.exists(export_base_dir):
-            os.makedirs(export_base_dir, exist_ok=True)
-        if not os.path.isdir(export_base_dir):
-            parser.error(f"The export_base_dir '{export_base_dir}' is not a directory.")
+        require_path(parser, export_base_dir, "export_base_dir", create_if_missing=True)
 
     check_schema_path = args.check_schema_path
     temp_check_schema_file = None
@@ -393,13 +395,12 @@ def main():
                     temp_check_schema_file = temp_check_schema.name
             else:
                 parser.error("No validation rules found in profile. Use --check_schema_path or configure validations in profile.")
-        if not os.path.exists(check_schema_path):
-            parser.error(f"The check_schema_path '{check_schema_path}' does not exist.")
+        require_path(parser, check_schema_path, "check_schema_path", must_be_dir=False)
 
     process_folder(
         args.task,
-        args.processed_path,
-        raw_paths=raw_paths if args.task == "extract_new" else None,
+        str(processed_path),
+        raw_paths=[str(p) for p in raw_paths] if raw_paths else None,
         excel_output_path=args.excel_output_path,
         regex_pattern=args.regex_pattern,
         copy_dest_folder=args.copy_dest_folder,

@@ -24,6 +24,7 @@ from papertrail.llm import (
 from papertrail.pdf import render_pdf_to_images, find_pdf_files, get_page_count
 from papertrail.metadata import build_hash_index, save_metadata_json
 from papertrail.hashing import hash_file_fast, hash_file_content
+from papertrail.cache_base import enum_value
 from papertrail.tasks import task_log_context
 from papertrail.qr import extract_metadata_from_qr, QRExtractedMetadata
 
@@ -462,8 +463,8 @@ def task_reextract(processed_path: Path, dry_run: bool = False,
                 failed_count += 1
                 continue
 
-            new_doc_type = new_metadata.document_type.value if hasattr(new_metadata.document_type, 'value') else new_metadata.document_type
-            new_issuer = new_metadata.issuing_party.value if hasattr(new_metadata.issuing_party, 'value') else new_metadata.issuing_party
+            new_doc_type = enum_value(new_metadata.document_type)
+            new_issuer = enum_value(new_metadata.issuing_party)
             new_date = new_metadata.issue_date
 
             changes = []

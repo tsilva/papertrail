@@ -4,6 +4,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
+from papertrail.cache_base import validate_field
 from papertrail.yaml_utils import load_yaml, save_yaml
 
 
@@ -41,6 +42,7 @@ class RejectedValuesManager:
         """Save rejected values to YAML file."""
         save_yaml(self.path, self.data)
 
+    @validate_field(default_return=False)
     def add_rejected(
         self,
         field: str,
@@ -59,9 +61,6 @@ class RejectedValuesManager:
         Returns:
             True if added (new rejection), False if duplicate
         """
-        if field not in self.FIELDS:
-            return False
-
         # Check for duplicates (same raw + normalized combo)
         for entry in self.data[field]:
             if entry.get("raw") == raw and entry.get("normalized") == normalized:
@@ -85,6 +84,7 @@ class RejectedValuesManager:
             self._save()
         return True
 
+    @validate_field(default_return=[])
     def get_rejected(self, field: str) -> list[dict]:
         """Get all rejected values for a field.
 
@@ -94,10 +94,9 @@ class RejectedValuesManager:
         Returns:
             List of rejected value entries
         """
-        if field not in self.FIELDS:
-            return []
         return list(self.data.get(field, []))
 
+    @validate_field(default_return=False)
     def remove_rejected(
         self,
         field: str,
@@ -116,9 +115,6 @@ class RejectedValuesManager:
         Returns:
             True if removed, False if not found
         """
-        if field not in self.FIELDS:
-            return False
-
         entries = self.data[field]
         original_len = len(entries)
 
@@ -136,6 +132,7 @@ class RejectedValuesManager:
             self._save()
         return removed
 
+    @validate_field(default_return=0)
     def clear_field(self, field: str, save: bool = True) -> int:
         """Clear all rejected values for a field.
 
@@ -146,9 +143,6 @@ class RejectedValuesManager:
         Returns:
             Number of entries cleared
         """
-        if field not in self.FIELDS:
-            return 0
-
         count = len(self.data[field])
         self.data[field] = []
 

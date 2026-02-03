@@ -7,14 +7,13 @@ from typing import Optional
 
 import fitz  # PyMuPDF
 
-from papertrail.yaml_utils import load_yaml, save_yaml
-
+from papertrail.cache_base import BaseYamlCache
 from papertrail.logging_utils import get_logger
 
 logger = get_logger('hashing')
 
 
-class HashCache:
+class HashCache(BaseYamlCache):
     """Cache file_hash -> content_hash mappings to avoid recomputation.
 
     This dramatically speeds up operations that need content hashes by
@@ -23,59 +22,16 @@ class HashCache:
     file hash as a cache key.
     """
 
+    _data_key = "cache"
+
     def __init__(self, cache_path: Optional[Path] = None):
         """Initialize the hash cache.
 
         Args:
             cache_path: Path to the YAML cache file. Defaults to config/hash_cache.yaml
         """
-        if cache_path is None:
-            cache_path = Path(__file__).parent.parent / "config" / "hash_cache.yaml"
-        self.cache_path = cache_path
-        self._cache: dict[str, str] = {}
-        self._dirty = False
-        self._load()
-
-    def _load(self) -> None:
-        """Load cache from YAML file."""
-        try:
-            data = load_yaml(self.cache_path)
-            self._cache = data.get("cache", {})
-        except Exception:
-            self._cache = {}
-
-    def save(self) -> None:
-        """Save cache to YAML file if dirty."""
-        if not self._dirty:
-            return
-        save_yaml(self.cache_path, {"cache": self._cache})
-        self._dirty = False
-
-    def get(self, file_hash: str) -> Optional[str]:
-        """Get cached content hash for a file hash.
-
-        Args:
-            file_hash: The fast file hash (8-char SHA256 prefix)
-
-        Returns:
-            Cached content hash if found, None otherwise
-        """
-        return self._cache.get(file_hash)
-
-    def set(self, file_hash: str, content_hash: str) -> None:
-        """Cache a file_hash -> content_hash mapping.
-
-        Args:
-            file_hash: The fast file hash (8-char SHA256 prefix)
-            content_hash: The content-based hash (8-char SHA256 prefix)
-        """
-        if self._cache.get(file_hash) != content_hash:
-            self._cache[file_hash] = content_hash
-            self._dirty = True
-
-    def __len__(self) -> int:
-        """Return number of cached entries."""
-        return len(self._cache)
+        default_path = Path(__file__).parent.parent / "config" / "hash_cache.yaml"
+        super().__init__(cache_path, default_path)
 
 
 def hash_file_fast(path: Path) -> str:
