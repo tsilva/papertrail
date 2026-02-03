@@ -5,17 +5,9 @@ import shutil
 import unicodedata
 from pathlib import Path
 
-from tqdm import tqdm
-
 from papertrail.hashing import hash_file_fast
-from papertrail.logging_utils import (
-    log_failure,
-    get_logger,
-    DocumentLogger,
-    setup_task_logging,
-)
+from papertrail.logging_utils import get_logger
 from papertrail.models import DocumentMetadata
-from papertrail.metadata import save_metadata_json
 from papertrail.tasks import task_log_context
 
 logger = get_logger('cli')
@@ -46,43 +38,6 @@ def file_name_from_metadata(metadata: DocumentMetadata, file_hash: str) -> str:
 
     parts.append(f"{file_hash}.pdf")
     return " - ".join(parts).lower()
-
-
-def rename_single_pdf(pdf_path: Path, content_hash: str, processed_path: Path,
-                      known_content_hashes: set, known_file_hashes: set, failure_logger=None,
-                      doc_logger: DocumentLogger = None):
-    """Process and rename a single PDF file."""
-    from papertrail.tasks.extraction import classify_pdf_document
-
-    try:
-        file_hash = hash_file_fast(pdf_path)
-        metadata = classify_pdf_document(pdf_path, content_hash, failure_logger, doc_logger=doc_logger)
-        metadata.file_hash = file_hash
-
-        filename = file_name_from_metadata(metadata, content_hash)
-        new_pdf_path = processed_path / filename
-
-        if new_pdf_path.exists():
-            logger.warning(f"Skipping {pdf_path.name}: destination already exists: {filename}")
-            return
-
-        shutil.copy2(pdf_path, new_pdf_path)
-        save_metadata_json(new_pdf_path, metadata)
-
-        known_content_hashes.add(content_hash)
-        known_file_hashes.add(file_hash)
-        logger.info(f"Processed: {pdf_path.name} -> {filename}")
-    except Exception as e:
-        log_failure(failure_logger, pdf_path, e)
-        logger.error(f"Failed to process {pdf_path.name}: {e}")
-
-
-def rename_pdf_files(pdf_paths, file_hash_map, known_content_hashes, known_file_hashes, processed_path,
-                     failure_logger=None, doc_logger: DocumentLogger = None):
-    """Rename multiple PDF files."""
-    for pdf_path in tqdm(pdf_paths):
-        rename_single_pdf(pdf_path, file_hash_map[pdf_path], processed_path, known_content_hashes, known_file_hashes,
-                          failure_logger, doc_logger=doc_logger)
 
 
 def task_rename_files(processed_path: Path):
