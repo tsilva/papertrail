@@ -19,6 +19,8 @@ from papertrail.llm import (
     get_system_prompt_raw_extraction,
     TOOLS_RAW_EXTRACTION,
     normalize_metadata,
+    build_extraction_tools,
+    get_qr_exclusions,
 )
 from papertrail.pdf import render_pdf_to_images, find_pdf_files, get_page_count
 from papertrail.metadata import build_hash_index, save_metadata_json
@@ -132,6 +134,14 @@ def classify_pdf_document(pdf_path: Path, file_hash: str, failure_logger=None,
         if doc_logger:
             doc_logger.log_qr_not_found()
 
+    # Determine fields to exclude based on QR results
+    exclude_fields: set[str] = set()
+    pre_extracted: dict = {}
+    if qr_metadata:
+        exclude_fields, pre_extracted = get_qr_exclusions(qr_metadata)
+        if doc_logger and exclude_fields:
+            doc_logger.log_qr_skip(exclude_fields)
+
     # Phase 1: Render PDF for LLM
     try:
         t0 = _time.monotonic()
@@ -154,9 +164,12 @@ def classify_pdf_document(pdf_path: Path, file_hash: str, failure_logger=None,
         ]
 
         messages = [
-            {"role": "system", "content": get_system_prompt_raw_extraction()},
+            {"role": "system", "content": get_system_prompt_raw_extraction(pre_extracted if pre_extracted else None)},
             {"role": "user", "content": user_content},
         ]
+
+        # Use dynamic tools - exclude QR-extracted fields to reduce tokens
+        tools = build_extraction_tools(exclude_fields) if exclude_fields else TOOLS_RAW_EXTRACTION
 
         t0 = _time.monotonic()
         response = ctx.openai_client.chat.completions.create(
@@ -164,7 +177,7 @@ def classify_pdf_document(pdf_path: Path, file_hash: str, failure_logger=None,
             max_tokens=4096,
             temperature=0,
             messages=messages,
-            tools=TOOLS_RAW_EXTRACTION,
+            tools=tools,
             tool_choice={"type": "function", "function": {"name": "extract_document_metadata"}},
         )
         if doc_logger:
@@ -178,6 +191,22 @@ def classify_pdf_document(pdf_path: Path, file_hash: str, failure_logger=None,
 
         args = tool_calls[0].function.arguments
         raw_metadata = DocumentMetadataRaw.model_validate_json(args)
+
+        # Inject QR-extracted values into raw_metadata for downstream processing
+        # These fields were excluded from LLM schema but are needed for logging/storage
+        if qr_metadata:
+            if qr_metadata.issue_date:
+                raw_metadata.issue_date = qr_metadata.issue_date
+            if qr_metadata.document_type:
+                raw_metadata.document_type = qr_metadata.document_type
+            if qr_metadata.total_amount is not None:
+                raw_metadata.total_amount = qr_metadata.total_amount
+            if qr_metadata.total_amount_currency:
+                raw_metadata.total_amount_currency = qr_metadata.total_amount_currency
+            if qr_metadata.issuer_tax_number:
+                raw_metadata.issuer_tax_number = qr_metadata.issuer_tax_number
+            if qr_metadata.locale:
+                raw_metadata.locale = qr_metadata.locale
 
         if doc_logger:
             doc_logger.log_extraction(raw_metadata.model_dump())

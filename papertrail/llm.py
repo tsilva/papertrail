@@ -4,10 +4,11 @@ import json
 import os
 from datetime import datetime
 from pathlib import Path
-from typing import Optional, TYPE_CHECKING
+from typing import Any, Optional, TYPE_CHECKING
 
 from papertrail.logging_utils import get_logger, DocumentLogger
 from papertrail.models import DocumentMetadataRaw, DOCUMENT_TYPES, ISSUING_PARTIES
+from papertrail.qr.models import QRExtractedMetadata
 from papertrail.rejected import RejectedValuesManager
 
 logger = get_logger('llm')
@@ -67,16 +68,103 @@ TOOLS_RAW_EXTRACTION = [
 ]
 
 
-def get_system_prompt_raw_extraction() -> str:
+def build_extraction_schema(exclude_fields: set[str] | None = None) -> dict:
+    """Build JSON schema for LLM extraction, excluding specified fields.
+
+    Args:
+        exclude_fields: Set of field names to exclude from the schema.
+                        These fields won't be extracted by the LLM.
+
+    Returns:
+        JSON schema dict with excluded fields removed.
+    """
+    import copy
+    schema = copy.deepcopy(DocumentMetadataRaw.model_json_schema())
+
+    if not exclude_fields:
+        return schema
+
+    # Remove excluded fields from properties
+    for field in exclude_fields:
+        schema["properties"].pop(field, None)
+
+    # Remove from required list
+    if "required" in schema:
+        schema["required"] = [f for f in schema["required"] if f not in exclude_fields]
+
+    return schema
+
+
+def build_extraction_tools(exclude_fields: set[str] | None = None) -> list[dict]:
+    """Build tools list with dynamic schema.
+
+    Args:
+        exclude_fields: Set of field names to exclude from the extraction schema.
+
+    Returns:
+        List of tool definitions for the LLM.
+    """
+    return [
+        {
+            "type": "function",
+            "function": {
+                "name": "extract_document_metadata",
+                "description": "Extract metadata from a document exactly as it appears.",
+                "parameters": build_extraction_schema(exclude_fields),
+            },
+        }
+    ]
+
+
+def get_qr_exclusions(qr_metadata: QRExtractedMetadata) -> tuple[set[str], dict[str, Any]]:
+    """Get fields to exclude and pre-extracted values from QR metadata.
+
+    When QR extraction succeeds, the extracted fields should be excluded from
+    the LLM schema (to reduce tokens) but provided as context (to help the LLM
+    cross-reference other fields).
+
+    Args:
+        qr_metadata: Metadata extracted from QR code.
+
+    Returns:
+        Tuple of (set of field names to exclude, dict of field->value for prompt context)
+    """
+    exclude = set()
+    pre_extracted: dict[str, Any] = {}
+
+    mappings = [
+        ("issue_date", qr_metadata.issue_date),
+        ("document_type", qr_metadata.document_type),
+        ("total_amount", qr_metadata.total_amount),
+        ("total_amount_currency", qr_metadata.total_amount_currency),
+        ("issuer_tax_number", qr_metadata.issuer_tax_number),
+        ("locale", qr_metadata.locale),
+    ]
+
+    for field, value in mappings:
+        if value is not None:
+            exclude.add(field)
+            pre_extracted[field] = value
+
+    return exclude, pre_extracted
+
+
+def get_system_prompt_raw_extraction(pre_extracted: dict[str, Any] | None = None) -> str:
     """
     Get the system prompt for raw metadata extraction.
 
     Includes the current date and sample enum values for context.
+    When pre_extracted values are provided (from QR code extraction),
+    they are included as context for the LLM but marked as already extracted.
+
+    Args:
+        pre_extracted: Dict of field names to values already extracted from QR code.
+                       These fields are excluded from LLM schema but provided for context.
 
     Returns:
         System prompt string
     """
-    return (
+    prompt = (
         f"You are an expert document extraction assistant. "
         f"Today's date is {datetime.now().strftime('%Y-%m-%d')}. "
         "Given a document image, extract metadata fields EXACTLY as they appear on the document. "
@@ -113,6 +201,18 @@ def get_system_prompt_raw_extraction() -> str:
         "This tool is most often used to classify recent documents. "
         "If you are unsure between multiple possible dates, prefer the one closest to today's date."
     )
+
+    if pre_extracted:
+        prompt += (
+            "\n\n"
+            "IMPORTANT: The following fields have already been extracted from a machine-readable "
+            "source (QR code) with 100% accuracy. They are NOT in your schema - do NOT extract them. "
+            "They are provided for context only:\n"
+        )
+        for field, value in pre_extracted.items():
+            prompt += f"- {field}: {value}\n"
+
+    return prompt
 
 
 def normalize_metadata(
