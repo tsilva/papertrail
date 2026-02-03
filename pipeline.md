@@ -1,6 +1,6 @@
 # Pipeline
 
-The `pipeline` task runs the full end-to-end document processing workflow. It requires three external tools (`mbox-extractor`, `archive-extractor`, `pdf-merger`) and profile configuration with `paths.raw`, `paths.processed`, and `paths.export` set.
+The `pipeline` task runs the full end-to-end document processing workflow. It requires two external tools (`archive-extractor`, `pdf-merger`) and profile configuration with `paths.raw`, `paths.processed`, and `paths.export` set.
 
 ```
 python main.py [--profile NAME] pipeline [--export_date YYYY-MM]
@@ -16,9 +16,9 @@ If `--export_date` is not provided, it defaults to last month.
 Downloads PDF attachments from Gmail using the Google API. The date range starts from the most recent month found in processed files (or last 30 days if none exist) through today. Downloads to the first path in `paths.raw`.
 
 ### Step 2: Extract emails from mbox files
-**Tool:** `mbox-extractor`
+**Module:** `papertrail/mbox.py`
 
-Runs against each raw directory. Extracts email attachments from Google Takeout `.mbox` files found in the raw paths.
+Extracts email attachments from Google Takeout `.mbox` files found in the raw paths. Uses the `mbox-extractor` package directly (no CLI subprocess).
 
 ### Step 3: Extract archives
 **Tool:** `archive-extractor`

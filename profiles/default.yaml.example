@@ -78,7 +78,7 @@ validations:
 
 # Pipeline task configuration
 pipeline:
-  tools_required: ["mbox-extractor", "archive-extractor", "pdf-merger"]
+  tools_required: ["archive-extractor", "pdf-merger"]
   default_export_date: "last_month"
 
 # Task-specific defaults (optional)

@@ -23,6 +23,7 @@ dependencies = [
     "google-auth-oauthlib",
     "gradio>=5.0.0",
     "orjson>=3.9.0",
+    "mbox-extractor",
 ]
 requires-python = ">=3.12"
 
