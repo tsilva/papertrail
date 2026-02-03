@@ -28,6 +28,7 @@ from papertrail.profiles import (
 from papertrail.enums import reset_enum_cache
 from papertrail.mappings import MappingsManager
 from papertrail.rejected import RejectedValuesManager
+from papertrail.nif_lookup import NIFLookupCache
 from papertrail.logging_utils import setup_logging, get_logger, setup_task_logging
 
 # Import all task functions
@@ -68,6 +69,7 @@ class AppContext:
     openai_client: any
     mappings_manager: any
     rejected_manager: any
+    nif_cache: any  # NIFLookupCache or None
 
 
 _ctx: AppContext | None = None
@@ -116,6 +118,13 @@ def initialize_config(profile_name: Optional[str] = None) -> None:
     config_dir = Path(__file__).parent / "config"
     mappings_path = config_dir / "mappings.yaml"
     rejected_path = config_dir / "rejected_values.yaml"
+    nif_cache_path = config_dir / "nif_cache.yaml"
+
+    # Initialize NIF cache if enabled
+    nif_cache = None
+    if profile.nif_api.enabled:
+        nif_cache = NIFLookupCache(nif_cache_path)
+        logger.info(f"NIF lookup enabled with {len(nif_cache)} cached entries")
 
     _ctx = AppContext(
         config_paths=get_config_paths(),
@@ -123,6 +132,7 @@ def initialize_config(profile_name: Optional[str] = None) -> None:
         openai_client=get_openai_client(),
         mappings_manager=MappingsManager(mappings_path),
         rejected_manager=RejectedValuesManager(rejected_path),
+        nif_cache=nif_cache,
     )
 
 
