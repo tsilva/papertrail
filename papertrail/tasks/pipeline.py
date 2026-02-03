@@ -11,6 +11,7 @@ from pathlib import Path
 
 from papertrail.config import get_current_profile
 from papertrail.logging_utils import get_logger, setup_task_logging
+from papertrail.mbox import extract_mbox_attachments
 from papertrail.tasks.validation import validate_merged_pdf
 
 logger = get_logger('cli')
@@ -64,7 +65,7 @@ def pipeline(export_date_arg=None, processed_path_override=None):
     logger.info("=== PIPELINE STARTED ===")
     logger.info(f"Log: {log_file_path}")
 
-    for tool in ["mbox-extractor", "archive-extractor", "pdf-merger"]:
+    for tool in ["archive-extractor", "pdf-merger"]:
         if which(tool) is None:
             logger.error(f"Required tool '{tool}' not found in PATH. Please install it and try again.")
             sys.exit(1)
@@ -124,7 +125,14 @@ def pipeline(export_date_arg=None, processed_path_override=None):
     run_step(f'"{sys.executable}" "{main_script}" gmail_download', "Step 1: Download Gmail attachments")
 
     for rd in raw_dirs:
-        run_step(f'mbox-extractor "{rd}"', "Step 2: Google Takeout mbox extraction")
+        logger.info("### Step 2: Google Takeout mbox extraction...")
+        stats = extract_mbox_attachments(rd)
+        if stats['mbox_files'] > 0:
+            logger.info(f"Processed {stats['mbox_files']} mbox file(s), extracted {stats['attachments_extracted']} attachment(s)")
+        if stats['errors']:
+            logger.error(f"Step 2 encountered {len(stats['errors'])} error(s)")
+            sys.exit(1)
+        logger.info("### Step 2: Google Takeout mbox extraction... Finished.")
         if zip_passwords_file_path:
             run_step(f'archive-extractor "{rd}" --passwords "{zip_passwords_file_path}"', "Step 3: Google Takeout zip extraction")
         else:

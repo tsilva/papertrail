@@ -485,7 +485,7 @@ validations:
     - document_type: "bank-statement"
 
 pipeline:
-  tools_required: ["mbox-extractor", "archive-extractor", "pdf-merger"]
+  tools_required: ["archive-extractor", "pdf-merger"]
   default_export_date: "last_month"
 
 task_defaults: {}
@@ -544,7 +544,7 @@ validations:
     - document_type: "purchase-order"
 
 pipeline:
-  tools_required: ["mbox-extractor", "archive-extractor", "pdf-merger"]
+  tools_required: ["archive-extractor", "pdf-merger"]
   default_export_date: "current_month"
 
 task_defaults: {}
