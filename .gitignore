@@ -255,3 +255,8 @@ Thumbs.db
 
 
 *cache*
+
+# Managed by tsilva/.github
+# Do not remove - synced automatically
+.claude/
+*.pyc

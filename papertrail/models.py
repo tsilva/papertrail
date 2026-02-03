@@ -60,6 +60,14 @@ class DocumentMetadataRaw(BaseModel):
     total_amount_currency: Optional[str] = Field(default=None, description="Currency of the total amount.")
     confidence: float = Field(description="Confidence score between 0 and 1.")
     reasoning: str = Field(description="Why this classification was chosen.")
+    issuer_tax_number: Optional[str] = Field(
+        default=None,
+        description="Issuer's tax identification number (VAT, NIF, EIN) if visible on document."
+    )
+    locale: Optional[str] = Field(
+        default=None,
+        description="Document locale in BCP-47 format (e.g., 'pt-PT'). Detect from language, currency, date format, tax ID format."
+    )
 
 
 class DocumentMetadata(BaseModel):
@@ -90,7 +98,8 @@ class DocumentMetadata(BaseModel):
 
     # Document properties
     page_count: Optional[int] = Field(default=None, description="Number of pages in the PDF document.")
-    issuer_tax_number: Optional[str] = Field(default=None, description="Issuer tax identification number (e.g., PT503782467).")
+    issuer_tax_number: Optional[str] = Field(default=None, description="Issuer tax identification number.")
+    locale: Optional[str] = Field(default=None, description="Document locale in BCP-47 format.")
 
     class Config:
         populate_by_name = True
