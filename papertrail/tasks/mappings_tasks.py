@@ -2,6 +2,9 @@
 
 from pathlib import Path
 
+from rich.prompt import Prompt, Confirm
+
+from papertrail.console import get_console
 from papertrail.logging_utils import get_logger, setup_task_logging
 from papertrail.mappings import MappingsManager
 from papertrail.metadata import load_validated_metadata
@@ -13,6 +16,7 @@ logger = get_logger('cli')
 
 def task_bootstrap_mappings(processed_path: Path, mappings_mgr):
     """Populate mappings from existing metadata JSON files."""
+    console = get_console()
     setup_task_logging(processed_path, "bootstrap_mappings")
     require_initialized(mappings_mgr, "Mappings manager")
 
@@ -46,25 +50,32 @@ def task_bootstrap_mappings(processed_path: Path, mappings_mgr):
                 issuer_count += 1
 
     if processed_count == 0:
-        logger.info(f"No metadata files found in {processed_path}")
+        console.warning("No metadata files found", indent=False)
         return
 
     mappings_mgr._save()
 
-    logger.info("Bootstrap complete:")
-    logger.info(f"  Document type mappings added: {doc_type_count}")
-    logger.info(f"  Issuing party mappings added: {issuer_count}")
-    logger.info(f"  Files processed: {processed_count}")
-    logger.info(f"Mappings saved to: {mappings_mgr.path}")
+    console.success(
+        f"{processed_count} files processed, "
+        f"{doc_type_count} doc types + {issuer_count} issuers added",
+        indent=False
+    )
+
+    logger.debug(f"Bootstrap complete:")
+    logger.debug(f"  Document type mappings added: {doc_type_count}")
+    logger.debug(f"  Issuing party mappings added: {issuer_count}")
+    logger.debug(f"  Files processed: {processed_count}")
+    logger.debug(f"Mappings saved to: {mappings_mgr.path}")
 
     stats = mappings_mgr.get_stats()
-    logger.info("Current mappings stats:")
+    logger.debug("Current mappings stats:")
     for field, counts in stats.items():
-        logger.info(f"  {field}: {counts['confirmed']} confirmed, {counts['auto']} auto, {counts['canonicals']} canonicals")
+        logger.debug(f"  {field}: {counts['confirmed']} confirmed, {counts['auto']} auto, {counts['canonicals']} canonicals")
 
 
 def task_review_mappings(mappings_mgr):
     """Interactive review of auto-added mappings."""
+    console = get_console()
     require_initialized(mappings_mgr, "Mappings manager")
 
     doc_auto = mappings_mgr.get_auto_mappings("document_types")
@@ -73,84 +84,87 @@ def task_review_mappings(mappings_mgr):
     total_pending = len(doc_auto) + len(issuer_auto)
 
     if total_pending == 0:
-        logger.info("No auto-added mappings pending review.")
+        console.info("No auto-added mappings pending review", indent=False)
         stats = mappings_mgr.get_stats()
-        logger.info("Current mappings stats:")
         for field, counts in stats.items():
-            logger.info(f"  {field}: {counts['confirmed']} confirmed, {counts['auto']} auto")
+            console.detail(f"{field}: {counts['confirmed']} confirmed, {counts['auto']} auto", indent=False)
         return
 
-    print("=" * 60)
-    print("AUTO-ADDED MAPPINGS AWAITING REVIEW")
-    print("=" * 60)
-    print()
+    console.console.print()
+    console.console.print("[bold cyan]AUTO-ADDED MAPPINGS AWAITING REVIEW[/bold cyan]")
+    console.console.print()
 
     if doc_auto:
-        print(f"Document Types ({len(doc_auto)} pending):")
+        console.console.print(f"[cyan]Document Types ({len(doc_auto)} pending):[/cyan]")
         for i, (raw, canonical) in enumerate(doc_auto.items(), 1):
-            print(f"  {i}. \"{raw}\" -> \"{canonical}\"")
-        print()
+            console.console.print(f"  {i}. \"{raw}\" [dim]->[/dim] \"{canonical}\"")
+        console.console.print()
 
     if issuer_auto:
-        print(f"Issuing Parties ({len(issuer_auto)} pending):")
+        console.console.print(f"[cyan]Issuing Parties ({len(issuer_auto)} pending):[/cyan]")
         for i, (raw, canonical) in enumerate(issuer_auto.items(), 1):
-            print(f"  {i}. \"{raw}\" -> \"{canonical}\"")
-        print()
+            console.console.print(f"  {i}. \"{raw}\" [dim]->[/dim] \"{canonical}\"")
+        console.console.print()
 
-    print("Options:")
-    print("  [a] Confirm ALL mappings")
-    print("  [r] Review one-by-one")
-    print("  [q] Quit without changes")
-    print()
-
-    choice = input("Select option: ").strip().lower()
+    choice = Prompt.ask(
+        "Select option",
+        choices=["a", "r", "q"],
+        default="q"
+    )
 
     if choice == 'a':
         doc_confirmed = mappings_mgr.confirm_all("document_types", save=False)
         issuer_confirmed = mappings_mgr.confirm_all("issuing_parties", save=True)
-        logger.info(f"Confirmed {doc_confirmed} document type mappings and {issuer_confirmed} issuer mappings.")
+        console.success(f"Confirmed {doc_confirmed} doc types + {issuer_confirmed} issuers", indent=False)
 
     elif choice == 'r':
         _review_field_mappings(mappings_mgr, "document_types", doc_auto)
         _review_field_mappings(mappings_mgr, "issuing_parties", issuer_auto)
-        logger.info("Review complete.")
+        console.success("Review complete", indent=False)
 
     else:
-        logger.info("No changes made.")
+        console.info("No changes made", indent=False)
 
 
 def _review_field_mappings(mappings_mgr, field: str, mappings_dict: dict):
     """Helper to review mappings for a single field."""
+    console = get_console()
+
     if not mappings_dict:
         return
 
     field_label = "Document Type" if field == "document_types" else "Issuing Party"
-    print(f"\n--- Reviewing {field_label} Mappings ---")
+    console.console.print(f"\n[bold]--- Reviewing {field_label} Mappings ---[/bold]")
 
     for raw, canonical in list(mappings_dict.items()):
-        print(f"\n\"{raw}\" -> \"{canonical}\"")
-        print("  [c] Confirm  [e] Edit canonical  [r] Reject  [s] Skip")
-        action = input("  Action: ").strip().lower()
+        console.console.print(f"\n\"{raw}\" [dim]->[/dim] \"{canonical}\"")
+
+        action = Prompt.ask(
+            "  Action",
+            choices=["c", "e", "r", "s"],
+            default="s"
+        )
 
         if action == 'c':
             mappings_mgr.confirm_mapping(raw, field, save=True)
-            print("  Confirmed.")
+            console.console.print("  [green]Confirmed.[/green]")
         elif action == 'e':
-            new_canonical = input("  Enter new canonical value: ").strip()
+            new_canonical = Prompt.ask("  Enter new canonical value")
             if new_canonical:
                 mappings_mgr.update_mapping(raw, new_canonical, field, confirm=True, save=True)
-                print(f"  Updated to \"{new_canonical}\" and confirmed.")
+                console.console.print(f"  [green]Updated to \"{new_canonical}\" and confirmed.[/green]")
             else:
-                print("  No change (empty input).")
+                console.console.print("  [dim]No change (empty input).[/dim]")
         elif action == 'r':
             mappings_mgr.reject_mapping(raw, field, save=True)
-            print("  Rejected (removed).")
+            console.console.print("  [yellow]Rejected (removed).[/yellow]")
         else:
-            print("  Skipped.")
+            console.console.print("  [dim]Skipped.[/dim]")
 
 
 def task_add_canonical(mappings_mgr, field: str, canonical: str):
     """Add a new canonical value to the mappings."""
+    console = get_console()
     require_initialized(mappings_mgr, "Mappings manager")
 
     field_map = {
@@ -162,18 +176,19 @@ def task_add_canonical(mappings_mgr, field: str, canonical: str):
 
     normalized_field = field_map.get(field.lower())
     if not normalized_field:
-        logger.error(f"Unknown field '{field}'. Use 'document_type' or 'issuing_party'.")
+        console.error(f"Unknown field '{field}'. Use 'document_type' or 'issuing_party'.", indent=False)
         return
 
     if mappings_mgr.add_canonical(normalized_field, canonical):
-        logger.info(f"Added canonical '{canonical}' to {normalized_field}.")
-        logger.info(f"Current canonicals: {', '.join(mappings_mgr.get_canonicals(normalized_field))}")
+        console.success(f"Added canonical '{canonical}' to {normalized_field}", indent=False)
+        logger.debug(f"Current canonicals: {', '.join(mappings_mgr.get_canonicals(normalized_field))}")
     else:
-        logger.info(f"Canonical '{canonical}' already exists in {normalized_field}.")
+        console.info(f"Canonical '{canonical}' already exists in {normalized_field}", indent=False)
 
 
 def task_review_rejected(rejected_mgr: RejectedValuesManager, mappings_mgr: MappingsManager):
     """Interactive review of rejected normalization values."""
+    console = get_console()
     require_initialized(rejected_mgr, "Rejected values manager")
     require_initialized(mappings_mgr, "Mappings manager")
 
@@ -183,53 +198,50 @@ def task_review_rejected(rejected_mgr: RejectedValuesManager, mappings_mgr: Mapp
     total_pending = len(doc_rejected) + len(issuer_rejected)
 
     if total_pending == 0:
-        logger.info("No rejected values pending review.")
+        console.info("No rejected values pending review", indent=False)
         stats = rejected_mgr.get_stats()
-        logger.info(f"Rejected values stats: document_types={stats['document_types']}, issuing_parties={stats['issuing_parties']}")
+        console.detail(f"Rejected values: document_types={stats['document_types']}, issuing_parties={stats['issuing_parties']}", indent=False)
         return
 
-    print("=" * 60)
-    print("REJECTED NORMALIZATIONS AWAITING REVIEW")
-    print("=" * 60)
-    print()
-    print("These are values the LLM suggested but were not in the canonical list.")
-    print("You can: add them as new canonicals, map them to existing ones, or ignore.")
-    print()
+    console.console.print()
+    console.console.print("[bold cyan]REJECTED NORMALIZATIONS AWAITING REVIEW[/bold cyan]")
+    console.console.print()
+    console.console.print("[dim]These are values the LLM suggested but were not in the canonical list.[/dim]")
+    console.console.print("[dim]You can: add them as new canonicals, map them to existing ones, or ignore.[/dim]")
+    console.console.print()
 
     if doc_rejected:
-        print(f"Document Types ({len(doc_rejected)} pending):")
+        console.console.print(f"[cyan]Document Types ({len(doc_rejected)} pending):[/cyan]")
         for i, entry in enumerate(doc_rejected, 1):
-            count_str = f" (seen {entry['count']}x)" if entry.get('count', 1) > 1 else ""
-            print(f"  {i}. \"{entry['raw']}\" -> LLM suggested \"{entry['normalized']}\"{count_str}")
-        print()
+            count_str = f" [dim](seen {entry['count']}x)[/dim]" if entry.get('count', 1) > 1 else ""
+            console.console.print(f"  {i}. \"{entry['raw']}\" [dim]->[/dim] LLM suggested \"{entry['normalized']}\"{count_str}")
+        console.console.print()
 
     if issuer_rejected:
-        print(f"Issuing Parties ({len(issuer_rejected)} pending):")
+        console.console.print(f"[cyan]Issuing Parties ({len(issuer_rejected)} pending):[/cyan]")
         for i, entry in enumerate(issuer_rejected, 1):
-            count_str = f" (seen {entry['count']}x)" if entry.get('count', 1) > 1 else ""
-            print(f"  {i}. \"{entry['raw']}\" -> LLM suggested \"{entry['normalized']}\"{count_str}")
-        print()
+            count_str = f" [dim](seen {entry['count']}x)[/dim]" if entry.get('count', 1) > 1 else ""
+            console.console.print(f"  {i}. \"{entry['raw']}\" [dim]->[/dim] LLM suggested \"{entry['normalized']}\"{count_str}")
+        console.console.print()
 
-    print("Options:")
-    print("  [r] Review one-by-one")
-    print("  [c] Clear all rejected values")
-    print("  [q] Quit without changes")
-    print()
-
-    choice = input("Select option: ").strip().lower()
+    choice = Prompt.ask(
+        "Select option",
+        choices=["r", "c", "q"],
+        default="q"
+    )
 
     if choice == 'c':
         doc_cleared = rejected_mgr.clear_field("document_types", save=False)
         issuer_cleared = rejected_mgr.clear_field("issuing_parties", save=True)
-        logger.info(f"Cleared {doc_cleared} document type rejections and {issuer_cleared} issuer rejections.")
+        console.success(f"Cleared {doc_cleared} doc type + {issuer_cleared} issuer rejections", indent=False)
 
     elif choice == 'r':
         _review_rejected_field(rejected_mgr, mappings_mgr, "document_types", doc_rejected)
         _review_rejected_field(rejected_mgr, mappings_mgr, "issuing_parties", issuer_rejected)
-        logger.info("Review complete.")
+        console.success("Review complete", indent=False)
 
     else:
-        logger.info("No changes made.")
+        console.info("No changes made", indent=False)
 
 
 def _review_rejected_field(
@@ -239,55 +251,57 @@ def _review_rejected_field(
     entries: list[dict]
 ):
     """Helper to review rejected values for a single field."""
+    console = get_console()
+
     if not entries:
         return
 
     field_label = "Document Type" if field == "document_types" else "Issuing Party"
     canonicals = mappings_mgr.get_canonicals(field)
 
-    print(f"\n--- Reviewing {field_label} Rejections ---")
-    print(f"Current canonicals: {', '.join(canonicals[:20])}{'...' if len(canonicals) > 20 else ''}")
+    console.console.print(f"\n[bold]--- Reviewing {field_label} Rejections ---[/bold]")
+    console.console.print(f"[dim]Current canonicals: {', '.join(canonicals[:20])}{'...' if len(canonicals) > 20 else ''}[/dim]")
 
     for entry in list(entries):
         raw = entry['raw']
         normalized = entry['normalized']
 
-        print(f"\nRaw: \"{raw}\"")
-        print(f"LLM suggested: \"{normalized}\"")
-        print("  [a] Add '{normalized}' as new canonical and create mapping")
-        print("  [m] Map to existing canonical")
-        print("  [i] Ignore (remove from rejected list)")
-        print("  [s] Skip")
-        action = input("  Action: ").strip().lower()
+        console.console.print(f"\nRaw: \"{raw}\"")
+        console.console.print(f"LLM suggested: \"{normalized}\"")
+
+        action = Prompt.ask(
+            "  Action",
+            choices=["a", "m", "i", "s"],
+            default="s"
+        )
 
         if action == 'a':
             mappings_mgr.add_canonical(field, normalized, save=False)
             mappings_mgr.add_mapping(raw, normalized, field, confirmed=True, save=True)
             rejected_mgr.remove_rejected(field, raw, normalized, save=True)
-            print(f"  Added canonical '{normalized}' and mapped '{raw}' -> '{normalized}'")
+            console.console.print(f"  [green]Added canonical '{normalized}' and mapped '{raw}' -> '{normalized}'[/green]")
 
         elif action == 'm':
-            print(f"  Available canonicals: {', '.join(canonicals)}")
-            new_canonical = input("  Enter canonical to map to: ").strip()
+            console.console.print(f"  [dim]Available canonicals: {', '.join(canonicals[:30])}{'...' if len(canonicals) > 30 else ''}[/dim]")
+            new_canonical = Prompt.ask("  Enter canonical to map to")
             if new_canonical in canonicals:
                 mappings_mgr.add_mapping(raw, new_canonical, field, confirmed=True, save=True)
                 rejected_mgr.remove_rejected(field, raw, normalized, save=True)
-                print(f"  Mapped '{raw}' -> '{new_canonical}'")
+                console.console.print(f"  [green]Mapped '{raw}' -> '{new_canonical}'[/green]")
             elif new_canonical:
-                confirm = input(f"  '{new_canonical}' not in canonicals. Add it? [y/n]: ").strip().lower()
-                if confirm == 'y':
+                if Confirm.ask(f"  '{new_canonical}' not in canonicals. Add it?", default=False):
                     mappings_mgr.add_canonical(field, new_canonical, save=False)
                     mappings_mgr.add_mapping(raw, new_canonical, field, confirmed=True, save=True)
                     rejected_mgr.remove_rejected(field, raw, normalized, save=True)
-                    print(f"  Added canonical '{new_canonical}' and mapped '{raw}' -> '{new_canonical}'")
+                    console.console.print(f"  [green]Added canonical '{new_canonical}' and mapped '{raw}' -> '{new_canonical}'[/green]")
                 else:
-                    print("  No change.")
+                    console.console.print("  [dim]No change.[/dim]")
             else:
-                print("  No change (empty input).")
+                console.console.print("  [dim]No change (empty input).[/dim]")
 
         elif action == 'i':
             rejected_mgr.remove_rejected(field, raw, normalized, save=True)
-            print("  Removed from rejected list.")
+            console.console.print("  [yellow]Removed from rejected list.[/yellow]")
 
         else:
-            print("  Skipped.")
+            console.console.print("  [dim]Skipped.[/dim]")

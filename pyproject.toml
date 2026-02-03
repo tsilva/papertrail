@@ -26,6 +26,8 @@ dependencies = [
     "mbox-extractor",
     "pyzbar>=0.1.9",
     "archive-extractor",
+    "rich>=13.0.0",
+    "pdf-gluer",
 ]
 requires-python = ">=3.12"
 

@@ -10,8 +10,8 @@ from typing import Optional
 from urllib.parse import urlparse
 
 import yaml
-from tqdm import tqdm
 
+from papertrail.console import get_console
 from papertrail.logging_utils import get_logger, setup_task_logging
 from papertrail.qr import extract_all_qr_codes, detect_qr_type, check_pyzbar_available
 from papertrail.qr.models import QRCodeType, QRCodeData
@@ -174,10 +174,12 @@ def task_qr_inventory(
         max_workers: Number of parallel workers for scanning
         checkpoint_interval: Save checkpoint every N files
     """
+    console = get_console()
+
     # Pre-flight check: verify pyzbar is available before starting
     pyzbar_ok, error_msg = check_pyzbar_available()
     if not pyzbar_ok:
-        logger.error(f"Cannot run qr_inventory: {error_msg}")
+        console.error(f"Cannot run qr_inventory: {error_msg}", indent=False)
         raise RuntimeError(f"pyzbar not available: {error_msg}")
 
     setup_task_logging(export_path, "qr_inventory")
@@ -192,7 +194,7 @@ def task_qr_inventory(
     # Filter out merged files
     all_pdfs = [p for p in all_pdfs if not p.name.startswith('merged_')]
 
-    logger.info(f"Found {len(all_pdfs)} PDFs to scan in {export_path}")
+    logger.debug(f"Found {len(all_pdfs)} PDFs to scan in {export_path}")
 
     # Load checkpoint if resuming
     scanned_files: set[str] = set()
@@ -201,15 +203,17 @@ def task_qr_inventory(
     if resume:
         scanned_files, results = _load_checkpoint(checkpoint_path)
         if scanned_files:
-            logger.info(f"Resuming from checkpoint: {len(scanned_files)} already scanned")
+            logger.debug(f"Resuming from checkpoint: {len(scanned_files)} already scanned")
 
     # Filter to unscanned PDFs
     pdfs_to_scan = [p for p in all_pdfs if str(p) not in scanned_files]
 
+    scan_duration = 0.0
+
     if not pdfs_to_scan:
-        logger.info("All PDFs already scanned")
+        logger.debug("All PDFs already scanned")
     else:
-        logger.info(f"Scanning {len(pdfs_to_scan)} PDFs with {max_workers} workers...")
+        logger.debug(f"Scanning {len(pdfs_to_scan)} PDFs with {max_workers} workers...")
 
         start_time = datetime.now()
 
@@ -217,41 +221,40 @@ def task_qr_inventory(
             futures = {executor.submit(_scan_pdf_for_qr, pdf_path): pdf_path
                        for pdf_path in pdfs_to_scan}
 
-            progress = tqdm(as_completed(futures), total=len(futures), desc="Scanning PDFs")
             checkpoint_counter = 0
 
-            for future in progress:
-                pdf_path = futures[future]
-                try:
-                    result = future.result()
-                    results.append(result)
-                    scanned_files.add(str(pdf_path))
-                    checkpoint_counter += 1
+            with console.progress("Scanning PDFs", total=len(futures)) as progress:
+                task = progress.add_task("Scanning PDFs", total=len(futures))
+                for future in as_completed(futures):
+                    pdf_path = futures[future]
+                    try:
+                        result = future.result()
+                        results.append(result)
+                        scanned_files.add(str(pdf_path))
+                        checkpoint_counter += 1
 
-                    # Update progress description with QR count
-                    qr_count = sum(1 for r in results if r.has_qr)
-                    progress.set_postfix({'with_qr': qr_count})
+                        # Save checkpoint periodically
+                        if checkpoint_counter >= checkpoint_interval:
+                            _save_checkpoint(checkpoint_path, scanned_files, results)
+                            checkpoint_counter = 0
 
-                    # Save checkpoint periodically
-                    if checkpoint_counter >= checkpoint_interval:
-                        _save_checkpoint(checkpoint_path, scanned_files, results)
-                        checkpoint_counter = 0
+                    except Exception as e:
+                        logger.error(f"Error scanning {pdf_path}: {e}")
+                        results.append(InventoryResult(
+                            pdf_path=str(pdf_path),
+                            has_qr=False,
+                            error=str(e),
+                            issuer=_extract_issuer_from_filename(pdf_path.name),
+                        ))
+                        scanned_files.add(str(pdf_path))
 
-                except Exception as e:
-                    logger.error(f"Error scanning {pdf_path}: {e}")
-                    results.append(InventoryResult(
-                        pdf_path=str(pdf_path),
-                        has_qr=False,
-                        error=str(e),
-                        issuer=_extract_issuer_from_filename(pdf_path.name),
-                    ))
-                    scanned_files.add(str(pdf_path))
+                    progress.update(task, advance=1)
 
         scan_duration = (datetime.now() - start_time).total_seconds()
-        logger.info(f"Scan completed in {scan_duration:.1f} seconds")
+        logger.debug(f"Scan completed in {scan_duration:.1f} seconds")
 
     # Build summary
-    logger.info("Building inventory summary...")
+    logger.debug("Building inventory summary...")
 
     summary = {
         'total_pdfs': len(results),
@@ -347,35 +350,46 @@ def task_qr_inventory(
     with open(output_path, 'w', encoding='utf-8') as f:
         yaml.dump(inventory, f, default_flow_style=False, allow_unicode=True, width=120)
 
-    logger.info(f"Inventory written to {output_path}")
+    logger.debug(f"Inventory written to {output_path}")
 
     # Clean up checkpoint
     if checkpoint_path.exists():
         checkpoint_path.unlink()
-        logger.info("Checkpoint file removed")
+        logger.debug("Checkpoint file removed")
 
-    # Print summary
-    logger.info("=" * 60)
-    logger.info("QR INVENTORY SUMMARY")
-    logger.info("=" * 60)
-    logger.info(f"Total PDFs scanned: {summary['total_pdfs']}")
-    logger.info(f"PDFs with QR codes: {summary['pdfs_with_qr']} ({100*summary['pdfs_with_qr']/max(1,summary['total_pdfs']):.1f}%)")
-    logger.info(f"PDFs without QR codes: {summary['pdfs_without_qr']}")
+    # Console summary
+    qr_pct = 100 * summary['pdfs_with_qr'] / max(1, summary['total_pdfs'])
+    console.success(
+        f"{summary['total_pdfs']} PDFs scanned, "
+        f"{summary['pdfs_with_qr']} with QR codes ({qr_pct:.1f}%)",
+        indent=False
+    )
+
     if summary['scan_errors']:
-        logger.warning(f"Scan errors: {summary['scan_errors']}")
+        console.warning(f"{summary['scan_errors']} scan errors", indent=False)
 
-    logger.info("\nBy QR type:")
+    # Log detailed info to file
+    logger.debug("=" * 60)
+    logger.debug("QR INVENTORY SUMMARY")
+    logger.debug("=" * 60)
+    logger.debug(f"Total PDFs scanned: {summary['total_pdfs']}")
+    logger.debug(f"PDFs with QR codes: {summary['pdfs_with_qr']} ({qr_pct:.1f}%)")
+    logger.debug(f"PDFs without QR codes: {summary['pdfs_without_qr']}")
+    if summary['scan_errors']:
+        logger.debug(f"Scan errors: {summary['scan_errors']}")
+
+    logger.debug("\nBy QR type:")
     for qr_type, count in sorted(by_type.items(), key=lambda x: x[1], reverse=True):
-        logger.info(f"  {qr_type}: {count}")
+        logger.debug(f"  {qr_type}: {count}")
 
     if url_domains:
-        logger.info("\nTop URL domains:")
+        logger.debug("\nTop URL domains:")
         for domain, count in list(url_domains.items())[:10]:
-            logger.info(f"  {domain}: {count}")
+            logger.debug(f"  {domain}: {count}")
 
-    logger.info("\nTop issuers with QR codes:")
+    logger.debug("\nTop issuers with QR codes:")
     for issuer, stats in list(by_issuer.items())[:10]:
         if stats['with_qr'] > 0:
-            logger.info(f"  {issuer}: {stats['with_qr']} with QR, {stats['without_qr']} without")
+            logger.debug(f"  {issuer}: {stats['with_qr']} with QR, {stats['without_qr']} without")
 
     return inventory

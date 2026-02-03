@@ -4,18 +4,41 @@ papertrail.tasks - Task modules for the papertrail CLI.
 
 from contextlib import contextmanager
 from pathlib import Path
+from typing import Generator
 
 from papertrail.logging_utils import setup_task_logging, get_logger
+from papertrail.console import get_console
 
 logger = get_logger('cli')
 
 
 @contextmanager
-def task_log_context(processed_path: Path, task_name: str):
-    """Context manager for task logging boilerplate."""
+def task_log_context(
+    processed_path: Path,
+    task_name: str,
+    show_header: bool = True,
+) -> Generator[Path, None, None]:
+    """Context manager for task logging boilerplate.
+
+    Args:
+        processed_path: Path to the processed documents directory.
+        task_name: Name of the task (used in log filename).
+        show_header: If True, display task header in console.
+
+    Yields:
+        Path to the created log file.
+    """
     log_file_path = setup_task_logging(processed_path, task_name)
-    logger.info(f"=== {task_name.upper()} STARTED ===")
-    logger.info(f"Log: {log_file_path}")
+    console = get_console()
+
+    # Log to file (always)
+    logger.debug(f"=== {task_name.upper()} STARTED ===")
+    logger.debug(f"Log: {log_file_path}")
+
+    # Console output (only if show_header is True)
+    if show_header:
+        console.detail(f"Log: {log_file_path}", indent=False)
+
     yield log_file_path
 
 
