@@ -6,13 +6,13 @@ import urllib.error
 from pathlib import Path
 from typing import Optional
 
-from papertrail.yaml_utils import load_yaml, save_yaml
+from papertrail.cache_base import BaseYamlCache
 from papertrail.logging_utils import get_logger
 
 logger = get_logger('nif_lookup')
 
 
-class NIFLookupCache:
+class NIFLookupCache(BaseYamlCache):
     """Cache NIF → issuer name mappings with web scraping fallback.
 
     Two-tier lookup following existing patterns:
@@ -26,6 +26,7 @@ class NIFLookupCache:
     """
 
     WEB_URL = "https://www.nif.pt/{nif}/"
+    _data_key = "nif_to_issuer"
 
     def __init__(self, cache_path: Optional[Path] = None):
         """Initialize the NIF lookup cache.
@@ -33,27 +34,8 @@ class NIFLookupCache:
         Args:
             cache_path: Path to the YAML cache file. Defaults to config/nif_cache.yaml
         """
-        if cache_path is None:
-            cache_path = Path(__file__).parent.parent / "config" / "nif_cache.yaml"
-        self.cache_path = cache_path
-        self._cache: dict[str, str] = {}
-        self._dirty = False
-        self._load()
-
-    def _load(self) -> None:
-        """Load cache from YAML file."""
-        try:
-            data = load_yaml(self.cache_path)
-            self._cache = data.get("nif_to_issuer", {})
-        except Exception:
-            self._cache = {}
-
-    def save(self) -> None:
-        """Save cache to YAML file if dirty."""
-        if not self._dirty:
-            return
-        save_yaml(self.cache_path, {"nif_to_issuer": self._cache})
-        self._dirty = False
+        default_path = Path(__file__).parent.parent / "config" / "nif_cache.yaml"
+        super().__init__(cache_path, default_path)
 
     @staticmethod
     def normalize_nif(nif: str) -> str:
@@ -156,7 +138,3 @@ class NIFLookupCache:
         except Exception as e:
             logger.warning(f"[NIF-WEB] {nif} → error: {e}")
             return None
-
-    def __len__(self) -> int:
-        """Return number of cached entries."""
-        return len(self._cache)
