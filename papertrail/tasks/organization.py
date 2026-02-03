@@ -5,8 +5,7 @@ import shutil
 import unicodedata
 from pathlib import Path
 
-from tqdm import tqdm
-
+from papertrail.console import get_console
 from papertrail.hashing import hash_file_fast
 from papertrail.logging_utils import get_logger, log_failure, DocumentLogger
 from papertrail.metadata import save_metadata_json
@@ -66,7 +65,7 @@ def rename_single_pdf(pdf_path: Path, content_hash: str, processed_path: Path,
 
         known_content_hashes.add(content_hash)
         known_file_hashes.add(file_hash)
-        logger.info(f"Processed: {pdf_path.name} -> {filename}")
+        logger.debug(f"Processed: {pdf_path.name} -> {filename}")
     except Exception as e:
         log_failure(failure_logger, pdf_path, e)
         logger.error(f"Failed to process {pdf_path.name}: {e}")
@@ -75,17 +74,24 @@ def rename_single_pdf(pdf_path: Path, content_hash: str, processed_path: Path,
 def rename_pdf_files(pdf_paths, file_hash_map, known_content_hashes, known_file_hashes, processed_path,
                      failure_logger=None, doc_logger: DocumentLogger = None):
     """Rename multiple PDF files."""
-    for pdf_path in tqdm(pdf_paths):
-        rename_single_pdf(pdf_path, file_hash_map[pdf_path], processed_path, known_content_hashes, known_file_hashes,
-                          failure_logger, doc_logger=doc_logger)
+    console = get_console()
+
+    with console.progress("Processing PDFs", total=len(pdf_paths)) as progress:
+        task = progress.add_task("Processing PDFs", total=len(pdf_paths))
+        for pdf_path in pdf_paths:
+            rename_single_pdf(pdf_path, file_hash_map[pdf_path], processed_path, known_content_hashes, known_file_hashes,
+                              failure_logger, doc_logger=doc_logger)
+            progress.update(task, advance=1)
 
 
 def task_rename_files(processed_path: Path):
     """Rename existing PDF files based on metadata."""
     from papertrail.metadata import load_json_files_parallel
 
+    console = get_console()
+
     with task_log_context(processed_path, "rename_files"):
-        logger.info("Renaming existing PDF files and metadata based on metadata...")
+        logger.debug("Renaming existing PDF files and metadata based on metadata...")
 
         valid_entries = []
 
@@ -97,7 +103,7 @@ def task_rename_files(processed_path: Path):
 
             valid_entries.append((pdf_path, metadata))
 
-        logger.info(f"Found {len(valid_entries)} files to rename")
+        logger.debug(f"Found {len(valid_entries)} files to validate")
 
         renamed_count = 0
         for old_pdf_path, metadata in valid_entries:
@@ -114,12 +120,13 @@ def task_rename_files(processed_path: Path):
                 shutil.move(old_pdf_path, new_pdf_path)
                 shutil.move(old_metadata_path, new_metadata_path)
                 renamed_count += 1
-                if renamed_count <= 10 or renamed_count % 100 == 0:
-                    logger.info(f"[{renamed_count}] Renamed: {old_pdf_path.name} -> {new_filename}")
+                logger.debug(f"Renamed: {old_pdf_path.name} -> {new_filename}")
             except Exception as e:
                 logger.error(f"Failed to rename {old_pdf_path.name}: {e}")
 
-        logger.info(f"Renaming complete. Renamed {renamed_count} files.")
+        # Console output
+        console.success(f"{len(valid_entries)} files validated, {renamed_count} renamed", indent=False)
+        logger.debug(f"Renaming complete. Renamed {renamed_count} files.")
 
 
 def copy_matching_files(
@@ -129,10 +136,13 @@ def copy_matching_files(
     incremental: bool = False
 ) -> dict:
     """Copy files matching regex pattern to destination."""
+    console = get_console()
     dest_folder.mkdir(parents=True, exist_ok=True)
     pattern = re.compile(regex_pattern)
     stats = {'copied': 0, 'skipped': 0, 'total': 0}
 
+    # First pass: count matching files
+    matching_files = []
     for file in processed_path.iterdir():
         if not file.is_file():
             continue
@@ -140,21 +150,33 @@ def copy_matching_files(
             continue
         if not pattern.search(file.name):
             continue
+        matching_files.append(file)
 
-        stats['total'] += 1
-        dest_file = dest_folder / file.name
+    # Second pass: copy with progress
+    with console.progress("Copying files", total=len(matching_files)) as progress:
+        task = progress.add_task("Copying files", total=len(matching_files))
+        for file in matching_files:
+            stats['total'] += 1
+            dest_file = dest_folder / file.name
 
-        should_copy = True
-        if incremental and dest_file.exists():
-            if file.stat().st_size == dest_file.stat().st_size:
-                src_hash = hash_file_fast(file)
-                dst_hash = hash_file_fast(dest_file)
-                if src_hash == dst_hash:
-                    should_copy = False
-                    stats['skipped'] += 1
+            should_copy = True
+            if incremental and dest_file.exists():
+                if file.stat().st_size == dest_file.stat().st_size:
+                    src_hash = hash_file_fast(file)
+                    dst_hash = hash_file_fast(dest_file)
+                    if src_hash == dst_hash:
+                        should_copy = False
+                        stats['skipped'] += 1
 
-        if should_copy:
-            shutil.copy2(file, dest_file)
-            stats['copied'] += 1
+            if should_copy:
+                shutil.copy2(file, dest_file)
+                stats['copied'] += 1
+
+            progress.update(task, advance=1)
+
+    # Console output
+    # Count only PDF files for the summary (JSON files are copied alongside)
+    pdf_copied = stats['copied'] // 2 if stats['copied'] > 0 else 0
+    console.success(f"Copied {pdf_copied} files to {dest_folder.name}", indent=False)
 
     return stats

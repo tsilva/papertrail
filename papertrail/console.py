@@ -1,0 +1,321 @@
+"""Rich-based console utilities for papertrail CLI output."""
+
+from contextlib import contextmanager
+from typing import Any, Generator, Sequence
+
+from rich.console import Console
+from rich.panel import Panel
+from rich.progress import (
+    BarColumn,
+    MofNCompleteColumn,
+    Progress,
+    SpinnerColumn,
+    TaskProgressColumn,
+    TextColumn,
+    TimeElapsedColumn,
+)
+from rich.rule import Rule
+from rich.table import Table
+from rich.text import Text
+
+
+class PapertrailConsole:
+    """Rich-based console for papertrail CLI output.
+
+    Provides styled output for:
+    - Pipeline headers and step indicators
+    - Progress bars (replacing tqdm)
+    - Success/warning/error messages
+    - Summary tables
+    - Secondary/dim information
+    """
+
+    def __init__(self, console: Console | None = None) -> None:
+        """Initialize the console.
+
+        Args:
+            console: Optional Rich Console instance. Creates one if not provided.
+        """
+        self.console = console or Console()
+        self._step_counter = 0
+        self._task_name: str | None = None
+
+    def pipeline_header(self, profile_name: str, log_path: str | None = None) -> None:
+        """Display the main pipeline header.
+
+        Args:
+            profile_name: Name of the active profile.
+            log_path: Optional path to the log file.
+        """
+        self.console.print()
+        self.console.print(
+            Rule(" PIPELINE ", style="bold cyan", characters="=")
+        )
+
+        info_parts = [f"Profile: [cyan]{profile_name}[/cyan]"]
+        if log_path:
+            info_parts.append(f"Log: [dim]{log_path}[/dim]")
+
+        self.console.print(" | ".join(info_parts))
+        self.console.print()
+
+    def pipeline_footer(self, elapsed_seconds: float | None = None) -> None:
+        """Display the pipeline completion footer.
+
+        Args:
+            elapsed_seconds: Optional total elapsed time in seconds.
+        """
+        self.console.print()
+        self.console.print(Rule(style="cyan", characters="="))
+
+        if elapsed_seconds is not None:
+            self.console.print(
+                f"Pipeline completed in [bold]{elapsed_seconds:.1f}s[/bold]"
+            )
+        else:
+            self.console.print("Pipeline completed")
+        self.console.print()
+
+    @contextmanager
+    def task(
+        self, name: str, description: str | None = None
+    ) -> Generator[None, None, None]:
+        """Context manager for a task with header/footer.
+
+        Args:
+            name: Task name for the header.
+            description: Optional description shown below the name.
+
+        Yields:
+            None
+        """
+        self._task_name = name
+        self._step_counter = 0
+
+        self.console.print()
+        self.console.print(Rule(f" {name} ", style="bold cyan"))
+        if description:
+            self.console.print(f"[dim]{description}[/dim]")
+        self.console.print()
+
+        try:
+            yield
+        finally:
+            self._task_name = None
+
+    def step(self, message: str, number: int | None = None) -> None:
+        """Display a numbered step within a task.
+
+        Args:
+            message: Step description.
+            number: Optional explicit step number. Auto-increments if not provided.
+        """
+        if number is None:
+            self._step_counter += 1
+            number = self._step_counter
+
+        self.console.print(f"[cyan]{number}.[/cyan] {message}")
+
+    def success(self, message: str, indent: bool = True) -> None:
+        """Display a success message with green checkmark.
+
+        Args:
+            message: Success message.
+            indent: Whether to indent the message.
+        """
+        prefix = "   " if indent else ""
+        self.console.print(f"{prefix}[green]\u2713[/green] {message}")
+
+    def warning(self, message: str, indent: bool = True) -> None:
+        """Display a warning message with yellow exclamation.
+
+        Args:
+            message: Warning message.
+            indent: Whether to indent the message.
+        """
+        prefix = "   " if indent else ""
+        self.console.print(f"{prefix}[yellow]![/yellow] {message}")
+
+    def error(self, message: str, indent: bool = True) -> None:
+        """Display an error message with red X.
+
+        Args:
+            message: Error message.
+            indent: Whether to indent the message.
+        """
+        prefix = "   " if indent else ""
+        self.console.print(f"{prefix}[red]\u2717[/red] {message}")
+
+    def detail(self, message: str, indent: bool = True) -> None:
+        """Display secondary/dim information.
+
+        Args:
+            message: Detail message.
+            indent: Whether to indent the message.
+        """
+        prefix = "   " if indent else ""
+        self.console.print(f"{prefix}[dim]{message}[/dim]")
+
+    def info(self, message: str, indent: bool = True) -> None:
+        """Display an informational message.
+
+        Args:
+            message: Info message.
+            indent: Whether to indent the message.
+        """
+        prefix = "   " if indent else ""
+        self.console.print(f"{prefix}{message}")
+
+    def progress(
+        self,
+        description: str = "Processing",
+        total: int | None = None,
+        transient: bool = True,
+    ) -> Progress:
+        """Create a Rich Progress instance for iteration.
+
+        Args:
+            description: Description shown next to the progress bar.
+            total: Total number of items. None for indeterminate progress.
+            transient: Whether to remove the progress bar when done.
+
+        Returns:
+            Rich Progress instance to use as context manager.
+        """
+        if total is None:
+            # Indeterminate spinner
+            return Progress(
+                SpinnerColumn(),
+                TextColumn("[progress.description]{task.description}"),
+                TimeElapsedColumn(),
+                console=self.console,
+                transient=transient,
+            )
+        else:
+            # Determinate progress bar
+            return Progress(
+                TextColumn("[progress.description]{task.description}"),
+                BarColumn(),
+                TaskProgressColumn(),
+                MofNCompleteColumn(),
+                TimeElapsedColumn(),
+                console=self.console,
+                transient=transient,
+            )
+
+    def summary_table(
+        self,
+        title: str,
+        rows: Sequence[tuple[str, str, str]],
+        headers: tuple[str, str, str] = ("Item", "Status", "Details"),
+    ) -> None:
+        """Display a formatted summary table.
+
+        Args:
+            title: Table title.
+            rows: Sequence of (item, status, details) tuples.
+                  Status should be "FOUND", "MISSING", "OK", "ERROR", etc.
+            headers: Column headers.
+        """
+        table = Table(title=title, show_header=True, header_style="bold")
+
+        table.add_column(headers[0], style="cyan", no_wrap=True)
+        table.add_column(headers[1], justify="center")
+        table.add_column(headers[2], style="dim")
+
+        for item, status, details in rows:
+            status_upper = status.upper()
+            if status_upper in ("FOUND", "OK", "PASS", "SUCCESS"):
+                status_styled = f"[green]\u2713 {status}[/green]"
+            elif status_upper in ("MISSING", "ERROR", "FAIL"):
+                status_styled = f"[red]\u2717 {status}[/red]"
+            elif status_upper in ("SKIP", "SKIPPED", "WARN", "WARNING"):
+                status_styled = f"[yellow]! {status}[/yellow]"
+            else:
+                status_styled = status
+
+            table.add_row(item, status_styled, details)
+
+        self.console.print()
+        self.console.print(table)
+
+    def validation_table(
+        self,
+        title: str,
+        results: Sequence[dict[str, Any]],
+    ) -> None:
+        """Display a validation results table (for file checks).
+
+        Args:
+            title: Table title.
+            results: Sequence of dicts with 'description', 'found', and optionally 'file'.
+        """
+        table = Table(title=title, show_header=False, box=None, padding=(0, 2))
+
+        table.add_column("Status", justify="left", no_wrap=True)
+        table.add_column("Description", style="white")
+
+        for result in results:
+            found = result.get("found", False)
+            desc = result.get("description", "Unknown")
+
+            if found:
+                status = "[green]\u2713[/green]"
+            else:
+                status = "[red]\u2717[/red]"
+
+            table.add_row(status, desc)
+
+        self.console.print()
+        self.console.print(table)
+
+    def stats(self, **kwargs: Any) -> None:
+        """Display inline stats in a compact format.
+
+        Args:
+            **kwargs: Key-value pairs to display as stats.
+        """
+        parts = []
+        for key, value in kwargs.items():
+            # Convert underscores to spaces and title case
+            label = key.replace("_", " ").title()
+            parts.append(f"[cyan]{label}:[/cyan] {value}")
+
+        self.console.print("   " + " | ".join(parts))
+
+    def panel(
+        self,
+        content: str,
+        title: str | None = None,
+        style: str = "cyan",
+    ) -> None:
+        """Display content in a bordered panel.
+
+        Args:
+            content: Panel content.
+            title: Optional panel title.
+            style: Border style color.
+        """
+        self.console.print(Panel(content, title=title, border_style=style))
+
+
+# Global console instance for convenience
+_console: PapertrailConsole | None = None
+
+
+def get_console() -> PapertrailConsole:
+    """Get or create the global PapertrailConsole instance.
+
+    Returns:
+        The global PapertrailConsole instance.
+    """
+    global _console
+    if _console is None:
+        _console = PapertrailConsole()
+    return _console
+
+
+def reset_console() -> None:
+    """Reset the global console instance (useful for testing)."""
+    global _console
+    _console = None

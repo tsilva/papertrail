@@ -1,6 +1,6 @@
 # Pipeline
 
-The `pipeline` task runs the full end-to-end document processing workflow. It requires two external tools (`archive-extractor`, `pdf-merger`) and profile configuration with `paths.raw`, `paths.processed`, and `paths.export` set.
+The `pipeline` task runs the full end-to-end document processing workflow. It requires the `archive-extractor` external tool and profile configuration with `paths.raw`, `paths.processed`, and `paths.export` set.
 
 ```
 python main.py [--profile NAME] pipeline [--export_date YYYY-MM]
@@ -62,9 +62,9 @@ Exports all metadata to `processed_files.xlsx` in the processed directory. Inclu
 Copies PDFs and metadata JSONs matching the export date pattern (e.g., `2025-01`) from the processed directory to `export/<YYYY-MM>/`. Uses incremental mode — skips files that already exist with identical content.
 
 ### Step 8: Merge PDFs
-**Tool:** `pdf-merger`
+**Package:** `pdf-gluer`
 
-Merges all PDFs in the export date directory into `merged_all.pdf`. After merging, validates that the merged PDF page count equals the sum of all source PDF page counts.
+Merges all PDFs in the export date directory into `merged_all.pdf` using the `pdf_gluer.merge_all_pdfs()` function. After merging, validates that the merged PDF page count equals the sum of all source PDF page counts.
 
 ### Step 9: Validate exported files
 **Task:** `check_files_exist` | **File:** `main.py:576`
