@@ -8,6 +8,7 @@ from tqdm import tqdm
 
 from papertrail.hashing import hash_file_fast, hash_file_content, HashCache
 from papertrail.logging_utils import get_logger, setup_task_logging
+from papertrail.metadata import load_validated_metadata
 from papertrail.models import DocumentMetadata
 from papertrail.pdf import get_page_count
 
@@ -20,25 +21,21 @@ def validate_metadata(output_path: Path):
 
     valid_entries = []
     errors = []
-    json_files = list(output_path.rglob("*.json"))
 
     cache = HashCache()
     logger.info(f"Hash cache loaded with {len(cache)} entries")
 
-    # Phase 1: Collect all PDF paths and their expected hashes
+    # Phase 1: Collect all PDF paths and their expected hashes using the helper
     pdf_info = []
-    for metadata_path in json_files:
+    for metadata_path, pdf_path, metadata in load_validated_metadata(
+        output_path, require_pdf=False, validate=True
+    ):
         try:
-            with open(metadata_path, "r", encoding="utf-8") as f:
-                data = json.load(f)
-            metadata = DocumentMetadata.model_validate(data)
-
             content_hash = metadata.content_hash
             if not content_hash:
                 errors.append((metadata_path, "Missing 'content_hash' in metadata."))
                 continue
 
-            pdf_path = metadata_path.with_suffix(".pdf")
             if not pdf_path.exists():
                 errors.append((metadata_path, f"Missing PDF for metadata: {pdf_path.name}"))
                 continue
@@ -144,18 +141,14 @@ def validate_merged_pdf(folder_path: Path) -> bool:
 
 def check_files_exist(target_folder: Path, validation_schema_path: Path):
     """Validate files exist based on a schema."""
+    from papertrail.metadata import load_json_data
+
     with open(validation_schema_path, "r", encoding="utf-8") as f:
         checks = json.load(f)
 
-    json_files = list(target_folder.glob("*.json"))
     file_data = []
-    for json_path in json_files:
-        try:
-            with open(json_path, "r", encoding="utf-8") as f:
-                data = json.load(f)
-            file_data.append((json_path, data))
-        except Exception as e:
-            logger.warning(f"Skipping {json_path.name}: {e}")
+    for json_path, _, data in load_validated_metadata(target_folder, require_pdf=False, validate=False):
+        file_data.append((json_path, data))
 
     check_results = []
     for idx, check in enumerate(checks):
@@ -185,28 +178,17 @@ def check_files_exist(target_folder: Path, validation_schema_path: Path):
 def task_backfill_page_count(processed_path: Path):
     """Backfill page_count for existing metadata files that don't have it."""
     setup_task_logging(processed_path, "backfill_page_count")
-    json_files = list(processed_path.rglob("*.json"))
-    if not json_files:
-        logger.info(f"No metadata files found in {processed_path}")
-        return
 
     updated = 0
     skipped = 0
     errors = 0
 
-    for metadata_path in tqdm(json_files, desc="Backfilling page_count"):
+    for metadata_path, pdf_path, data in load_validated_metadata(
+        processed_path, require_pdf=True, validate=False, show_progress=True, progress_desc="Backfilling page_count"
+    ):
         try:
-            with open(metadata_path, "r", encoding="utf-8") as f:
-                data = json.load(f)
-
             if data.get("page_count") is not None:
                 skipped += 1
-                continue
-
-            pdf_path = metadata_path.with_suffix(".pdf")
-            if not pdf_path.exists():
-                logger.warning(f"Missing PDF for metadata: {metadata_path.name}")
-                errors += 1
                 continue
 
             page_count = get_page_count(pdf_path)
@@ -221,5 +203,9 @@ def task_backfill_page_count(processed_path: Path):
         except Exception as e:
             logger.error(f"Failed to process {metadata_path.name}: {e}")
             errors += 1
+
+    if updated == 0 and skipped == 0 and errors == 0:
+        logger.info(f"No metadata files found in {processed_path}")
+        return
 
     logger.info(f"Backfill complete: {updated} updated, {skipped} skipped (already had page_count), {errors} errors")
