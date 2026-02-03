@@ -29,6 +29,7 @@ class QRExtractedMetadata:
     total_amount: Optional[float] = None
     total_amount_currency: Optional[str] = "EUR"
     issuer_nif: Optional[str] = None
+    issuer_tax_number: Optional[str] = None  # Prefixed with country code (e.g., PTISSUER-TAX-ID)
     atcud: Optional[str] = None
     document_number: Optional[str] = None
     confidence: float = 1.0
@@ -104,12 +105,22 @@ class PortugueseInvoiceQR:
         }
         document_type = doc_type_map.get(self.document_type_code)
 
+        # Prefix NIF with country code for international standardization
+        issuer_tax_number = None
+        if self.issuer_nif:
+            country = self.country_code or "PT"
+            if not self.issuer_nif.upper().startswith(country):
+                issuer_tax_number = f"{country}{self.issuer_nif}"
+            else:
+                issuer_tax_number = self.issuer_nif.upper()
+
         return QRExtractedMetadata(
             issue_date=issue_date,
             document_type=document_type,
             total_amount=self.gross_total if self.gross_total > 0 else None,
             total_amount_currency="EUR",  # Portuguese invoices are always EUR
             issuer_nif=self.issuer_nif,
+            issuer_tax_number=issuer_tax_number,
             atcud=self.atcud,
             document_number=self.document_number,
             confidence=1.0,

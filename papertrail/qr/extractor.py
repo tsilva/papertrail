@@ -1,6 +1,8 @@
 """Core QR code extraction from PDF files."""
 
 import io
+import os
+import sys
 from pathlib import Path
 from typing import Optional
 
@@ -18,11 +20,95 @@ _pyzbar_available = None
 _pyzbar_decode = None
 
 
+def _find_zbar_library() -> Optional[str]:
+    """
+    Find the zbar library path.
+
+    Returns:
+        Path to the zbar library, or None if not found
+    """
+    import ctypes.util
+
+    # First try standard library finding
+    lib = ctypes.util.find_library('zbar')
+    if lib:
+        return lib
+
+    # On macOS with Homebrew, check common locations
+    if sys.platform == 'darwin':
+        zbar_paths = [
+            '/opt/homebrew/lib/libzbar.dylib',  # Apple Silicon
+            '/opt/homebrew/lib/libzbar.0.dylib',
+            '/usr/local/lib/libzbar.dylib',     # Intel Mac
+            '/usr/local/lib/libzbar.0.dylib',
+        ]
+        for lib_path in zbar_paths:
+            if Path(lib_path).exists():
+                return lib_path
+
+    # On Linux, check common locations
+    elif sys.platform.startswith('linux'):
+        linux_paths = [
+            '/usr/lib/libzbar.so',
+            '/usr/lib/x86_64-linux-gnu/libzbar.so',
+            '/usr/lib/aarch64-linux-gnu/libzbar.so',
+        ]
+        for lib_path in linux_paths:
+            if Path(lib_path).exists():
+                return lib_path
+
+    return None
+
+
+_original_find_library = None
+
+
+def _setup_pyzbar_library():
+    """
+    Set up pyzbar to use the correct zbar library path.
+
+    This patches ctypes.util.find_library to return the correct path for zbar
+    on systems where it's not in a standard location.
+    Must be called BEFORE importing pyzbar.pyzbar.
+    """
+    global _original_find_library
+
+    lib_path = _find_zbar_library()
+    if not lib_path:
+        return False
+
+    try:
+        import ctypes
+        import ctypes.util
+
+        # Store original find_library if not already stored
+        if _original_find_library is None:
+            _original_find_library = ctypes.util.find_library
+
+        # Create a patched find_library that returns our path for zbar
+        def patched_find_library(name):
+            if name == 'zbar':
+                return lib_path
+            return _original_find_library(name)
+
+        # Apply the patch
+        ctypes.util.find_library = patched_find_library
+        logger.debug(f"Patched find_library to return {lib_path} for zbar")
+
+        return True
+    except Exception as e:
+        logger.debug(f"Failed to setup pyzbar library: {e}")
+        return False
+
+
 def _get_pyzbar_decode():
     """Lazy load pyzbar.decode function."""
     global _pyzbar_available, _pyzbar_decode
 
     if _pyzbar_available is None:
+        # Set up zbar library before importing pyzbar
+        _setup_pyzbar_library()
+
         try:
             from pyzbar.pyzbar import decode
             _pyzbar_decode = decode
@@ -36,6 +122,47 @@ def _get_pyzbar_decode():
             logger.warning(f"pyzbar initialization failed: {e}. QR extraction disabled.")
 
     return _pyzbar_decode if _pyzbar_available else None
+
+
+def check_pyzbar_available() -> tuple[bool, str]:
+    """
+    Check if pyzbar is available and properly configured.
+
+    Returns:
+        Tuple of (is_available, error_message)
+    """
+    # Check if we can find the zbar library
+    lib_path = _find_zbar_library()
+    if not lib_path:
+        return False, (
+            "zbar shared library not found. Install it:\n"
+            "  macOS: brew install zbar\n"
+            "  Linux: apt install libzbar0"
+        )
+
+    # Set up pyzbar to use the library
+    _setup_pyzbar_library()
+
+    try:
+        from pyzbar.pyzbar import decode
+        # Try a minimal decode to verify zbar library works
+        from PIL import Image
+        test_img = Image.new('RGB', (10, 10), color='white')
+        decode(test_img)
+        return True, ""
+    except ImportError as e:
+        return False, f"pyzbar package not installed: {e}"
+    except Exception as e:
+        error_msg = str(e)
+        if "Unable to find zbar shared library" in error_msg:
+            return False, (
+                "zbar shared library not found. Install it:\n"
+                "  macOS: brew install zbar\n"
+                "  Linux: apt install libzbar0\n"
+                f"Library found at: {lib_path}\n"
+                "But pyzbar couldn't load it. Try reinstalling pyzbar."
+            )
+        return False, f"pyzbar initialization failed: {e}"
 
 
 def extract_qr_codes_from_page(page: fitz.Page, dpi: int = 300) -> list[QRCodeData]:
@@ -63,9 +190,21 @@ def extract_qr_codes_from_page(page: fitz.Page, dpi: int = 300) -> list[QRCodeDa
     # Convert to PIL Image for pyzbar
     img = Image.open(io.BytesIO(pix.tobytes("png")))
 
-    # Decode QR codes
+    # Decode QR codes, suppressing zbar's C-level warnings about partial barcode matches
     try:
-        decoded_objects = decode(img)
+        # Suppress stderr to hide zbar's internal warnings (e.g., DataBar assertion failures)
+        # These warnings are harmless - they occur when zbar sees patterns that partially
+        # match barcodes but can't fully decode them
+        stderr_fd = sys.stderr.fileno()
+        old_stderr = os.dup(stderr_fd)
+        devnull = os.open(os.devnull, os.O_WRONLY)
+        os.dup2(devnull, stderr_fd)
+        try:
+            decoded_objects = decode(img)
+        finally:
+            os.dup2(old_stderr, stderr_fd)
+            os.close(old_stderr)
+            os.close(devnull)
     except Exception as e:
         logger.debug(f"pyzbar decode failed: {e}")
         return []
