@@ -426,9 +426,18 @@ def _task_extract_new_locked(processed_path: Path, raw_paths: list[Path]):
 
 
 def _collect_reextract_targets(processed_path: Path, all_unknown: bool = False,
-                                filename: str = None, document_pattern: str = None) -> list[tuple]:
-    """Collect files to re-extract based on targeting mode."""
-    import fnmatch
+                                pattern: str = None) -> list[tuple]:
+    """Collect files to re-extract based on targeting mode.
+
+    Args:
+        processed_path: Path to the processed documents directory.
+        all_unknown: If True, collect files with $UNKNOWN$ values.
+        pattern: Unified pattern (glob or regex, auto-detected). Supports:
+            - Exact filename: "2025-01-01 - invoice.pdf"
+            - Glob pattern: "*anthropic*.pdf"
+            - Regex pattern: "2025-01-\\d{2}"
+    """
+    from papertrail.pattern_utils import make_matcher
 
     console = get_console()
 
@@ -439,40 +448,40 @@ def _collect_reextract_targets(processed_path: Path, all_unknown: bool = False,
 
     targets = []
 
-    if filename:
-        target_pdf = processed_path / filename
-        target_json = target_pdf.with_suffix(".json")
-        if not target_json.exists():
-            console.error(f"Metadata file not found: {target_json}", indent=False)
-            return []
-        if not target_pdf.exists():
-            console.error(f"PDF file not found: {target_pdf}", indent=False)
-            return []
-        with open(target_json, "r", encoding="utf-8") as f:
-            data = json.load(f)
-        targets.append((target_json, target_pdf, data))
-
-    elif document_pattern:
-        with console.progress("Matching pattern", total=len(json_files)) as progress:
-            task = progress.add_task("Matching pattern", total=len(json_files))
-            for metadata_path in json_files:
-                pdf_path = metadata_path.with_suffix(".pdf")
-                if not fnmatch.fnmatch(pdf_path.name, document_pattern):
+    if pattern:
+        # Fast path: check if pattern is an exact filename
+        target_pdf = processed_path / pattern
+        if target_pdf.exists() and target_pdf.suffix.lower() == '.pdf':
+            target_json = target_pdf.with_suffix(".json")
+            if not target_json.exists():
+                console.error(f"Metadata file not found: {target_json}", indent=False)
+                return []
+            with open(target_json, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            targets.append((target_json, target_pdf, data))
+        else:
+            # Pattern matching (glob or regex)
+            matcher = make_matcher(pattern)
+            with console.progress("Matching pattern", total=len(json_files)) as progress:
+                task = progress.add_task("Matching pattern", total=len(json_files))
+                for metadata_path in json_files:
+                    pdf_path = metadata_path.with_suffix(".pdf")
+                    if not matcher(pdf_path.name):
+                        progress.update(task, advance=1)
+                        continue
+                    if not pdf_path.exists():
+                        logger.warning(f"PDF not found for {metadata_path.name}")
+                        progress.update(task, advance=1)
+                        continue
+                    try:
+                        with open(metadata_path, "r", encoding="utf-8") as f:
+                            data = json.load(f)
+                        targets.append((metadata_path, pdf_path, data))
+                    except Exception as e:
+                        logger.warning(f"Skipping {metadata_path.name}: {e}")
                     progress.update(task, advance=1)
-                    continue
-                if not pdf_path.exists():
-                    logger.warning(f"PDF not found for {metadata_path.name}")
-                    progress.update(task, advance=1)
-                    continue
-                try:
-                    with open(metadata_path, "r", encoding="utf-8") as f:
-                        data = json.load(f)
-                    targets.append((metadata_path, pdf_path, data))
-                except Exception as e:
-                    logger.warning(f"Skipping {metadata_path.name}: {e}")
-                progress.update(task, advance=1)
 
-    elif all_unknown:
+    if all_unknown:
         with console.progress("Scanning for $UNKNOWN$", total=len(json_files)) as progress:
             task = progress.add_task("Scanning for $UNKNOWN$", total=len(json_files))
             for metadata_path in json_files:
@@ -500,7 +509,7 @@ def _collect_reextract_targets(processed_path: Path, all_unknown: bool = False,
 
 
 def task_reextract(processed_path: Path, dry_run: bool = False,
-                   all_unknown: bool = False, filename: str = None, document_pattern: str = None,
+                   all_unknown: bool = False, pattern: str = None,
                    workers: int = 1):
     """Re-extract documents by re-running the full classification pipeline.
 
@@ -508,15 +517,15 @@ def task_reextract(processed_path: Path, dry_run: bool = False,
         processed_path: Path to the processed documents directory.
         dry_run: If True, show what would be changed without modifying files.
         all_unknown: Re-extract all files with $UNKNOWN$ values.
-        filename: Single filename to re-extract.
-        document_pattern: Glob pattern for matching files.
+        pattern: Unified pattern for matching files (glob or regex, auto-detected).
+                 Defaults to "*.pdf" when called without targeting.
         workers: Number of parallel workers (default: 1 for sequential).
     """
     console = get_console()
 
     with task_log_context(processed_path, "reextract"):
         targets = _collect_reextract_targets(processed_path, all_unknown=all_unknown,
-                                              filename=filename, document_pattern=document_pattern)
+                                              pattern=pattern)
         if not targets:
             console.warning("No files to re-extract", indent=False)
             return
@@ -613,9 +622,15 @@ def task_reextract(processed_path: Path, dry_run: bool = False,
             console.detail("Run 'rename_files' task to update filenames based on new metadata.", indent=False)
 
 
-def task_validate_extraction(processed_path: Path, document_pattern: str = None):
-    """Validate extraction quality by loading and inspecting metadata."""
-    import fnmatch
+def task_validate_extraction(processed_path: Path, pattern: str = None):
+    """Validate extraction quality by loading and inspecting metadata.
+
+    Args:
+        processed_path: Path to the processed documents directory.
+        pattern: Unified pattern for matching files (glob or regex, auto-detected).
+                 If None, validates all files.
+    """
+    from papertrail.pattern_utils import make_matcher
 
     console = get_console()
 
@@ -625,6 +640,9 @@ def task_validate_extraction(processed_path: Path, document_pattern: str = None)
             console.warning("No metadata files found", indent=False)
             return
 
+        # Create matcher if pattern provided
+        matcher = make_matcher(pattern) if pattern else None
+
         issues_count = 0
         files_checked = 0
 
@@ -633,7 +651,7 @@ def task_validate_extraction(processed_path: Path, document_pattern: str = None)
             for metadata_path in json_files:
                 pdf_path = metadata_path.with_suffix(".pdf")
 
-                if document_pattern and not fnmatch.fnmatch(pdf_path.name, document_pattern):
+                if matcher and not matcher(pdf_path.name):
                     progress.update(task, advance=1)
                     continue
 
