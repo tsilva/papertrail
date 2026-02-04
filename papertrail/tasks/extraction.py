@@ -109,9 +109,10 @@ def classify_pdf_document(pdf_path: Path, file_hash: str, failure_logger=None,
 
     # Phase 0: QR extraction (fast)
     qr_metadata = None
+    qr_raw_data = None
     try:
         t0 = _time.monotonic()
-        qr_metadata = extract_metadata_from_qr(pdf_path)
+        qr_metadata, qr_raw_data = extract_metadata_from_qr(pdf_path)
         if doc_logger:
             doc_logger.log_timing("qr_extraction", _time.monotonic() - t0)
             if qr_metadata:
@@ -300,6 +301,7 @@ def classify_pdf_document(pdf_path: Path, file_hash: str, failure_logger=None,
             issuing_party_raw=raw_metadata.issuing_party,
             issuer_tax_number=final_tax_number,
             locale=final_locale,
+            qrcode=qr_raw_data,
         )
 
         now = datetime.now().strftime("%Y-%m-%d")

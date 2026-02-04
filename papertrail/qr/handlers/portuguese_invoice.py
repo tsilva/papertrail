@@ -44,7 +44,7 @@ class PortugueseInvoiceHandler(QRHandler):
 
         return True
 
-    def parse(self, qr_data: QRCodeData) -> Optional[QRExtractedMetadata]:
+    def parse(self, qr_data: QRCodeData) -> tuple[Optional[QRExtractedMetadata], Optional[dict]]:
         """
         Parse Portuguese invoice QR code and extract metadata.
 
@@ -52,16 +52,22 @@ class PortugueseInvoiceHandler(QRHandler):
             qr_data: QRCodeData with raw content
 
         Returns:
-            QRExtractedMetadata if parsing successful, None otherwise
+            Tuple of (QRExtractedMetadata, raw_data_dict) if parsing successful,
+            (None, None) otherwise.
         """
         try:
             parsed = self._parse_qr_content(qr_data.raw_content)
             if parsed:
-                return parsed.to_extracted_metadata()
+                raw_data = {
+                    "qr_type": self.name,
+                    "raw_content": qr_data.raw_content,
+                    "page_number": qr_data.page_number,
+                }
+                return parsed.to_extracted_metadata(), raw_data
         except Exception as e:
             logger.warning(f"Failed to parse Portuguese invoice QR: {e}")
 
-        return None
+        return None, None
 
     def _parse_qr_content(self, raw_content: str) -> Optional[PortugueseInvoiceQR]:
         """

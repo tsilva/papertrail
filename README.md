@@ -6,7 +6,7 @@
   [![OpenRouter](https://img.shields.io/badge/OpenRouter-Vision%20LLMs-6366f1?style=flat&logo=openai&logoColor=white)](https://openrouter.ai/)
   [![PyMuPDF](https://img.shields.io/badge/PyMuPDF-PDF%20Processing-red?style=flat)](https://pymupdf.readthedocs.io/)
 
-  **📄 AI-powered PDF document classification and organization using vision LLMs**
+  **📄 AI-powered PDF document classification and organization using vision LLMs 🗂️**
 
   [Quick Start](#-quick-start) · [Features](#-features) · [Documentation](CLAUDE.md)
 </div>

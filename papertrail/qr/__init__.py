@@ -7,9 +7,10 @@ Portuguese invoice QR codes (Portaria 195/2020).
 Usage:
     from papertrail.qr import extract_metadata_from_qr
 
-    metadata = extract_metadata_from_qr(pdf_path)
+    metadata, raw_data = extract_metadata_from_qr(pdf_path)
     if metadata:
         print(f"Date: {metadata.issue_date}, Amount: {metadata.total_amount}")
+        # raw_data contains: {"qr_type": "...", "raw_content": "...", "page_number": 0}
 
 Dependencies:
     - pyzbar>=0.1.9 (Python package)
