@@ -494,6 +494,8 @@ def _collect_reextract_targets(processed_path: Path, all_unknown: bool = False,
                     logger.warning(f"Skipping {metadata_path.name}: {e}")
                 progress.update(task, advance=1)
 
+    # Sort by PDF filename descending (newest first, since filenames start with YYYY-MM-DD)
+    targets.sort(key=lambda t: t[1].name, reverse=True)
     return targets
 
 
