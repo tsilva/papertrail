@@ -298,6 +298,7 @@ def main():
     parser.add_argument("--all_unknown", action="store_true", help="Re-extract all files with $UNKNOWN$ values (for reextract).")
     parser.add_argument("--filename", type=str, help="Single filename to re-extract (for reextract).")
     parser.add_argument("--document_pattern", type=str, help="Glob pattern for matching files (for reextract/validate_extraction).")
+    parser.add_argument("--workers", "-w", type=int, default=1, help="Number of parallel workers for reextract (default: 1).")
     parser.add_argument("--export_path", type=str, help="Path to export folder for qr_inventory task.")
     parser.add_argument("--no_resume", action="store_true", help="Don't resume from checkpoint (for qr_inventory).")
     args = parser.parse_args()
@@ -353,6 +354,7 @@ def main():
             processed, dry_run=args.dry_run,
             all_unknown=args.all_unknown, filename=args.filename,
             document_pattern=args.document_pattern,
+            workers=args.workers,
         )
         return
 
