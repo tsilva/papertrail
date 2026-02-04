@@ -191,23 +191,18 @@ def classify_pdf_document(pdf_path: Path, file_hash: str, failure_logger=None,
             raise ValueError("OpenRouter did not return structured classification.")
 
         args = tool_calls[0].function.arguments
-        raw_metadata = DocumentMetadataRaw.model_validate_json(args)
 
-        # Inject QR-extracted values into raw_metadata for downstream processing
-        # These fields were excluded from LLM schema but are needed for logging/storage
-        if qr_metadata:
-            if qr_metadata.issue_date:
-                raw_metadata.issue_date = qr_metadata.issue_date
-            if qr_metadata.document_type:
-                raw_metadata.document_type = qr_metadata.document_type
-            if qr_metadata.total_amount is not None:
-                raw_metadata.total_amount = qr_metadata.total_amount
-            if qr_metadata.total_amount_currency:
-                raw_metadata.total_amount_currency = qr_metadata.total_amount_currency
-            if qr_metadata.issuer_tax_number:
-                raw_metadata.issuer_tax_number = qr_metadata.issuer_tax_number
-            if qr_metadata.locale:
-                raw_metadata.locale = qr_metadata.locale
+        # Inject QR-extracted values into JSON before Pydantic parsing
+        # These fields were excluded from LLM schema to save tokens, but are
+        # required by DocumentMetadataRaw - must be present before validation
+        if pre_extracted:
+            args_dict = json.loads(args)
+            for field, value in pre_extracted.items():
+                if field not in args_dict:
+                    args_dict[field] = value
+            args = json.dumps(args_dict)
+
+        raw_metadata = DocumentMetadataRaw.model_validate_json(args)
 
         if doc_logger:
             doc_logger.log_extraction(raw_metadata.model_dump())
