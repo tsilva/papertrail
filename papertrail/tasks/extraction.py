@@ -431,19 +431,24 @@ def _collect_reextract_targets(processed_path: Path, all_unknown: bool = False,
 
     Args:
         processed_path: Path to the processed documents directory.
-        all_unknown: If True, collect files with $UNKNOWN$ values.
+        all_unknown: If True, collect files with $UNKNOWN$ values (requires existing JSON).
         pattern: Unified pattern (glob or regex, auto-detected). Supports:
             - Exact filename: "2025-01-01 - invoice.pdf"
             - Glob pattern: "*anthropic*.pdf"
             - Regex pattern: "2025-01-\\d{2}"
+
+    Returns:
+        List of tuples: (metadata_path, pdf_path, old_data_or_None)
+        old_data is None for PDFs without existing metadata JSON.
     """
     from papertrail.pattern_utils import make_matcher
 
     console = get_console()
 
-    json_files = list(processed_path.rglob("*.json"))
-    if not json_files:
-        logger.debug(f"No metadata files found in {processed_path}")
+    # Scan for PDFs, not JSONs - allows processing files without existing metadata
+    pdf_files = list(processed_path.rglob("*.pdf"))
+    if not pdf_files:
+        logger.debug(f"No PDF files found in {processed_path}")
         return []
 
     targets = []
@@ -453,35 +458,34 @@ def _collect_reextract_targets(processed_path: Path, all_unknown: bool = False,
         target_pdf = processed_path / pattern
         if target_pdf.exists() and target_pdf.suffix.lower() == '.pdf':
             target_json = target_pdf.with_suffix(".json")
-            if not target_json.exists():
-                console.error(f"Metadata file not found: {target_json}", indent=False)
-                return []
-            with open(target_json, "r", encoding="utf-8") as f:
-                data = json.load(f)
+            data = None
+            if target_json.exists():
+                with open(target_json, "r", encoding="utf-8") as f:
+                    data = json.load(f)
             targets.append((target_json, target_pdf, data))
         else:
             # Pattern matching (glob or regex)
             matcher = make_matcher(pattern)
-            with console.progress("Matching pattern", total=len(json_files)) as progress:
-                task = progress.add_task("Matching pattern", total=len(json_files))
-                for metadata_path in json_files:
-                    pdf_path = metadata_path.with_suffix(".pdf")
+            with console.progress("Matching pattern", total=len(pdf_files)) as progress:
+                task = progress.add_task("Matching pattern", total=len(pdf_files))
+                for pdf_path in pdf_files:
                     if not matcher(pdf_path.name):
                         progress.update(task, advance=1)
                         continue
-                    if not pdf_path.exists():
-                        logger.warning(f"PDF not found for {metadata_path.name}")
-                        progress.update(task, advance=1)
-                        continue
-                    try:
-                        with open(metadata_path, "r", encoding="utf-8") as f:
-                            data = json.load(f)
-                        targets.append((metadata_path, pdf_path, data))
-                    except Exception as e:
-                        logger.warning(f"Skipping {metadata_path.name}: {e}")
+                    metadata_path = pdf_path.with_suffix(".json")
+                    data = None
+                    if metadata_path.exists():
+                        try:
+                            with open(metadata_path, "r", encoding="utf-8") as f:
+                                data = json.load(f)
+                        except Exception as e:
+                            logger.warning(f"Failed to load {metadata_path.name}: {e}")
+                    targets.append((metadata_path, pdf_path, data))
                     progress.update(task, advance=1)
 
     if all_unknown:
+        # all_unknown requires existing JSON files to check for $UNKNOWN$ values
+        json_files = list(processed_path.rglob("*.json"))
         with console.progress("Scanning for $UNKNOWN$", total=len(json_files)) as progress:
             task = progress.add_task("Scanning for $UNKNOWN$", total=len(json_files))
             for metadata_path in json_files:
@@ -538,12 +542,21 @@ def task_reextract(processed_path: Path, dry_run: bool = False,
             # Each thread gets its own DocumentLogger instance
             thread_doc_logger = DocumentLogger()
             try:
-                content_hash = old_data.get("content_hash") or old_data.get("hash")
-                if not content_hash:
-                    return (metadata_path, old_data, None, "No content_hash in metadata")
+                if old_data is None:
+                    # Fresh extraction - compute hashes
+                    content_hash = hash_file_content(pdf_path)
+                    file_hash = hash_file_fast(pdf_path)
+                    create_date = datetime.now().strftime("%Y-%m-%d")
+                else:
+                    content_hash = old_data.get("content_hash") or old_data.get("hash")
+                    if not content_hash:
+                        return (metadata_path, old_data, None, "No content_hash in metadata")
+                    file_hash = old_data.get("file_hash") or old_data.get("_old_hash")
+                    create_date = old_data.get("create_date")
+
                 new_metadata = classify_pdf_document(pdf_path, content_hash, doc_logger=thread_doc_logger)
-                new_metadata.file_hash = old_data.get("file_hash") or old_data.get("_old_hash")
-                new_metadata.create_date = old_data.get("create_date")
+                new_metadata.file_hash = file_hash
+                new_metadata.create_date = create_date
                 new_metadata.update_date = datetime.now().strftime("%Y-%m-%d")
                 return (metadata_path, old_data, new_metadata, None)
             except Exception as e:
@@ -573,6 +586,7 @@ def task_reextract(processed_path: Path, dry_run: bool = False,
         fixed_count = 0
         still_unknown_count = 0
         failed_count = 0
+        new_count = 0
 
         for metadata_path, old_data, new_metadata, error in results:
             if error:
@@ -584,41 +598,58 @@ def task_reextract(processed_path: Path, dry_run: bool = False,
             new_issuer = enum_value(new_metadata.issuing_party)
             new_date = new_metadata.issue_date
 
-            changes = []
-            old_doc_type = old_data.get("document_type", "")
-            old_issuer = old_data.get("issuing_party", "")
-            old_date = old_data.get("issue_date", "")
-
-            if old_doc_type != new_doc_type:
-                changes.append(f"document_type: {old_doc_type} -> {new_doc_type}")
-            if old_issuer != new_issuer:
-                changes.append(f"issuing_party: {old_issuer} -> {new_issuer}")
-            if old_date != new_date:
-                changes.append(f"issue_date: {old_date} -> {new_date}")
-
-            if changes:
-                logger.debug(f"Changed {metadata_path.name}: {', '.join(changes)}")
-                fixed_count += 1
+            if old_data is None:
+                # Fresh extraction - no comparison possible
+                logger.debug(f"New extraction: {metadata_path.name} -> {new_doc_type}, {new_issuer}, {new_date}")
+                new_count += 1
             else:
-                logger.debug(f"No changes: {metadata_path.name}")
-                still_unknown_count += 1
+                changes = []
+                old_doc_type = old_data.get("document_type", "")
+                old_issuer = old_data.get("issuing_party", "")
+                old_date = old_data.get("issue_date", "")
+
+                if old_doc_type != new_doc_type:
+                    changes.append(f"document_type: {old_doc_type} -> {new_doc_type}")
+                if old_issuer != new_issuer:
+                    changes.append(f"issuing_party: {old_issuer} -> {new_issuer}")
+                if old_date != new_date:
+                    changes.append(f"issue_date: {old_date} -> {new_date}")
+
+                if changes:
+                    logger.debug(f"Changed {metadata_path.name}: {', '.join(changes)}")
+                    fixed_count += 1
+                else:
+                    logger.debug(f"No changes: {metadata_path.name}")
+                    still_unknown_count += 1
 
             if not dry_run:
                 save_metadata_json(metadata_path.with_suffix(".pdf"), new_metadata)
 
         # Summary output
+        parts = []
+        if new_count > 0:
+            parts.append(f"{new_count} new")
+        if fixed_count > 0:
+            parts.append(f"{fixed_count} changed")
+        if still_unknown_count > 0:
+            parts.append(f"{still_unknown_count} unchanged")
         if failed_count > 0:
-            console.warning(f"{fixed_count} changed, {still_unknown_count} unchanged, {failed_count} failed", indent=False)
-        elif fixed_count > 0:
-            console.success(f"{fixed_count} changed, {still_unknown_count} unchanged", indent=False)
+            parts.append(f"{failed_count} failed")
+
+        summary = ", ".join(parts) if parts else "No files processed"
+
+        if failed_count > 0:
+            console.warning(summary, indent=False)
+        elif new_count > 0 or fixed_count > 0:
+            console.success(summary, indent=False)
         else:
             console.info(f"No changes ({still_unknown_count} files checked)", indent=False)
 
-        logger.debug(f"Changed: {fixed_count}, Unchanged: {still_unknown_count}, Failed: {failed_count}")
+        logger.debug(f"New: {new_count}, Changed: {fixed_count}, Unchanged: {still_unknown_count}, Failed: {failed_count}")
 
         if dry_run:
             console.detail("(dry run - no files were modified)", indent=False)
-        elif fixed_count > 0:
+        elif new_count > 0 or fixed_count > 0:
             console.detail("Run 'rename_files' task to update filenames based on new metadata.", indent=False)
 
 
