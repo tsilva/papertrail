@@ -28,6 +28,7 @@ from papertrail.hashing import hash_file_fast, hash_file_content
 from papertrail.cache_base import enum_value
 from papertrail.tasks import task_log_context
 from papertrail.qr import extract_metadata_from_qr, QRExtractedMetadata
+from papertrail.nif_lookup import NIFLookupCache
 
 logger = get_logger('cli')
 
@@ -237,9 +238,8 @@ def classify_pdf_document(pdf_path: Path, file_hash: str, failure_logger=None,
                 doc_logger,
             )
 
-        # Phase 4: NIF Enrichment (only for Portuguese documents with tax number)
-        is_portuguese = final_locale and final_locale.lower().startswith("pt")
-        if final_tax_number and ctx.nif_cache and is_portuguese:
+        # Phase 4: NIF Enrichment (only for valid Portuguese tax numbers)
+        if final_tax_number and ctx.nif_cache and NIFLookupCache.is_portuguese_nif(final_tax_number):
             t0 = _time.monotonic()
             official_issuer, lookup_source, lookup_error = ctx.nif_cache.lookup(final_tax_number)
 
