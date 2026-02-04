@@ -54,6 +54,34 @@ class NIFLookupCache(BaseYamlCache):
                 nif = nif[len(prefix):]
         return nif.strip()
 
+    @staticmethod
+    def is_portuguese_nif(nif: str) -> bool:
+        """Check if a tax number is Portuguese format.
+
+        Portuguese NIFs:
+        - Are 9 digits starting with 1-9
+        - May have "PT" prefix
+        - Must NOT have other country prefixes (IE, DE, SE, ES, etc.)
+
+        Args:
+            nif: Raw tax number string
+
+        Returns:
+            True if this appears to be a Portuguese NIF
+        """
+        nif = nif.strip().upper()
+
+        # Strip PT prefix if present
+        if nif.startswith("PT"):
+            nif = nif[2:].strip()
+
+        # Reject if starts with any other country code (2 uppercase letters)
+        if len(nif) >= 2 and nif[:2].isalpha():
+            return False
+
+        # Portuguese NIFs are 9 digits starting with 1-9
+        return len(nif) == 9 and nif.isdigit() and nif[0] != '0'
+
     def get(self, nif: str) -> Optional[str]:
         """Get cached issuer name for a NIF.
 
