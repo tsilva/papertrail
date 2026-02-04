@@ -45,22 +45,6 @@ def suppress_console_logging():
             handler.setLevel(level)
 
 
-def check_api_accessibility(base_url: str, timeout: int = 10) -> bool:
-    """Check if the API base URL is accessible."""
-    import urllib.request
-    import urllib.error
-
-    try:
-        req = urllib.request.Request(base_url, method='HEAD')
-        urllib.request.urlopen(req, timeout=timeout)
-        return True
-    except urllib.error.HTTPError:
-        # HTTP error responses (4xx, 5xx) still mean server is accessible
-        return True
-    except (urllib.error.URLError, TimeoutError):
-        return False
-
-
 def run_step(cmd: str, step_desc: str) -> tuple[str, str]:
     """Run a pipeline step, capturing output to the pipeline log.
 
@@ -154,13 +138,7 @@ def pipeline(export_date_arg=None, processed_path_override=None):
         console.error(f"Missing required profile settings: {', '.join(missing)}", indent=False)
         sys.exit(1)
 
-    # Check API accessibility before starting pipeline
-    base_url = profile.openrouter.base_url
-    logger.debug(f"Checking API accessibility: {base_url}")
-    if not check_api_accessibility(base_url):
-        console.error(f"API base URL is not accessible: {base_url}", indent=False)
-        console.error("Please check your network connection and the base_url in your profile.", indent=False)
-        sys.exit(1)
+    # Note: API accessibility is checked in initialize_config() before any task runs
 
     log_file_path = setup_task_logging(Path(PROCESSED_FILES_DIR), "pipeline")
     logger.debug("=== PIPELINE STARTED ===")

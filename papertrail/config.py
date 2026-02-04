@@ -180,3 +180,27 @@ def get_validations() -> tuple[dict, str | None]:
         return get_validations_from_profile(profile)
 
     return ({}, None)
+
+
+def check_api_accessibility(base_url: str, timeout: int = 10) -> bool:
+    """Check if the API base URL is accessible.
+
+    Args:
+        base_url: The API base URL to check.
+        timeout: Connection timeout in seconds.
+
+    Returns:
+        True if the API is accessible, False otherwise.
+    """
+    import urllib.request
+    import urllib.error
+
+    try:
+        req = urllib.request.Request(base_url, method='HEAD')
+        urllib.request.urlopen(req, timeout=timeout)
+        return True
+    except urllib.error.HTTPError:
+        # HTTP error responses (4xx, 5xx) still mean server is accessible
+        return True
+    except (urllib.error.URLError, TimeoutError):
+        return False
