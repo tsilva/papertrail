@@ -23,7 +23,7 @@ class QRHandler(ABC):
         pass
 
     @abstractmethod
-    def parse(self, qr_data: QRCodeData) -> Optional[QRExtractedMetadata]:
+    def parse(self, qr_data: QRCodeData) -> tuple[Optional[QRExtractedMetadata], Optional[dict]]:
         """
         Parse QR code data and extract metadata.
 
@@ -31,7 +31,11 @@ class QRHandler(ABC):
             qr_data: QRCodeData object with raw content and type info
 
         Returns:
-            QRExtractedMetadata if parsing successful, None otherwise
+            Tuple of (QRExtractedMetadata, raw_data_dict) if parsing successful,
+            (None, None) otherwise. raw_data_dict contains:
+            - qr_type: handler name identifying the parser used
+            - raw_content: original QR string as decoded
+            - page_number: page where QR was found
         """
         pass
 

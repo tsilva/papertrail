@@ -280,23 +280,27 @@ def extract_all_qr_codes(pdf_path: Path, max_pages: int = 5, include_last: bool 
     return all_qr_codes
 
 
-def extract_metadata_from_qr(pdf_path: Path) -> Optional[QRExtractedMetadata]:
+def extract_metadata_from_qr(pdf_path: Path) -> tuple[Optional[QRExtractedMetadata], Optional[dict]]:
     """
     Main entry point: Extract metadata from QR codes in a PDF.
 
     Scans the PDF for QR codes, parses them using the appropriate handler,
-    and returns extracted metadata.
+    and returns extracted metadata along with raw QR data.
 
     Args:
         pdf_path: Path to the PDF file
 
     Returns:
-        QRExtractedMetadata if a useful QR code was found and parsed, None otherwise
+        Tuple of (QRExtractedMetadata, raw_data_dict) if a useful QR code was found
+        and parsed, (None, None) otherwise. raw_data_dict contains:
+        - qr_type: handler name identifying the parser used
+        - raw_content: original QR string as decoded
+        - page_number: page where QR was found
     """
     qr_codes = extract_all_qr_codes(pdf_path)
 
     if not qr_codes:
-        return None
+        return None, None
 
     # Try to extract metadata from each QR code (prioritize structured formats over URLs)
     # Sort by priority: Portuguese invoice > other structured > URL > unknown
@@ -310,11 +314,11 @@ def extract_metadata_from_qr(pdf_path: Path) -> Optional[QRExtractedMetadata]:
     for qr_data in qr_codes:
         handler = get_handler_for_content(qr_data.raw_content)
         if handler:
-            metadata = handler.parse(qr_data)
+            metadata, raw_data = handler.parse(qr_data)
             if metadata:
                 logger.debug(f"Extracted metadata from {qr_data.qr_type.value} QR: "
                            f"date={metadata.issue_date}, type={metadata.document_type}, "
                            f"amount={metadata.total_amount}")
-                return metadata
+                return metadata, raw_data
 
-    return None
+    return None, None

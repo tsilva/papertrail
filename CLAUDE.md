@@ -64,7 +64,7 @@ PDF → render pages at 300 DPI → pyzbar decode → detect QR type → parse w
 ```
 
 **Key components:**
-- `extract_metadata_from_qr(pdf_path)` - Main entry point
+- `extract_metadata_from_qr(pdf_path)` - Main entry point, returns `(QRExtractedMetadata, raw_data_dict)` tuple
 - `QRHandler` - Abstract base class for format handlers
 - `PortugueseInvoiceHandler` - Parses PT invoice QR codes
 
@@ -143,7 +143,19 @@ DocumentMetadataInput  # With enum validation
 DocumentMetadata       # Full: hashes, timestamps, raw values
 ```
 
-Fields: `issue_date`, `document_type`, `issuing_party`, `service_name`, `total_amount`, `total_amount_currency`, `confidence`, `reasoning`, `content_hash`, `file_hash`, `create_date`, `update_date`, `document_type_raw`, `issuing_party_raw`, `page_count`, `issuer_tax_number`, `locale`
+Fields: `issue_date`, `document_type`, `issuing_party`, `service_name`, `total_amount`, `total_amount_currency`, `confidence`, `reasoning`, `content_hash`, `file_hash`, `create_date`, `update_date`, `document_type_raw`, `issuing_party_raw`, `page_count`, `issuer_tax_number`, `locale`, `qrcode`
+
+The `qrcode` field stores raw QR code data when extracted:
+```json
+{
+    "qrcode": {
+        "qr_type": "portuguese_invoice",
+        "raw_content": "A:ISSUER-TAX-ID*B:TESTCOMPANY*C:PT*D:FT*...",
+        "page_number": 0
+    }
+}
+```
+Documents without QR codes have `"qrcode": null`.
 
 ## File Naming Convention
 
