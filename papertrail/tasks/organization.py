@@ -131,14 +131,28 @@ def task_rename_files(processed_path: Path):
 
 def copy_matching_files(
     processed_path: Path,
-    regex_pattern: str,
+    pattern: str,
     dest_folder: Path,
     incremental: bool = False
 ) -> dict:
-    """Copy files matching regex pattern to destination."""
+    """Copy files matching pattern to destination.
+
+    Args:
+        processed_path: Source directory containing files.
+        pattern: Unified pattern (glob or regex, auto-detected).
+                 Uses partial match (search) for backwards compatibility.
+        dest_folder: Destination directory.
+        incremental: If True, skip files that already exist with same hash.
+
+    Returns:
+        Dict with 'copied', 'skipped', 'total' counts.
+    """
+    from papertrail.pattern_utils import make_matcher
+
     console = get_console()
     dest_folder.mkdir(parents=True, exist_ok=True)
-    pattern = re.compile(regex_pattern)
+    # Use search mode for partial matching (backwards compatible with regex_pattern behavior)
+    matcher = make_matcher(pattern, use_search=True)
     stats = {'copied': 0, 'skipped': 0, 'total': 0}
 
     # First pass: count matching files
@@ -148,7 +162,7 @@ def copy_matching_files(
             continue
         if file.suffix.lower() not in [".pdf", ".json"]:
             continue
-        if not pattern.search(file.name):
+        if not matcher(file.name):
             continue
         matching_files.append(file)
 

@@ -329,7 +329,7 @@ def pipeline(export_date_arg=None, processed_path_override=None):
     with console.step_progress(f"Copy matching documents ({export_date})") as step:
         try:
             stdout, _ = run_step(
-                f'"{sys.executable}" "{main_script}" copy_matching "{PROCESSED_FILES_DIR}" --regex_pattern "{export_date}" --copy_dest_folder "{export_date_dir}"',
+                f'"{sys.executable}" "{main_script}" copy_matching "{PROCESSED_FILES_DIR}" --pattern "{export_date}" --copy_dest_folder "{export_date_dir}"',
                 f"Copy matching documents ({export_date})"
             )
             stats = _parse_step_output(stdout, "")

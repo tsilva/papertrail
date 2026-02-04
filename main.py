@@ -207,7 +207,7 @@ def get_profile_path(path_name: str) -> Optional[str]:
 # ------------------- TASK DISPATCHER -------------------
 
 def process_folder(task: str, processed_path: str, raw_paths=None, excel_output_path: str = None,
-                   regex_pattern: str = None, copy_dest_folder: str = None, check_schema_path: str = None,
+                   pattern: str = None, copy_dest_folder: str = None, check_schema_path: str = None,
                    export_base_dir: str = None, run_merge: bool = False):
     """Dispatch to appropriate task handler."""
     if raw_paths is not None:
@@ -230,12 +230,12 @@ def process_folder(task: str, processed_path: str, raw_paths=None, excel_output_
             export_metadata_to_excel(processed_path, excel_output_path)
             logger.info("Excel export complete.")
     elif task == "copy_matching":
-        if not regex_pattern or not copy_dest_folder:
-            logger.error("For 'copy_matching', --regex_pattern and --copy_dest_folder are required.")
+        if not pattern or not copy_dest_folder:
+            logger.error("For 'copy_matching', --pattern and --copy_dest_folder are required.")
             return
         with task_log_context(processed_path, "copy_matching"):
-            stats = copy_matching_files(processed_path, regex_pattern, Path(copy_dest_folder))
-            logger.info(f"Copied {stats['copied']} files matching '{regex_pattern}' to {copy_dest_folder}")
+            stats = copy_matching_files(processed_path, pattern, Path(copy_dest_folder))
+            logger.info(f"Copied {stats['copied']} files matching '{pattern}' to {copy_dest_folder}")
     elif task == "export_all_dates":
         task_export_all_dates(processed_path, Path(export_base_dir), run_merge)
     elif task == "check_files_exist":
@@ -286,7 +286,10 @@ def main():
     parser.add_argument("processed_path", type=str, nargs='?', help="Path to output folder.")
     parser.add_argument("--raw_path", type=str, help="Path to documents folder(s). Use ';' to separate multiple paths.")
     parser.add_argument("--excel_output_path", type=str, help="Path to output Excel file.")
-    parser.add_argument("--regex_pattern", type=str, help="Regex pattern for matching filenames.")
+    parser.add_argument("--pattern", type=str,
+        help="Pattern for matching files. Glob syntax by default (*?[]), "
+             "auto-detects regex if pattern contains \\d, \\w, ^, $, +, {}, etc. "
+             "For reextract: defaults to '*.pdf' (all PDFs). For copy_matching: required.")
     parser.add_argument("--copy_dest_folder", type=str, help="Destination folder for copied files.")
     parser.add_argument("--export_base_dir", type=str, help="Base export directory.")
     parser.add_argument("--run_merge", action="store_true", help="Run PDF merge for changed directories.")
@@ -296,8 +299,6 @@ def main():
     parser.add_argument("--canonical", type=str, help="Canonical value to add.")
     parser.add_argument("--dry_run", action="store_true", help="Show what would be changed without modifying files (for reextract).")
     parser.add_argument("--all_unknown", action="store_true", help="Re-extract all files with $UNKNOWN$ values (for reextract).")
-    parser.add_argument("--filename", type=str, help="Single filename to re-extract (for reextract).")
-    parser.add_argument("--document_pattern", type=str, help="Glob pattern for matching files (for reextract/validate_extraction).")
     parser.add_argument("--workers", "-w", type=int, default=1, help="Number of parallel workers for reextract (default: 1).")
     parser.add_argument("--export_path", type=str, help="Path to export folder for qr_inventory task.")
     parser.add_argument("--no_resume", action="store_true", help="Don't resume from checkpoint (for qr_inventory).")
@@ -348,19 +349,18 @@ def main():
 
     if args.task == "reextract":
         processed = require_path(parser, args.processed_path or get_profile_path("processed"), "processed_path")
-        if not (args.all_unknown or args.filename or args.document_pattern):
-            parser.error("reextract requires at least one of: --all_unknown, --filename, --document_pattern")
+        # Default to *.pdf if no targeting specified (pattern or all_unknown)
+        pattern = args.pattern or ("*.pdf" if not args.all_unknown else None)
         task_reextract(
             processed, dry_run=args.dry_run,
-            all_unknown=args.all_unknown, filename=args.filename,
-            document_pattern=args.document_pattern,
+            all_unknown=args.all_unknown, pattern=pattern,
             workers=args.workers,
         )
         return
 
     if args.task == "validate_extraction":
         processed = require_path(parser, args.processed_path or get_profile_path("processed"), "processed_path")
-        task_validate_extraction(processed, document_pattern=args.document_pattern)
+        task_validate_extraction(processed, pattern=args.pattern)
         return
 
     if args.task == "qr_inventory":
@@ -398,8 +398,8 @@ def main():
             parser.error("the --excel_output_path argument must end with '.xlsx'.")
 
     if args.task == "copy_matching":
-        if not args.regex_pattern:
-            parser.error("the --regex_pattern argument is required when task is 'copy_matching'.")
+        if not args.pattern:
+            parser.error("the --pattern argument is required when task is 'copy_matching'.")
         require_path(parser, args.copy_dest_folder, "copy_dest_folder", create_if_missing=True)
 
     export_base_dir = args.export_base_dir
@@ -432,7 +432,7 @@ def main():
         str(processed_path),
         raw_paths=[str(p) for p in raw_paths] if raw_paths else None,
         excel_output_path=args.excel_output_path,
-        regex_pattern=args.regex_pattern,
+        pattern=args.pattern,
         copy_dest_folder=args.copy_dest_folder,
         export_base_dir=export_base_dir,
         run_merge=args.run_merge if hasattr(args, 'run_merge') else False,
