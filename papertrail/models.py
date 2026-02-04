@@ -101,6 +101,9 @@ class DocumentMetadata(BaseModel):
     issuer_tax_number: Optional[str] = Field(default=None, description="Issuer tax identification number.")
     locale: Optional[str] = Field(default=None, description="Document locale in BCP-47 format.")
 
+    # QR code data
+    qrcode: Optional[dict] = Field(default=None, description="Raw QR code data if extracted.")
+
     class Config:
         populate_by_name = True
 
