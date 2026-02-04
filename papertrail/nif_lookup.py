@@ -1,6 +1,7 @@
 """NIF lookup cache for Portuguese tax number → issuer name resolution."""
 
 import re
+import threading
 import urllib.request
 import urllib.error
 from pathlib import Path
@@ -34,6 +35,7 @@ class NIFLookupCache(BaseYamlCache):
         Args:
             cache_path: Path to the YAML cache file. Defaults to config/nif_cache.yaml
         """
+        self._lock = threading.Lock()
         default_path = Path(__file__).parent.parent / "config" / "nif_cache.yaml"
         super().__init__(cache_path, default_path)
 
@@ -82,6 +84,11 @@ class NIFLookupCache(BaseYamlCache):
         # Portuguese NIFs are 9 digits starting with 1-9
         return len(nif) == 9 and nif.isdigit() and nif[0] != '0'
 
+    def save(self) -> None:
+        """Save cache to YAML file if dirty (thread-safe)."""
+        with self._lock:
+            super().save()
+
     def get(self, nif: str) -> Optional[str]:
         """Get cached issuer name for a NIF.
 
@@ -102,9 +109,10 @@ class NIFLookupCache(BaseYamlCache):
             issuer: The issuer/company name
         """
         nif = self.normalize_nif(nif)
-        if self._cache.get(nif) != issuer:
-            self._cache[nif] = issuer
-            self._dirty = True
+        with self._lock:
+            if self._cache.get(nif) != issuer:
+                self._cache[nif] = issuer
+                self._dirty = True
 
     def lookup(self, nif: str) -> tuple[Optional[str], str, Optional[str]]:
         """Look up issuer name by NIF (TIER 1 cache, TIER 2 web scraping).
@@ -122,11 +130,12 @@ class NIFLookupCache(BaseYamlCache):
         """
         nif = self.normalize_nif(nif)
 
-        # TIER 1: Cache lookup
-        if nif in self._cache:
-            return self._cache[nif], "cache", None
+        # TIER 1: Cache lookup (lock-protected)
+        with self._lock:
+            if nif in self._cache:
+                return self._cache[nif], "cache", None
 
-        # TIER 2: Web scraping lookup
+        # TIER 2: Web scraping lookup (outside lock - can be slow)
         issuer, error = self._web_lookup(nif)
         if issuer:
             self.set(nif, issuer)

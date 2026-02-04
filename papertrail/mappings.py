@@ -1,5 +1,6 @@
 """Mappings manager for raw → canonical value persistence."""
 
+import threading
 from pathlib import Path
 from typing import Optional
 
@@ -26,6 +27,7 @@ class MappingsManager:
         Args:
             mappings_path: Path to the YAML mappings file
         """
+        self._lock = threading.Lock()
         self.path = mappings_path
         self.data = self._load()
 
@@ -88,15 +90,16 @@ class MappingsManager:
             confirmed: If True, add to 'confirmed', else 'auto'
             save: If True, save to file immediately
         """
-        tier = "confirmed" if confirmed else "auto"
-        self.data[field][tier][raw_value] = canonical
+        with self._lock:
+            tier = "confirmed" if confirmed else "auto"
+            self.data[field][tier][raw_value] = canonical
 
-        # Ensure canonical is in the canonicals list
-        if canonical not in self.data[field]["canonicals"]:
-            self.data[field]["canonicals"].append(canonical)
+            # Ensure canonical is in the canonicals list
+            if canonical not in self.data[field]["canonicals"]:
+                self.data[field]["canonicals"].append(canonical)
 
-        if save:
-            self._save()
+            if save:
+                self._save()
 
     @validate_field(default_return=[])
     def get_canonicals(self, field: str) -> list[str]:
