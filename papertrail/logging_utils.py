@@ -285,8 +285,13 @@ class DocumentLogger:
         self._logger.debug(f"[NIF-WEB-LOOKUP] {nif} → {issuer} (cached)")
 
     def log_nif_not_found(self, nif: str, reason: str) -> None:
-        """Log when NIF lookup fails."""
+        """Log when NIF lookup finds no results."""
         self._logger.debug(f"[NIF-NOT-FOUND] {nif} ({reason})")
+
+    def log_nif_web_error(self, nif: str, error: str) -> None:
+        """Log when NIF web lookup fails with an error."""
+        doc_context = f" [{self._current_doc}]" if self._current_doc else ""
+        self._logger.warning(f"[NIF-WEB-ERROR]{doc_context} {nif} → {error}")
 
     def log_nif_enrichment(self, nif: str, official_issuer: str, normalized_issuer: str) -> None:
         """Log NIF enrichment override."""

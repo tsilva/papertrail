@@ -78,41 +78,45 @@ class NIFLookupCache(BaseYamlCache):
             self._cache[nif] = issuer
             self._dirty = True
 
-    def lookup(self, nif: str) -> tuple[Optional[str], str]:
+    def lookup(self, nif: str) -> tuple[Optional[str], str, Optional[str]]:
         """Look up issuer name by NIF (TIER 1 cache, TIER 2 web scraping).
 
         Args:
             nif: The tax number (will be normalized)
 
         Returns:
-            Tuple of (issuer_name, source) where source is one of:
+            Tuple of (issuer_name, source, error_message) where source is one of:
             - "cache" for TIER 1 hit
             - "web" for TIER 2 web lookup
             - "not_found" if not found on nif.pt
             - "web_error" if web scraping failed
+            error_message is None unless source is "web_error"
         """
         nif = self.normalize_nif(nif)
 
         # TIER 1: Cache lookup
         if nif in self._cache:
-            return self._cache[nif], "cache"
+            return self._cache[nif], "cache", None
 
         # TIER 2: Web scraping lookup
-        issuer = self._web_lookup(nif)
+        issuer, error = self._web_lookup(nif)
         if issuer:
             self.set(nif, issuer)
-            return issuer, "web"
+            return issuer, "web", None
 
-        return None, "not_found"
+        if error:
+            return None, "web_error", error
 
-    def _web_lookup(self, nif: str) -> Optional[str]:
+        return None, "not_found", None
+
+    def _web_lookup(self, nif: str) -> tuple[Optional[str], Optional[str]]:
         """Scrape company name from nif.pt public URL.
 
         Args:
             nif: Normalized NIF (no country prefix)
 
         Returns:
-            Company name if found, None otherwise
+            Tuple of (company_name, error_message). Both can be None if not found without error.
         """
         url = self.WEB_URL.format(nif=nif)
 
@@ -125,16 +129,12 @@ class NIFLookupCache(BaseYamlCache):
             match = re.search(r'class=[\'"]search-title[\'"][^>]*>([^<]+)</span>', html, re.DOTALL)
             if match:
                 company_name = match.group(1).strip()
-                logger.debug(f"[NIF-WEB] {nif} → {company_name}")
-                return company_name
+                return company_name, None
 
             # No results found
-            logger.debug(f"[NIF-WEB] {nif} → no results")
-            return None
+            return None, None
 
         except urllib.error.URLError as e:
-            logger.warning(f"[NIF-WEB] {nif} → network error: {e}")
-            return None
+            return None, f"network error: {e}"
         except Exception as e:
-            logger.warning(f"[NIF-WEB] {nif} → error: {e}")
-            return None
+            return None, f"error: {e}"
