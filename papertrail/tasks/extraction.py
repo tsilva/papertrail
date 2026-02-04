@@ -239,8 +239,8 @@ def classify_pdf_document(pdf_path: Path, file_hash: str, failure_logger=None,
                 doc_logger,
             )
 
-        # Phase 4: NIF Enrichment (only for valid Portuguese tax numbers)
-        if final_tax_number and ctx.nif_cache and NIFLookupCache.is_portuguese_nif(final_tax_number):
+        # Phase 4: NIF Enrichment (only for valid Portuguese tax numbers with Portuguese locale)
+        if final_tax_number and ctx.nif_cache and final_locale == "pt-PT" and NIFLookupCache.is_portuguese_nif(final_tax_number):
             t0 = _time.monotonic()
             official_issuer, lookup_source, lookup_error = ctx.nif_cache.lookup(final_tax_number)
 

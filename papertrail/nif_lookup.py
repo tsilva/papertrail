@@ -57,19 +57,47 @@ class NIFLookupCache(BaseYamlCache):
         return nif.strip()
 
     @staticmethod
+    def validate_nif_checksum(nif: str) -> bool:
+        """Validate Portuguese NIF using mod-11 check digit algorithm.
+
+        Algorithm:
+        1. Multiply first 8 digits by weights [9,8,7,6,5,4,3,2]
+        2. Sum the products
+        3. Compute: remainder = sum mod 11
+        4. Check digit = 0 if remainder in (0,1) else 11 - remainder
+        5. Validate 9th digit equals check digit
+
+        Args:
+            nif: 9-digit NIF string (already validated for format)
+
+        Returns:
+            True if checksum is valid
+        """
+        if len(nif) != 9 or not nif.isdigit():
+            return False
+
+        weights = [9, 8, 7, 6, 5, 4, 3, 2]
+        total = sum(int(nif[i]) * weights[i] for i in range(8))
+        remainder = total % 11
+
+        expected_check = 0 if remainder in (0, 1) else 11 - remainder
+        return int(nif[8]) == expected_check
+
+    @staticmethod
     def is_portuguese_nif(nif: str) -> bool:
-        """Check if a tax number is Portuguese format.
+        """Check if a tax number is a valid Portuguese NIF.
 
         Portuguese NIFs:
         - Are 9 digits starting with 1-9
         - May have "PT" prefix
         - Must NOT have other country prefixes (IE, DE, SE, ES, etc.)
+        - Must pass mod-11 checksum validation
 
         Args:
             nif: Raw tax number string
 
         Returns:
-            True if this appears to be a Portuguese NIF
+            True if this is a valid Portuguese NIF
         """
         nif = nif.strip().upper()
 
@@ -81,8 +109,12 @@ class NIFLookupCache(BaseYamlCache):
         if len(nif) >= 2 and nif[:2].isalpha():
             return False
 
-        # Portuguese NIFs are 9 digits starting with 1-9
-        return len(nif) == 9 and nif.isdigit() and nif[0] != '0'
+        # Basic format check: 9 digits starting with 1-9
+        if not (len(nif) == 9 and nif.isdigit() and nif[0] != '0'):
+            return False
+
+        # Checksum validation
+        return NIFLookupCache.validate_nif_checksum(nif)
 
     def save(self) -> None:
         """Save cache to YAML file if dirty (thread-safe)."""
