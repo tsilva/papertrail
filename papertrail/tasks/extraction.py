@@ -3,6 +3,7 @@
 import fcntl
 import json
 import time as _time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from pathlib import Path
 
@@ -497,28 +498,39 @@ def _collect_reextract_targets(processed_path: Path, all_unknown: bool = False,
 
 
 def task_reextract(processed_path: Path, dry_run: bool = False,
-                   all_unknown: bool = False, filename: str = None, document_pattern: str = None):
-    """Re-extract documents by re-running the full classification pipeline."""
+                   all_unknown: bool = False, filename: str = None, document_pattern: str = None,
+                   workers: int = 1):
+    """Re-extract documents by re-running the full classification pipeline.
+
+    Args:
+        processed_path: Path to the processed documents directory.
+        dry_run: If True, show what would be changed without modifying files.
+        all_unknown: Re-extract all files with $UNKNOWN$ values.
+        filename: Single filename to re-extract.
+        document_pattern: Glob pattern for matching files.
+        workers: Number of parallel workers (default: 1 for sequential).
+    """
     console = get_console()
 
     with task_log_context(processed_path, "reextract"):
-        doc_logger = DocumentLogger()
-
         targets = _collect_reextract_targets(processed_path, all_unknown=all_unknown,
                                               filename=filename, document_pattern=document_pattern)
         if not targets:
             console.warning("No files to re-extract", indent=False)
             return
 
-        logger.debug(f"Found {len(targets)} files to re-extract")
+        logger.debug(f"Found {len(targets)} files to re-extract (workers={workers})")
 
         def classify_one(item):
+            """Classify a single document (thread-safe)."""
             metadata_path, pdf_path, old_data = item
+            # Each thread gets its own DocumentLogger instance
+            thread_doc_logger = DocumentLogger()
             try:
                 content_hash = old_data.get("content_hash") or old_data.get("hash")
                 if not content_hash:
                     return (metadata_path, old_data, None, "No content_hash in metadata")
-                new_metadata = classify_pdf_document(pdf_path, content_hash, doc_logger=doc_logger)
+                new_metadata = classify_pdf_document(pdf_path, content_hash, doc_logger=thread_doc_logger)
                 new_metadata.file_hash = old_data.get("file_hash") or old_data.get("_old_hash")
                 new_metadata.create_date = old_data.get("create_date")
                 new_metadata.update_date = datetime.now().strftime("%Y-%m-%d")
@@ -527,48 +539,61 @@ def task_reextract(processed_path: Path, dry_run: bool = False,
                 return (metadata_path, old_data, None, str(e))
 
         logger.debug("Running re-extraction...")
+        results = []
+
+        if workers == 1:
+            # Sequential path (backwards compatible)
+            with console.progress("Re-extracting", total=len(targets)) as progress:
+                task = progress.add_task("Re-extracting", total=len(targets))
+                for item in targets:
+                    results.append(classify_one(item))
+                    progress.update(task, advance=1)
+        else:
+            # Parallel path
+            with ThreadPoolExecutor(max_workers=workers) as executor:
+                futures = {executor.submit(classify_one, item): item for item in targets}
+                with console.progress("Re-extracting", total=len(futures)) as progress:
+                    task = progress.add_task("Re-extracting", total=len(futures))
+                    for future in as_completed(futures):
+                        results.append(future.result())
+                        progress.update(task, advance=1)
+
+        # Process results
         fixed_count = 0
         still_unknown_count = 0
         failed_count = 0
 
-        with console.progress("Re-extracting", total=len(targets)) as progress:
-            task = progress.add_task("Re-extracting", total=len(targets))
-            for item in targets:
-                metadata_path, old_data, new_metadata, error = classify_one(item)
+        for metadata_path, old_data, new_metadata, error in results:
+            if error:
+                logger.error(f"Failed {metadata_path.name}: {error}")
+                failed_count += 1
+                continue
 
-                if error:
-                    logger.error(f"Failed {metadata_path.name}: {error}")
-                    failed_count += 1
-                    progress.update(task, advance=1)
-                    continue
+            new_doc_type = enum_value(new_metadata.document_type)
+            new_issuer = enum_value(new_metadata.issuing_party)
+            new_date = new_metadata.issue_date
 
-                new_doc_type = enum_value(new_metadata.document_type)
-                new_issuer = enum_value(new_metadata.issuing_party)
-                new_date = new_metadata.issue_date
+            changes = []
+            old_doc_type = old_data.get("document_type", "")
+            old_issuer = old_data.get("issuing_party", "")
+            old_date = old_data.get("issue_date", "")
 
-                changes = []
-                old_doc_type = old_data.get("document_type", "")
-                old_issuer = old_data.get("issuing_party", "")
-                old_date = old_data.get("issue_date", "")
+            if old_doc_type != new_doc_type:
+                changes.append(f"document_type: {old_doc_type} -> {new_doc_type}")
+            if old_issuer != new_issuer:
+                changes.append(f"issuing_party: {old_issuer} -> {new_issuer}")
+            if old_date != new_date:
+                changes.append(f"issue_date: {old_date} -> {new_date}")
 
-                if old_doc_type != new_doc_type:
-                    changes.append(f"document_type: {old_doc_type} -> {new_doc_type}")
-                if old_issuer != new_issuer:
-                    changes.append(f"issuing_party: {old_issuer} -> {new_issuer}")
-                if old_date != new_date:
-                    changes.append(f"issue_date: {old_date} -> {new_date}")
+            if changes:
+                logger.debug(f"Changed {metadata_path.name}: {', '.join(changes)}")
+                fixed_count += 1
+            else:
+                logger.debug(f"No changes: {metadata_path.name}")
+                still_unknown_count += 1
 
-                if changes:
-                    logger.debug(f"Changed {metadata_path.name}: {', '.join(changes)}")
-                    fixed_count += 1
-                else:
-                    logger.debug(f"No changes: {metadata_path.name}")
-                    still_unknown_count += 1
-
-                if not dry_run:
-                    save_metadata_json(metadata_path.with_suffix(".pdf"), new_metadata)
-
-                progress.update(task, advance=1)
+            if not dry_run:
+                save_metadata_json(metadata_path.with_suffix(".pdf"), new_metadata)
 
         # Summary output
         if failed_count > 0:
