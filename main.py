@@ -66,6 +66,7 @@ from papertrail.mappings import MappingsManager
 from papertrail.rejected import RejectedValuesManager
 from papertrail.nif_lookup import NIFLookupCache
 from papertrail.logging_utils import setup_logging, get_logger
+from papertrail.console import get_console
 
 # Import all task functions and utilities
 from papertrail.tasks import (
@@ -153,6 +154,15 @@ def initialize_config(profile_name: Optional[str] = None) -> None:
     set_current_profile(profile)
     reset_enum_cache()
 
+    # Preflight check: verify API accessibility before proceeding
+    from papertrail.config import check_api_accessibility
+    base_url = profile.openrouter.base_url
+    if not check_api_accessibility(base_url):
+        console = get_console()
+        console.error(f"API base URL is not accessible: {base_url}", indent=False)
+        console.error("Please check your network connection and the base_url in your profile.", indent=False)
+        sys.exit(1)
+
     config_dir = Path(__file__).parent / "config"
     mappings_path = config_dir / "mappings.yaml"
     rejected_path = config_dir / "rejected_values.yaml"
@@ -176,7 +186,6 @@ def initialize_config(profile_name: Optional[str] = None) -> None:
     # When running as __main__, also register ourselves as 'main' module
     # so that `import main; main.get_ctx()` works from other modules
     if __name__ == "__main__":
-        import sys
         # Register __main__ as 'main' so imports find us
         sys.modules["main"] = sys.modules["__main__"]
 
