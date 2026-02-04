@@ -62,7 +62,7 @@ class DocumentMetadataRaw(BaseModel):
     reasoning: str = Field(description="Why this classification was chosen.")
     issuer_tax_number: Optional[str] = Field(
         default=None,
-        description="Issuer's tax identification number (VAT, NIF, EIN) if visible on document."
+        description="Issuer's tax identification number (VAT, NIF, EIN). Include country prefix when visible (e.g., DETESTOWNER, IE1234567X)."
     )
     locale: Optional[str] = Field(
         default=None,
