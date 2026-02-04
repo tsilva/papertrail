@@ -181,6 +181,29 @@ def initialize_config(profile_name: Optional[str] = None) -> None:
         sys.modules["main"] = sys.modules["__main__"]
 
 
+def get_profile_path(path_name: str) -> Optional[str]:
+    """Get a path from the current profile.
+
+    Args:
+        path_name: One of "processed", "raw", or "export"
+
+    Returns:
+        Path string if available, None otherwise
+    """
+    from papertrail.config import get_current_profile
+    profile = get_current_profile()
+    if not profile:
+        return None
+    paths = profile.paths
+    if path_name == "processed":
+        return paths.processed
+    elif path_name == "raw":
+        return paths.raw[0] if paths.raw else None
+    elif path_name == "export":
+        return paths.export
+    return None
+
+
 # ------------------- TASK DISPATCHER -------------------
 
 def process_folder(task: str, processed_path: str, raw_paths=None, excel_output_path: str = None,
@@ -313,17 +336,17 @@ def main():
         return
 
     if args.task == "bootstrap_mappings":
-        processed = require_path(parser, args.processed_path, "processed_path")
+        processed = require_path(parser, args.processed_path or get_profile_path("processed"), "processed_path")
         task_bootstrap_mappings(processed, get_ctx().mappings_manager)
         return
 
     if args.task == "backfill_page_count":
-        processed = require_path(parser, args.processed_path, "processed_path")
+        processed = require_path(parser, args.processed_path or get_profile_path("processed"), "processed_path")
         task_backfill_page_count(processed)
         return
 
     if args.task == "reextract":
-        processed = require_path(parser, args.processed_path, "processed_path")
+        processed = require_path(parser, args.processed_path or get_profile_path("processed"), "processed_path")
         if not (args.all_unknown or args.filename or args.document_pattern):
             parser.error("reextract requires at least one of: --all_unknown, --filename, --document_pattern")
         task_reextract(
@@ -334,36 +357,34 @@ def main():
         return
 
     if args.task == "validate_extraction":
-        processed = require_path(parser, args.processed_path, "processed_path")
+        processed = require_path(parser, args.processed_path or get_profile_path("processed"), "processed_path")
         task_validate_extraction(processed, document_pattern=args.document_pattern)
         return
 
     if args.task == "qr_inventory":
-        # Determine export path: use --export_path if provided, else use profile export path
-        export_path = args.export_path
-        if not export_path:
-            from papertrail.config import get_current_profile
-            profile = get_current_profile()
-            if profile and profile.paths.export:
-                export_path = profile.paths.export
-            else:
-                parser.error("qr_inventory requires --export_path or export path in profile.")
-        export = require_path(parser, export_path, "export_path")
+        export = require_path(parser, args.export_path or get_profile_path("export"), "export_path")
         task_qr_inventory(export, resume=not args.no_resume)
         return
 
     if args.task == "regenerate_orphans":
-        processed = require_path(parser, args.processed_path, "processed_path")
+        processed = require_path(parser, args.processed_path or get_profile_path("processed"), "processed_path")
         task_regenerate_orphans(processed, dry_run=args.dry_run)
         return
 
-    processed_path = require_path(parser, args.processed_path, "processed_path")
+    processed_path = require_path(parser, args.processed_path or get_profile_path("processed"), "processed_path")
 
     raw_paths = None
     if args.task == "extract_new":
-        if not args.raw_path:
+        raw_path_arg = args.raw_path
+        if not raw_path_arg:
+            # Fall back to profile raw paths
+            from papertrail.config import get_current_profile
+            profile = get_current_profile()
+            if profile and profile.paths.raw:
+                raw_path_arg = ";".join(profile.paths.raw)
+        if not raw_path_arg:
             parser.error("the --raw_path argument is required when task is 'extract_new'.")
-        raw_path_strs = [p for p in args.raw_path.split(';') if p]
+        raw_path_strs = [p for p in raw_path_arg.split(';') if p]
         if not raw_path_strs:
             parser.error("the --raw_path argument must contain at least one path.")
         raw_paths = [require_path(parser, rp, "raw_path") for rp in raw_path_strs]

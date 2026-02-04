@@ -242,10 +242,11 @@ def classify_pdf_document(pdf_path: Path, file_hash: str, failure_logger=None,
                 doc_logger,
             )
 
-        # Phase 4: NIF Enrichment (if tax number available and NIF cache enabled)
-        if final_tax_number and ctx.nif_cache:
+        # Phase 4: NIF Enrichment (only for Portuguese documents with tax number)
+        is_portuguese = final_locale and final_locale.lower().startswith("pt")
+        if final_tax_number and ctx.nif_cache and is_portuguese:
             t0 = _time.monotonic()
-            official_issuer, lookup_source = ctx.nif_cache.lookup(final_tax_number)
+            official_issuer, lookup_source, lookup_error = ctx.nif_cache.lookup(final_tax_number)
 
             if official_issuer:
                 # Log the lookup result
@@ -279,7 +280,10 @@ def classify_pdf_document(pdf_path: Path, file_hash: str, failure_logger=None,
                 else:
                     logger.debug(f"[NIF-ENRICH] Keeping original issuer (NIF name didn't normalize): {official_issuer}")
             elif doc_logger:
-                doc_logger.log_nif_not_found(final_tax_number, lookup_source)
+                if lookup_source == "web_error" and lookup_error:
+                    doc_logger.log_nif_web_error(final_tax_number, lookup_error)
+                else:
+                    doc_logger.log_nif_not_found(final_tax_number, lookup_source)
 
             if doc_logger:
                 doc_logger.log_timing("nif_enrichment", _time.monotonic() - t0)
