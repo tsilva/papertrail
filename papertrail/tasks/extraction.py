@@ -425,9 +425,9 @@ def _task_extract_new_locked(processed_path: Path, raw_paths: list[Path]):
         logger.debug(f"=== SUMMARY: {len(files_to_process)} attempted, {new_processed} success, {failed} failed, {elapsed:.1f}s total ===")
 
 
-def _collect_reextract_targets(processed_path: Path, all_unknown: bool = False,
-                                pattern: str = None) -> list[tuple]:
-    """Collect files to re-extract based on targeting mode.
+def _collect_sync_targets(processed_path: Path, all_unknown: bool = False,
+                          pattern: str = None, orphans_only: bool = False) -> list[tuple]:
+    """Collect files to sync based on targeting mode.
 
     Args:
         processed_path: Path to the processed documents directory.
@@ -436,6 +436,8 @@ def _collect_reextract_targets(processed_path: Path, all_unknown: bool = False,
             - Exact filename: "2025-01-01 - invoice.pdf"
             - Glob pattern: "*anthropic*.pdf"
             - Regex pattern: "2025-01-\\d{2}"
+        orphans_only: If True, only collect PDFs without existing metadata JSON.
+                      This is the default when no other flags are specified.
 
     Returns:
         List of tuples: (metadata_path, pdf_path, old_data_or_None)
@@ -460,6 +462,9 @@ def _collect_reextract_targets(processed_path: Path, all_unknown: bool = False,
             target_json = target_pdf.with_suffix(".json")
             data = None
             if target_json.exists():
+                # Skip if orphans_only and has metadata
+                if orphans_only:
+                    return targets
                 with open(target_json, "r", encoding="utf-8") as f:
                     data = json.load(f)
             targets.append((target_json, target_pdf, data))
@@ -473,8 +478,15 @@ def _collect_reextract_targets(processed_path: Path, all_unknown: bool = False,
                         progress.update(task, advance=1)
                         continue
                     metadata_path = pdf_path.with_suffix(".json")
+                    has_metadata = metadata_path.exists()
+
+                    # Skip if orphans_only and has metadata
+                    if orphans_only and has_metadata:
+                        progress.update(task, advance=1)
+                        continue
+
                     data = None
-                    if metadata_path.exists():
+                    if has_metadata:
                         try:
                             with open(metadata_path, "r", encoding="utf-8") as f:
                                 data = json.load(f)
@@ -482,6 +494,16 @@ def _collect_reextract_targets(processed_path: Path, all_unknown: bool = False,
                             logger.warning(f"Failed to load {metadata_path.name}: {e}")
                     targets.append((metadata_path, pdf_path, data))
                     progress.update(task, advance=1)
+
+    elif orphans_only:
+        # Collect only orphans (no pattern, no all_unknown)
+        with console.progress("Scanning for orphans", total=len(pdf_files)) as progress:
+            task = progress.add_task("Scanning for orphans", total=len(pdf_files))
+            for pdf_path in pdf_files:
+                metadata_path = pdf_path.with_suffix(".json")
+                if not metadata_path.exists():
+                    targets.append((metadata_path, pdf_path, None))
+                progress.update(task, advance=1)
 
     if all_unknown:
         # all_unknown requires existing JSON files to check for $UNKNOWN$ values
@@ -512,29 +534,37 @@ def _collect_reextract_targets(processed_path: Path, all_unknown: bool = False,
     return targets
 
 
-def task_reextract(processed_path: Path, dry_run: bool = False,
-                   all_unknown: bool = False, pattern: str = None,
-                   workers: int = 1):
-    """Re-extract documents by re-running the full classification pipeline.
+def task_sync(processed_path: Path, dry_run: bool = False,
+              all_unknown: bool = False, pattern: str = None,
+              workers: int = 1, all: bool = False):
+    """Sync metadata for PDF documents by running the classification pipeline.
+
+    Default behavior (no flags): only process PDFs without metadata (orphans).
+    Use --all to process all matching PDFs, re-extracting existing metadata.
 
     Args:
         processed_path: Path to the processed documents directory.
         dry_run: If True, show what would be changed without modifying files.
         all_unknown: Re-extract all files with $UNKNOWN$ values.
         pattern: Unified pattern for matching files (glob or regex, auto-detected).
-                 Defaults to "*.pdf" when called without targeting.
         workers: Number of parallel workers (default: 1 for sequential).
+        all: If True, process all matching PDFs (not just orphans).
     """
     console = get_console()
 
-    with task_log_context(processed_path, "reextract"):
-        targets = _collect_reextract_targets(processed_path, all_unknown=all_unknown,
-                                              pattern=pattern)
+    # Determine orphans_only mode
+    # Default (no flags): orphans only
+    # With --all, --all_unknown, or --pattern: process accordingly
+    orphans_only = not all and not all_unknown and pattern is None
+
+    with task_log_context(processed_path, "sync"):
+        targets = _collect_sync_targets(processed_path, all_unknown=all_unknown,
+                                        pattern=pattern, orphans_only=orphans_only)
         if not targets:
-            console.warning("No files to re-extract", indent=False)
+            console.warning("No files to sync", indent=False)
             return
 
-        logger.debug(f"Found {len(targets)} files to re-extract (workers={workers})")
+        logger.debug(f"Found {len(targets)} files to sync (workers={workers})")
 
         def classify_one(item):
             """Classify a single document (thread-safe)."""
@@ -562,37 +592,22 @@ def task_reextract(processed_path: Path, dry_run: bool = False,
             except Exception as e:
                 return (metadata_path, old_data, None, str(e))
 
-        logger.debug("Running re-extraction...")
-        results = []
+        logger.debug("Running sync...")
 
-        if workers == 1:
-            # Sequential path (backwards compatible)
-            with console.progress("Re-extracting", total=len(targets)) as progress:
-                task = progress.add_task("Re-extracting", total=len(targets))
-                for item in targets:
-                    results.append(classify_one(item))
-                    progress.update(task, advance=1)
-        else:
-            # Parallel path
-            with ThreadPoolExecutor(max_workers=workers) as executor:
-                futures = {executor.submit(classify_one, item): item for item in targets}
-                with console.progress("Re-extracting", total=len(futures)) as progress:
-                    task = progress.add_task("Re-extracting", total=len(futures))
-                    for future in as_completed(futures):
-                        results.append(future.result())
-                        progress.update(task, advance=1)
-
-        # Process results
+        # Counters for summary statistics
         fixed_count = 0
         still_unknown_count = 0
         failed_count = 0
         new_count = 0
 
-        for metadata_path, old_data, new_metadata, error in results:
+        def process_result(metadata_path, old_data, new_metadata, error):
+            """Process a single extraction result and save JSON immediately."""
+            nonlocal fixed_count, still_unknown_count, failed_count, new_count
+
             if error:
                 logger.error(f"Failed {metadata_path.name}: {error}")
                 failed_count += 1
-                continue
+                return
 
             new_doc_type = enum_value(new_metadata.document_type)
             new_issuer = enum_value(new_metadata.issuing_party)
@@ -622,8 +637,28 @@ def task_reextract(processed_path: Path, dry_run: bool = False,
                     logger.debug(f"No changes: {metadata_path.name}")
                     still_unknown_count += 1
 
+            # Save JSON immediately after each successful extraction
             if not dry_run:
                 save_metadata_json(metadata_path.with_suffix(".pdf"), new_metadata)
+
+        if workers == 1:
+            # Sequential path (backwards compatible)
+            with console.progress("Syncing", total=len(targets)) as progress:
+                task = progress.add_task("Syncing", total=len(targets))
+                for item in targets:
+                    metadata_path, old_data, new_metadata, error = classify_one(item)
+                    process_result(metadata_path, old_data, new_metadata, error)
+                    progress.update(task, advance=1)
+        else:
+            # Parallel path - process results as they complete
+            with ThreadPoolExecutor(max_workers=workers) as executor:
+                futures = {executor.submit(classify_one, item): item for item in targets}
+                with console.progress("Syncing", total=len(futures)) as progress:
+                    task = progress.add_task("Syncing", total=len(futures))
+                    for future in as_completed(futures):
+                        metadata_path, old_data, new_metadata, error = future.result()
+                        process_result(metadata_path, old_data, new_metadata, error)
+                        progress.update(task, advance=1)
 
         # Summary output
         parts = []
@@ -727,89 +762,3 @@ def task_validate_extraction(processed_path: Path, pattern: str = None):
             console.success(f"{files_checked} checked, no issues found", indent=False)
 
         logger.debug(f"=== SUMMARY: {files_checked} checked, {issues_count} with issues ===")
-
-
-def find_orphaned_pdfs(processed_path: Path) -> list[Path]:
-    """Find PDF files in processed folder that have no corresponding JSON metadata file.
-
-    Args:
-        processed_path: Path to the processed documents directory.
-
-    Returns:
-        List of PDF paths that are missing their metadata JSON files.
-    """
-    orphans = []
-    for pdf_path in processed_path.rglob("*.pdf"):
-        json_path = pdf_path.with_suffix(".json")
-        if not json_path.exists():
-            orphans.append(pdf_path)
-    return orphans
-
-
-def task_regenerate_orphans(processed_path: Path, dry_run: bool = False):
-    """Regenerate metadata for orphaned PDF files (PDFs without JSON metadata).
-
-    Args:
-        processed_path: Path to the processed documents directory.
-        dry_run: If True, list orphaned files without processing them.
-    """
-    console = get_console()
-
-    with task_log_context(processed_path, "regenerate_orphans"):
-        logs_dir = processed_path / "logs"
-        failure_log_path = logs_dir / "classification_failures.log"
-        failure_logger = setup_failure_logger(failure_log_path)
-
-        doc_logger = DocumentLogger()
-
-        orphans = find_orphaned_pdfs(processed_path)
-
-        if not orphans:
-            console.info("No orphaned PDF files found", indent=False)
-            logger.debug("No orphaned PDF files found")
-            return
-
-        logger.debug(f"Found {len(orphans)} orphaned PDF files")
-
-        if dry_run:
-            console.info(f"Found {len(orphans)} orphaned PDF files (dry run)", indent=False)
-            for pdf_path in orphans:
-                console.detail(f"  {pdf_path.name}", indent=False)
-                logger.debug(f"[ORPHAN] {pdf_path.name}")
-            return
-
-        success_count = 0
-        failed_count = 0
-
-        with console.progress("Regenerating metadata", total=len(orphans)) as progress:
-            task = progress.add_task("Regenerating metadata", total=len(orphans))
-            for pdf_path in orphans:
-                try:
-                    file_hash = hash_file_fast(pdf_path)
-                    content_hash = hash_file_content(pdf_path)
-
-                    metadata = classify_pdf_document(
-                        pdf_path, content_hash,
-                        failure_logger=failure_logger,
-                        doc_logger=doc_logger,
-                    )
-                    metadata.file_hash = file_hash
-
-                    save_metadata_json(pdf_path, metadata)
-
-                    logger.debug(f"[REGENERATED] {pdf_path.name}")
-                    success_count += 1
-                except Exception as e:
-                    log_failure(failure_logger, pdf_path, e)
-                    logger.error(f"[FAILED] {pdf_path.name}: {e}")
-                    failed_count += 1
-
-                progress.update(task, advance=1)
-
-        # Summary output
-        if failed_count > 0:
-            console.warning(f"{success_count} orphaned files regenerated, {failed_count} failed", indent=False)
-        else:
-            console.success(f"{success_count} orphaned files regenerated", indent=False)
-
-        logger.debug(f"=== SUMMARY: {success_count} regenerated, {failed_count} failed ===")
