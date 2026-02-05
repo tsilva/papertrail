@@ -53,9 +53,8 @@ def require_initialized(manager, name: str):
 from papertrail.tasks.extraction import (
     classify_pdf_document,
     task_extract_new,
-    task_reextract,
+    task_sync,
     task_validate_extraction,
-    task_regenerate_orphans,
 )
 from papertrail.tasks.organization import (
     task_rename_files,

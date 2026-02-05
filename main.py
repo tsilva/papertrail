@@ -72,9 +72,8 @@ from papertrail.console import get_console
 from papertrail.tasks import (
     task_extract_new,
     task_rename_files,
-    task_reextract,
+    task_sync,
     task_validate_extraction,
-    task_regenerate_orphans,
     validate_metadata,
     export_metadata_to_excel,
     copy_matching_files,
@@ -289,8 +288,8 @@ def main():
         'extract_new', 'rename_files', 'validate_metadata', 'export_excel',
         'copy_matching', 'export_all_dates', 'check_files_exist', 'pipeline',
         'gmail_download', 'bootstrap_mappings', 'review_mappings', 'add_canonical',
-        'backfill_page_count', 'review_rejected', 'reextract', 'validate_extraction',
-        'qr_inventory', 'regenerate_orphans'
+        'backfill_page_count', 'review_rejected', 'sync', 'validate_extraction',
+        'qr_inventory'
     ], help="Task to perform.")
     parser.add_argument("processed_path", type=str, nargs='?', help="Path to output folder.")
     parser.add_argument("--raw_path", type=str, help="Path to documents folder(s). Use ';' to separate multiple paths.")
@@ -298,7 +297,7 @@ def main():
     parser.add_argument("--pattern", type=str,
         help="Pattern for matching files. Glob syntax by default (*?[]), "
              "auto-detects regex if pattern contains \\d, \\w, ^, $, +, {}, etc. "
-             "For reextract: defaults to '*.pdf' (all PDFs). For copy_matching: required.")
+             "For copy_matching: required.")
     parser.add_argument("--copy_dest_folder", type=str, help="Destination folder for copied files.")
     parser.add_argument("--export_base_dir", type=str, help="Base export directory.")
     parser.add_argument("--run_merge", action="store_true", help="Run PDF merge for changed directories.")
@@ -306,9 +305,10 @@ def main():
     parser.add_argument("--export_date", type=str, help="Export date in YYYY-MM format (for pipeline).")
     parser.add_argument("--field", type=str, help="Field name for add_canonical (document_type or issuing_party).")
     parser.add_argument("--canonical", type=str, help="Canonical value to add.")
-    parser.add_argument("--dry_run", action="store_true", help="Show what would be changed without modifying files (for reextract).")
-    parser.add_argument("--all_unknown", action="store_true", help="Re-extract all files with $UNKNOWN$ values (for reextract).")
-    parser.add_argument("--workers", "-w", type=int, default=1, help="Number of parallel workers for reextract (default: 1).")
+    parser.add_argument("--dry_run", action="store_true", help="Show what would be changed without modifying files (for sync).")
+    parser.add_argument("--all_unknown", action="store_true", help="Re-extract all files with $UNKNOWN$ values (for sync).")
+    parser.add_argument("--workers", "-w", type=int, default=1, help="Number of parallel workers for sync (default: 1).")
+    parser.add_argument("--all", action="store_true", help="Process all matching PDFs, not just those missing metadata (for sync).")
     parser.add_argument("--export_path", type=str, help="Path to export folder for qr_inventory task.")
     parser.add_argument("--no_resume", action="store_true", help="Don't resume from checkpoint (for qr_inventory).")
     args = parser.parse_args()
@@ -356,14 +356,12 @@ def main():
         task_backfill_page_count(processed)
         return
 
-    if args.task == "reextract":
+    if args.task == "sync":
         processed = require_path(parser, args.processed_path or get_profile_path("processed"), "processed_path")
-        # Default to *.pdf if no targeting specified (pattern or all_unknown)
-        pattern = args.pattern or ("*.pdf" if not args.all_unknown else None)
-        task_reextract(
+        task_sync(
             processed, dry_run=args.dry_run,
-            all_unknown=args.all_unknown, pattern=pattern,
-            workers=args.workers,
+            all_unknown=args.all_unknown, pattern=args.pattern,
+            workers=args.workers, all=args.all,
         )
         return
 
@@ -375,11 +373,6 @@ def main():
     if args.task == "qr_inventory":
         export = require_path(parser, args.export_path or get_profile_path("export"), "export_path")
         task_qr_inventory(export, resume=not args.no_resume)
-        return
-
-    if args.task == "regenerate_orphans":
-        processed = require_path(parser, args.processed_path or get_profile_path("processed"), "processed_path")
-        task_regenerate_orphans(processed, dry_run=args.dry_run)
         return
 
     processed_path = require_path(parser, args.processed_path or get_profile_path("processed"), "processed_path")
