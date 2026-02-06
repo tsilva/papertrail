@@ -236,6 +236,10 @@ class DocumentLogger:
         """Log when a normalization is rejected."""
         self._logger.debug(f"[REJECTED] {field}: '{raw}' -> '{normalized}' (not in canonical list)")
 
+    def log_stale_mapping(self, field: str, raw: str, stale_value: str) -> None:
+        """Log when a Tier 1 mapping is stale (canonical no longer in enum)."""
+        self._logger.debug(f"[STALE-MAPPING] {field}: '{raw}' -> '{stale_value}' (not in current enum, will re-normalize via Tier 2)")
+
     def log_timing(self, operation: str, seconds: float) -> None:
         """Log timing for an operation."""
         self._timings[operation] = seconds

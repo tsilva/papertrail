@@ -57,11 +57,19 @@ def task_gmail_download():
 
     logger.debug(f"Downloading attachments to: {raw_path}")
 
-    stats = download_gmail_attachments(
-        output_dir=raw_path,
-        start_date=start_date,
-        end_date=end_date,
-    )
+    try:
+        stats = download_gmail_attachments(
+            output_dir=raw_path,
+            start_date=start_date,
+            end_date=end_date,
+        )
+    except FileNotFoundError as e:
+        console.error(f"Gmail credentials not found: {e}", indent=False)
+        sys.exit(1)
+    except Exception as e:
+        error_type = type(e).__name__
+        console.error(f"Gmail download failed ({error_type}): {e}", indent=False)
+        sys.exit(1)
 
     # Log details to file
     logger.debug(f"Messages found: {stats['messages_found']}")

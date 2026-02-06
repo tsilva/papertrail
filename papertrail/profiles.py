@@ -205,16 +205,12 @@ def resolve_paths_in_profile(profile: Profile) -> None:
     profile.passwords.passwords_file = resolve_path(profile.passwords.passwords_file, pp)
     profile.validations.validations_file = resolve_path(profile.validations.validations_file, pp)
 
-    # Gmail credentials (with defaults if enabled)
+    # Gmail credentials (resolve explicit paths; defaults handled by get_gmail_config_paths())
     if profile.gmail.credentials_file:
         profile.gmail.credentials_file = resolve_path(profile.gmail.credentials_file, pp)
-    elif profile.gmail.enabled:
-        profile.gmail.credentials_file = resolve_path("../.credentials/gmail_credentials.json", pp)
 
     if profile.gmail.token_file:
         profile.gmail.token_file = resolve_path(profile.gmail.token_file, pp)
-    elif profile.gmail.enabled:
-        profile.gmail.token_file = resolve_path("../.credentials/gmail_token.json", pp)
 
 
 # ============================================================================

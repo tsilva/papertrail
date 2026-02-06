@@ -259,7 +259,7 @@ python main.py extract_new /path/to/processed  # Auto-uses default profile if av
 ### Logs Directory
 
 Task runs create timestamped log files in `{processed_path}/logs/`:
-- `logs/extract_new_YYYYMMDD_HHMMSS.log` — per-document extraction details with `[QR-EXTRACT]`, `[QR-MERGE]`, `[NIF-CACHE-HIT]`, `[NIF-WEB-LOOKUP]`, `[NIF-ENRICH]`, `[RAW]`, `[TIER-1-HIT]`, `[TIER-2-LLM]`, `[TIMING]`, `[FINAL]` markers
+- `logs/extract_new_YYYYMMDD_HHMMSS.log` — per-document extraction details with `[QR-EXTRACT]`, `[QR-MERGE]`, `[NIF-CACHE-HIT]`, `[NIF-WEB-LOOKUP]`, `[NIF-ENRICH]`, `[RAW]`, `[TIER-1-HIT]`, `[TIER-2-LLM]`, `[STALE-MAPPING]`, `[TIMING]`, `[FINAL]` markers
 - `logs/sync_YYYYMMDD_HHMMSS.log` — sync with before/after diffs
 - `logs/pipeline_YYYYMMDD_HHMMSS.log` — full pipeline run
 - `logs/validate_extraction_YYYYMMDD_HHMMSS.log` — extraction quality audit
