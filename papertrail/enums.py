@@ -95,8 +95,11 @@ def create_dynamic_enum(name: str, values: list[str]) -> Enum:
 # ============================================================================
 
 FALLBACK_DOCUMENT_TYPES = [
-    "$UNKNOWN$", "bill", "certificate", "contract", "declaration", "email", "extract",
-    "invoice", "letter", "notification", "other", "receipt", "report", "statement", "ticket"
+    "$UNKNOWN$", "bank-note", "bank-statement", "contract", "contract-signup",
+    "finance-balance", "finance-income", "insurance-auto", "insurance-notice",
+    "invoice", "invoice-credit", "invoice-receipt", "notice", "notice-request",
+    "other", "payroll-salary", "payroll-social", "payroll-vacation", "receipt",
+    "tax-declaration", "tax-irs", "tax-vat"
 ]
 
 FALLBACK_ISSUING_PARTIES = [
