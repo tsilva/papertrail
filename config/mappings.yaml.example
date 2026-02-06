@@ -3,6 +3,9 @@
 # This file stores raw → canonical mappings to ensure deterministic normalization.
 # Once a raw value has been mapped, it will always map to the same canonical.
 #
+# Keys are slugified (lowercased, punctuation removed, whitespace collapsed)
+# so that minor variations like "Invoice" / "INVOICE" / "invoice" all match.
+#
 # Structure:
 #   - confirmed: User-validated mappings (trusted)
 #   - auto: Auto-added by LLM (pending review via 'review_mappings' command)
@@ -15,21 +18,19 @@
 document_types:
   confirmed:
     # User-validated mappings (trusted, won't be re-queried)
-    "Invoice": "invoice"
-    "INVOICE": "invoice"
-    "Factura": "invoice"
-    "Receipt": "receipt"
-    "RECEIPT": "receipt"
-    "Recibo": "receipt"
-    "Statement": "statement"
-    "Bank Statement": "statement"
-    "Contract": "contract"
+    "invoice": "invoice"
+    "factura": "invoice"
+    "receipt": "receipt"
+    "recibo": "receipt"
+    "statement": "statement"
+    "bank-statement": "statement"
+    "contract": "contract"
 
   auto:
     # Auto-added by LLM (pending review)
     # Use 'papertrail review_mappings' to approve/edit these
     # Example:
-    # "Tax Invoice": "invoice"
+    # "tax-invoice": "invoice"
 
   canonicals:
     # Master list of valid canonical values
@@ -53,20 +54,20 @@ issuing_parties:
   confirmed:
     # User-validated mappings
     # Common variations → canonical name
-    "Anthropic, PBC": "anthropic"
-    "Anthropic Inc": "anthropic"
-    "Anthropic": "anthropic"
-    "Amazon Web Services": "amazon"
-    "Amazon.com": "amazon"
-    "Amazon": "amazon"
-    "Google LLC": "google"
-    "Google Inc": "google"
-    "Google": "google"
+    "anthropic-pbc": "anthropic"
+    "anthropic-inc": "anthropic"
+    "anthropic": "anthropic"
+    "amazon-web-services": "amazon"
+    "amazoncom": "amazon"
+    "amazon": "amazon"
+    "google-llc": "google"
+    "google-inc": "google"
+    "google": "google"
 
   auto:
     # Auto-added by LLM (pending review)
     # Example:
-    # "AWS": "amazon"
+    # "aws": "amazon"
 
   canonicals:
     # Master list of valid canonical issuing parties

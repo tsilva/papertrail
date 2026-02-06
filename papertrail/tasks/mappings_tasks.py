@@ -93,6 +93,9 @@ def task_review_mappings(mappings_mgr):
     console.console.print()
     console.console.print("[bold cyan]AUTO-ADDED MAPPINGS AWAITING REVIEW[/bold cyan]")
     console.console.print()
+    console.console.print("[dim]These are LLM-generated mappings from raw document text to canonical values.[/dim]")
+    console.console.print("[dim]\"Original text from document\" -> \"normalized-canonical-value\"[/dim]")
+    console.console.print()
 
     if doc_auto:
         console.console.print(f"[cyan]Document Types ({len(doc_auto)} pending):[/cyan]")
@@ -105,6 +108,12 @@ def task_review_mappings(mappings_mgr):
         for i, (raw, canonical) in enumerate(issuer_auto.items(), 1):
             console.console.print(f"  {i}. \"{raw}\" [dim]->[/dim] \"{canonical}\"")
         console.console.print()
+
+    console.console.print("[bold]Options:[/bold]")
+    console.console.print("  [green]a[/green] Approve all — confirm every mapping above")
+    console.console.print("  [cyan]r[/cyan] Review one-by-one — inspect each mapping individually")
+    console.console.print("  [dim]q[/dim] Quit — exit without changes")
+    console.console.print()
 
     choice = Prompt.ask(
         "Select option",
@@ -138,6 +147,7 @@ def _review_field_mappings(mappings_mgr, field: str, mappings_dict: dict):
 
     for raw, canonical in list(mappings_dict.items()):
         console.console.print(f"\n\"{raw}\" [dim]->[/dim] \"{canonical}\"")
+        console.console.print("  [green]c[/green] Confirm  [cyan]e[/cyan] Edit  [yellow]r[/yellow] Reject  [dim]s[/dim] Skip")
 
         action = Prompt.ask(
             "  Action",
@@ -224,6 +234,12 @@ def task_review_rejected(rejected_mgr: RejectedValuesManager, mappings_mgr: Mapp
             console.console.print(f"  {i}. \"{entry['raw']}\" [dim]->[/dim] LLM suggested \"{entry['normalized']}\"{count_str}")
         console.console.print()
 
+    console.console.print("[bold]Options:[/bold]")
+    console.console.print("  [cyan]r[/cyan] Review one-by-one — inspect each rejection individually")
+    console.console.print("  [yellow]c[/yellow] Clear all — remove all rejections from the list")
+    console.console.print("  [dim]q[/dim] Quit — exit without changes")
+    console.console.print()
+
     choice = Prompt.ask(
         "Select option",
         choices=["r", "c", "q"],
@@ -268,6 +284,7 @@ def _review_rejected_field(
 
         console.console.print(f"\nRaw: \"{raw}\"")
         console.console.print(f"LLM suggested: \"{normalized}\"")
+        console.console.print("  [green]a[/green] Add as new canonical  [cyan]m[/cyan] Map to existing  [yellow]i[/yellow] Ignore  [dim]s[/dim] Skip")
 
         action = Prompt.ask(
             "  Action",

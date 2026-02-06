@@ -1,12 +1,30 @@
 """Mappings manager for raw → canonical value persistence."""
 
+import logging
+import re
 import threading
+import unicodedata
 from pathlib import Path
 from typing import Optional
 
 from papertrail.constants import validate_field
 from papertrail.constants import FIELDS
 from papertrail.yaml_utils import load_yaml, save_yaml
+
+logger = logging.getLogger(__name__)
+
+
+def slugify_key(s: str) -> str:
+    """Normalize a raw value into a stable mapping key.
+
+    Rules: NFC normalize, casefold, strip punctuation (keep letters, digits,
+    spaces, hyphens), remove underscores, collapse whitespace/hyphens to
+    single hyphen, strip. Preserves accented characters. Idempotent.
+    """
+    s = unicodedata.normalize('NFC', s).casefold()
+    s = re.sub(r'[^\w\s-]', '', s, flags=re.UNICODE)
+    s = s.replace('_', '')
+    return re.sub(r'[\s-]+', '-', s).strip('-')
 
 
 class MappingsManager:
@@ -30,6 +48,8 @@ class MappingsManager:
         self._lock = threading.Lock()
         self.path = mappings_path
         self.data = self._load()
+        if self._needs_migration():
+            self._migrate_keys()
 
     def _load(self) -> dict:
         """Load mappings from YAML file, creating empty structure if missing."""
@@ -52,6 +72,53 @@ class MappingsManager:
         """Save mappings to YAML file."""
         save_yaml(self.path, self.data)
 
+    def _needs_migration(self) -> bool:
+        """Check if any mapping keys need slugification."""
+        for field in self.FIELDS:
+            for tier in ("confirmed", "auto"):
+                for key in self.data[field].get(tier, {}):
+                    if slugify_key(key) != key:
+                        return True
+        return False
+
+    def _migrate_keys(self) -> None:
+        """Slugify all mapping keys, merging collisions.
+
+        Collision rules:
+        - Same slug, same canonical: merge silently
+        - Same slug, different canonical: keep first, log warning
+        - Same slug in both confirmed and auto: remove from auto
+        """
+        for field in self.FIELDS:
+            for tier in ("confirmed", "auto"):
+                old_mappings = self.data[field].get(tier, {})
+                new_mappings = {}
+                for key, canonical in old_mappings.items():
+                    slug = slugify_key(key)
+                    if not slug:
+                        continue
+                    if slug in new_mappings:
+                        if new_mappings[slug] != canonical:
+                            logger.warning(
+                                "[MAPPING-MIGRATE] Collision in %s/%s: "
+                                "%r→%r and %r→%r both slugify to %r, keeping %r",
+                                field, tier, key, canonical,
+                                slug, new_mappings[slug], slug, new_mappings[slug],
+                            )
+                    else:
+                        new_mappings[slug] = canonical
+                self.data[field][tier] = new_mappings
+
+            # Remove auto entries that duplicate confirmed after slugification
+            confirmed = self.data[field]["confirmed"]
+            auto = self.data[field]["auto"]
+            duplicates = [k for k in auto if k in confirmed]
+            for k in duplicates:
+                del auto[k]
+
+        self._save()
+        logger.info("[MAPPING-MIGRATE] Slugified mapping keys in %s", self.path)
+
     @validate_field(default_return=None)
     def get_mapping(self, raw_value: str, field: str) -> Optional[str]:
         """Check if raw value has a known mapping.
@@ -65,6 +132,9 @@ class MappingsManager:
         Returns:
             Canonical value if found, None otherwise
         """
+        raw_value = slugify_key(raw_value)
+        if not raw_value:
+            return None
         section = self.data.get(field, {})
         # Check confirmed first, then auto
         result = section.get("confirmed", {}).get(raw_value)
@@ -91,6 +161,9 @@ class MappingsManager:
             save: If True, save to file immediately
         """
         with self._lock:
+            raw_value = slugify_key(raw_value)
+            if not raw_value:
+                return
             tier = "confirmed" if confirmed else "auto"
             self.data[field][tier][raw_value] = canonical
 
@@ -146,6 +219,9 @@ class MappingsManager:
         Returns:
             True if moved, False if not found in auto
         """
+        raw_value = slugify_key(raw_value)
+        if not raw_value:
+            return False
         auto = self.data[field].get("auto", {})
         if raw_value not in auto:
             return False
@@ -169,6 +245,9 @@ class MappingsManager:
         Returns:
             True if removed, False if not found
         """
+        raw_value = slugify_key(raw_value)
+        if not raw_value:
+            return False
         auto = self.data[field].get("auto", {})
         if raw_value not in auto:
             return False
@@ -200,6 +279,9 @@ class MappingsManager:
         Returns:
             True if updated, False if not found
         """
+        raw_value = slugify_key(raw_value)
+        if not raw_value:
+            return False
         # Check both tiers
         auto = self.data[field].get("auto", {})
         confirmed = self.data[field].get("confirmed", {})
