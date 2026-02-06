@@ -182,9 +182,6 @@ Raw: "New Vendor Inc" → Not found → LLM → "new-vendor" → Save mapping
 ## 🛠️ Development
 
 ```bash
-# Debug a classification
-python scripts/debug_classification.py /path/to/document.pdf
-
 # Check file hashes
 python scripts/check_hash.py /path/to/document.pdf
 ```
@@ -193,8 +190,7 @@ python scripts/check_hash.py /path/to/document.pdf
 
 | Issue | Solution |
 |-------|----------|
-| Classification returns `$UNKNOWN$` | Run `python scripts/debug_classification.py` to inspect LLM output |
-| Duplicates not detected | Run `python scripts/update_hashes.py /processed` to update content hashes |
+| Classification returns `$UNKNOWN$` | Check the extraction logs in `{processed_path}/logs/` for LLM output details |
 | High API costs | Switch to `google/gemini-2.5-flash` for 10-20x cost reduction |
 
 ## 📄 License
