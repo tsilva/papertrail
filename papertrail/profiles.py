@@ -5,6 +5,7 @@ Provides YAML-based configuration profiles for managing multiple environments
 (personal, work, testing) with a single file per environment.
 """
 
+import os
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -222,7 +223,15 @@ def resolve_paths_in_profile(profile: Profile) -> None:
 
 
 def get_profiles_dir() -> Path:
-    """Get the profiles directory path."""
+    """Get the profiles directory path.
+
+    Checks PAPERTRAIL_PROFILES_DIR env var first, falls back to repo profiles/.
+    """
+    env_dir = os.environ.get("PAPERTRAIL_PROFILES_DIR")
+    if env_dir:
+        path = Path(env_dir).expanduser()
+        if path.is_dir():
+            return path
     module_dir = Path(__file__).parent
     repo_root = module_dir.parent
     return repo_root / "profiles"
