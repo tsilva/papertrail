@@ -124,6 +124,28 @@ class NifApiConfig:
 
 
 @dataclass
+class ExportMappingRule:
+    """Single export mapping rule."""
+    match: Dict[str, str]  # e.g., {"document_type": "bank-statement"}
+    prefix: str            # e.g., "BNC_"
+
+
+@dataclass
+class ExportFileMappingsConfig:
+    """Export file mappings configuration."""
+    enabled: bool = False
+    output_subfolder: str = "remapped"
+    default_prefix: str = ""  # Prefix for files that don't match any rule
+    rules: List[ExportMappingRule] = field(default_factory=list)
+
+
+@dataclass
+class ExportConfig:
+    """Export configuration."""
+    file_mappings: ExportFileMappingsConfig = field(default_factory=ExportFileMappingsConfig)
+
+
+@dataclass
 class Profile:
     """Complete profile configuration."""
     profile: ProfileMetadata
@@ -136,6 +158,7 @@ class Profile:
     validations: ValidationsConfig = field(default_factory=ValidationsConfig)
     pipeline: PipelineConfig = field(default_factory=PipelineConfig)
     nif_api: NifApiConfig = field(default_factory=NifApiConfig)
+    export: ExportConfig = field(default_factory=ExportConfig)
     task_defaults: Dict[str, Any] = field(default_factory=dict)
     _profile_path: Optional[Path] = field(default=None, repr=False)
 
@@ -312,6 +335,22 @@ def _parse_profile_dict(data: Dict[str, Any], profile_path: Path) -> Profile:
         enabled=nif_api_data.get("enabled", False),
     )
 
+    export_data = data.get("export", {})
+    file_mappings_data = export_data.get("file_mappings", {})
+    file_mappings_rules = []
+    for rule_data in file_mappings_data.get("rules", []):
+        file_mappings_rules.append(ExportMappingRule(
+            match=rule_data.get("match", {}),
+            prefix=rule_data.get("prefix", ""),
+        ))
+    file_mappings = ExportFileMappingsConfig(
+        enabled=file_mappings_data.get("enabled", False),
+        output_subfolder=file_mappings_data.get("output_subfolder", "remapped"),
+        default_prefix=file_mappings_data.get("default_prefix", ""),
+        rules=file_mappings_rules,
+    )
+    export_config = ExportConfig(file_mappings=file_mappings)
+
     return Profile(
         profile=profile_meta,
         paths=paths,
@@ -323,6 +362,7 @@ def _parse_profile_dict(data: Dict[str, Any], profile_path: Path) -> Profile:
         validations=validations,
         pipeline=pipeline,
         nif_api=nif_api,
+        export=export_config,
         task_defaults=data.get("task_defaults", {}),
         _profile_path=profile_path
     )
