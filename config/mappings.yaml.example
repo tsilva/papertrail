@@ -6,75 +6,32 @@
 # Keys are slugified (lowercased, punctuation removed, whitespace collapsed)
 # so that minor variations like "Invoice" / "INVOICE" / "invoice" all match.
 #
-# Structure:
-#   - confirmed: User-validated mappings (trusted)
-#   - auto: Auto-added by LLM (pending review via 'review_mappings' command)
-#   - canonicals: Master list of valid canonical values
+# Canonical values are derived from the unique set of mapping values.
+# No separate canonicals list is needed — just add mappings.
 #
 # Copy this file to config/mappings.yaml and customize as needed.
 # The actual mappings.yaml is gitignored as it may contain personal vendor names.
 
 # Document type mappings (raw → canonical)
 document_types:
-  confirmed:
-    # User-validated mappings (trusted, won't be re-queried)
-    "invoice": "invoice"
+  mappings:
+    "bank-statement": "statement"
+    "contract": "contract"
     "factura": "invoice"
+    "invoice": "invoice"
     "receipt": "receipt"
     "recibo": "receipt"
     "statement": "statement"
-    "bank-statement": "statement"
-    "contract": "contract"
-
-  auto:
-    # Auto-added by LLM (pending review)
-    # Use 'papertrail review_mappings' to approve/edit these
-    # Example:
-    # "tax-invoice": "invoice"
-
-  canonicals:
-    # Master list of valid canonical values
-    # Add new canonical types here before using them
-    - "invoice"
-    - "receipt"
-    - "statement"
-    - "contract"
-    - "letter"
-    - "report"
-    - "certificate"
-    - "license"
-    - "permit"
-    - "tax-document"
-    - "pay-slip"
-    - "utility-bill"
-    - "$UNKNOWN$"
 
 # Issuing party mappings (raw → canonical)
 issuing_parties:
-  confirmed:
-    # User-validated mappings
-    # Common variations → canonical name
-    "anthropic-pbc": "anthropic"
-    "anthropic-inc": "anthropic"
-    "anthropic": "anthropic"
+  mappings:
+    "amazon": "amazon"
     "amazon-web-services": "amazon"
     "amazoncom": "amazon"
-    "amazon": "amazon"
-    "google-llc": "google"
-    "google-inc": "google"
+    "anthropic": "anthropic"
+    "anthropic-inc": "anthropic"
+    "anthropic-pbc": "anthropic"
     "google": "google"
-
-  auto:
-    # Auto-added by LLM (pending review)
-    # Example:
-    # "aws": "amazon"
-
-  canonicals:
-    # Master list of valid canonical issuing parties
-    - "anthropic"
-    - "amazon"
-    - "google"
-    - "microsoft"
-    - "apple"
-    - "openai"
-    - "$UNKNOWN$"
+    "google-inc": "google"
+    "google-llc": "google"

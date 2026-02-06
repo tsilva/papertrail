@@ -347,18 +347,18 @@ Respond in JSON format:
             if doc_logger:
                 doc_logger.log_normalization("issuing_party", raw_metadata.issuing_party, issuing_party, tier=2)
 
-        # Save successful LLM mappings for reuse (as 'auto' pending review)
+        # Save successful LLM mappings for reuse
         # IMPORTANT: Don't save mappings that result in $UNKNOWN$ - these are rejections, not valid mappings
         if mappings:
             if need_doc_type and raw_metadata.document_type != "$UNKNOWN$" and doc_type != "$UNKNOWN$":
                 mappings.add_mapping(
-                    raw_metadata.document_type, doc_type, "document_types", confirmed=False
+                    raw_metadata.document_type, doc_type, "document_types"
                 )
                 if doc_logger:
                     doc_logger.log_mapping_saved("document_types", raw_metadata.document_type, doc_type)
             if need_issuing_party and raw_metadata.issuing_party != "$UNKNOWN$" and issuing_party != "$UNKNOWN$":
                 mappings.add_mapping(
-                    raw_metadata.issuing_party, issuing_party, "issuing_parties", confirmed=False
+                    raw_metadata.issuing_party, issuing_party, "issuing_parties"
                 )
                 if doc_logger:
                     doc_logger.log_mapping_saved("issuing_parties", raw_metadata.issuing_party, issuing_party)

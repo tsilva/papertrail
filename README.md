@@ -136,8 +136,7 @@ python main.py export_excel /path/to/processed --excel_output_path invoices.xlsx
 | `pipeline` | Full end-to-end workflow |
 | `gmail_download` | Download Gmail attachments |
 | `bootstrap_mappings` | Populate mappings from existing metadata |
-| `review_mappings` | Interactive review of auto-added mappings |
-| `add_canonical` | Add a new canonical value |
+| `review_rejected` | Review rejected normalization values |
 
 ### Full Pipeline
 
