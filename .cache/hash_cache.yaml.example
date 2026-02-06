@@ -12,7 +12,7 @@
 #   - Cold cache: ~4-8x faster (parallelization across CPU cores)
 #   - Warm cache: ~50-100x faster (only fast hashing needed)
 #
-# Copy this file to config/hash_cache.yaml to get started.
+# This file is auto-generated in .cache/hash_cache.yaml.
 # The actual hash_cache.yaml is gitignored as it is auto-generated.
 
 # Cache entries: file_hash -> content_hash

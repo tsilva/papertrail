@@ -42,42 +42,11 @@ def get_repo_root() -> Path:
     return Path(__file__).parent.parent
 
 
-def get_config_paths() -> dict[str, Path]:
-    """
-    Get paths to all configuration files.
-
-    If a profile is active, uses paths from the profile.
-    Otherwise, falls back to legacy config directory paths.
-
-    Returns:
-        Dictionary with configuration file paths
-    """
-    profile = get_current_profile()
-    repo_root = get_repo_root()
-    config_dir = repo_root / "config"
-
-    # Build base paths (legacy)
-    paths = {
-        "passwords": config_dir / "passwords.txt",
-        "validations": config_dir / "file_check_validations.json",
-        "document_types": config_dir / "document_types.json",
-    }
-
-    # Override with profile paths if available
-    if profile:
-        # Passwords: use file path if specified (for legacy support)
-        if profile.passwords.passwords_file:
-            paths["passwords"] = Path(profile.passwords.passwords_file)
-
-        # Validations: use file path if specified (for legacy support)
-        if profile.validations.validations_file:
-            paths["validations"] = Path(profile.validations.validations_file)
-
-        # Document types fallback file
-        if profile.document_types.fallback_file:
-            paths["document_types"] = Path(profile.document_types.fallback_file)
-
-    return paths
+def get_cache_dir() -> Path:
+    """Get the cache directory path, creating it if needed."""
+    cache_dir = get_repo_root() / ".cache"
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    return cache_dir
 
 
 def get_gmail_config_paths() -> dict[str, Path]:
@@ -91,13 +60,13 @@ def get_gmail_config_paths() -> dict[str, Path]:
         Dictionary with Gmail config file paths
     """
     profile = get_current_profile()
-    config_dir = get_repo_root() / "config"
+    credentials_dir = get_repo_root() / ".credentials"
 
-    # Build base paths (legacy)
+    # Build base paths
     paths = {
-        "credentials": config_dir / "gmail_credentials.json",
-        "token": config_dir / "gmail_token.json",
-        "settings": config_dir / "gmail_settings.json",
+        "credentials": credentials_dir / "gmail_credentials.json",
+        "token": credentials_dir / "gmail_token.json",
+        "settings": credentials_dir / "gmail_settings.json",
     }
 
     # Override with profile paths if available

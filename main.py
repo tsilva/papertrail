@@ -50,7 +50,7 @@ def require_path(
     return p
 
 from papertrail.config import (
-    get_config_paths,
+    get_cache_dir,
     get_openai_client,
     set_current_profile,
 )
@@ -103,7 +103,6 @@ from dataclasses import dataclass
 @dataclass
 class AppContext:
     """Runtime application context holding all initialized resources."""
-    config_paths: dict
     model_id: str
     openai_client: any
     mappings_manager: any
@@ -126,12 +125,12 @@ def initialize_config(profile_name: Optional[str] = None) -> None:
     global _ctx
 
     profiles_dir = get_profiles_dir()
-    profiles_exist = profiles_dir.exists() and any(profiles_dir.glob("*.yaml"))
+    profiles_exist = profiles_dir.exists() and list_available_profiles()
 
     if not profiles_exist:
         raise ProfileNotFoundError(
-            "No profiles found. Create a profile from profiles/*.yaml.example. "
-            "See profiles/README.md for documentation."
+            "No profiles found. Create a profile directory (e.g. profiles/default/) "
+            "with a profile.yaml file. See profiles/README.md for documentation."
         )
 
     if profile_name is not None:
@@ -145,7 +144,7 @@ def initialize_config(profile_name: Optional[str] = None) -> None:
         else:
             raise ProfileNotFoundError(
                 f"No 'default' profile found. Available profiles: {', '.join(available)}. "
-                "Use --profile to specify one, or create profiles/default.yaml."
+                "Use --profile to specify one, or create profiles/default/profile.yaml."
             )
 
     if profile.profile.description:
@@ -163,10 +162,11 @@ def initialize_config(profile_name: Optional[str] = None) -> None:
         console.error("Please check your network connection and the base_url in your profile.", indent=False)
         sys.exit(1)
 
-    config_dir = Path(__file__).parent / "config"
-    mappings_path = config_dir / "mappings.yaml"
-    rejected_path = config_dir / "rejected_values.yaml"
-    nif_cache_path = config_dir / "nif_cache.yaml"
+    profile_dir = profile.profile_dir
+    cache_dir = get_cache_dir()
+    mappings_path = profile_dir / "mappings.yaml"
+    rejected_path = profile_dir / "rejected_values.yaml"
+    nif_cache_path = cache_dir / "nif_cache.yaml"
 
     # Initialize NIF cache if enabled
     nif_cache = None
@@ -175,7 +175,6 @@ def initialize_config(profile_name: Optional[str] = None) -> None:
         logger.info(f"NIF lookup enabled with {len(nif_cache)} cached entries")
 
     _ctx = AppContext(
-        config_paths=get_config_paths(),
         model_id=profile.openrouter.model_id,
         openai_client=get_openai_client(),
         mappings_manager=MappingsManager(mappings_path),
