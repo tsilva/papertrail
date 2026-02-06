@@ -80,4 +80,3 @@ from papertrail.tasks.mappings_tasks import (
 from papertrail.tasks.gmail_task import task_gmail_download
 from papertrail.tasks.pipeline import pipeline
 from papertrail.tasks.qr_inventory import task_qr_inventory
-from papertrail.tasks.export_mappings import task_apply_export_mappings
