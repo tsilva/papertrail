@@ -81,8 +81,6 @@ from papertrail.tasks import (
     check_files_exist,
     task_backfill_page_count,
     task_bootstrap_mappings,
-    task_review_mappings,
-    task_add_canonical,
     task_review_rejected,
     task_gmail_download,
     pipeline,
@@ -288,7 +286,7 @@ def main():
     parser.add_argument("task", type=str, choices=[
         'extract_new', 'rename_files', 'validate_metadata', 'export_excel',
         'copy_matching', 'export_all_dates', 'check_files_exist', 'pipeline',
-        'gmail_download', 'bootstrap_mappings', 'review_mappings', 'add_canonical',
+        'gmail_download', 'bootstrap_mappings',
         'backfill_page_count', 'review_rejected', 'sync', 'validate_extraction',
         'qr_inventory', 'apply_export_mappings'
     ], help="Task to perform.")
@@ -304,8 +302,6 @@ def main():
     parser.add_argument("--run_merge", action="store_true", help="Run PDF merge for changed directories.")
     parser.add_argument("--check_schema_path", type=str, help="Validation schema path.")
     parser.add_argument("--export_date", type=str, help="Export date in YYYY-MM format (for pipeline).")
-    parser.add_argument("--field", type=str, help="Field name for add_canonical (document_type or issuing_party).")
-    parser.add_argument("--canonical", type=str, help="Canonical value to add.")
     parser.add_argument("--dry_run", action="store_true", help="Show what would be changed without modifying files (for sync).")
     parser.add_argument("--all_unknown", action="store_true", help="Re-extract all files with $UNKNOWN$ values (for sync).")
     parser.add_argument("--workers", "-w", type=int, default=1, help="Number of parallel workers for sync (default: 1).")
@@ -333,18 +329,8 @@ def main():
         task_gmail_download()
         return
 
-    if args.task == "review_mappings":
-        task_review_mappings(get_ctx().mappings_manager)
-        return
-
     if args.task == "review_rejected":
         task_review_rejected(get_ctx().rejected_manager, get_ctx().mappings_manager)
-        return
-
-    if args.task == "add_canonical":
-        if not args.field or not args.canonical:
-            parser.error("add_canonical requires --field and --canonical arguments.")
-        task_add_canonical(get_ctx().mappings_manager, args.field, args.canonical)
         return
 
     if args.task == "bootstrap_mappings":

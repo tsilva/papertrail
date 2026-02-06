@@ -34,12 +34,18 @@ def _load_mappings_canonicals(field: str) -> set[str]:
                     mappings = yaml.safe_load(f)
 
                 if mappings and field in mappings:
-                    canonicals = mappings[field].get("canonicals", [])
-                    if canonicals:
-                        values.update(canonicals)
-                    for section in ["confirmed", "auto"]:
-                        if section in mappings[field]:
-                            values.update(mappings[field][section].values())
+                    field_data = mappings[field]
+                    # Flat format: single mappings dict
+                    if "mappings" in field_data:
+                        values.update(field_data["mappings"].values())
+                    else:
+                        # Backward compat: old confirmed/auto/canonicals format
+                        canonicals = field_data.get("canonicals", [])
+                        if canonicals:
+                            values.update(canonicals)
+                        for section in ["confirmed", "auto"]:
+                            if section in field_data:
+                                values.update(field_data[section].values())
 
                 break  # Found and loaded, stop searching
             except Exception:

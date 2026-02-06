@@ -72,8 +72,6 @@ from papertrail.tasks.export import (
 )
 from papertrail.tasks.mappings_tasks import (
     task_bootstrap_mappings,
-    task_review_mappings,
-    task_add_canonical,
     task_review_rejected,
 )
 from papertrail.tasks.gmail_task import task_gmail_download
