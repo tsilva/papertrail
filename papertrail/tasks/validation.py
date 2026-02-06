@@ -1,12 +1,14 @@
 """Validation tasks."""
 
 import json
+import re
 from datetime import datetime
 from pathlib import Path
 
 from papertrail.console import get_console
 from papertrail.hashing import hash_file_fast, hash_file_content, HashCache
 from papertrail.logging_utils import get_logger, setup_task_logging
+from papertrail.mappings import slugify_key
 from papertrail.metadata import load_validated_metadata
 from papertrail.models import DocumentMetadata
 from papertrail.pdf import get_page_count
@@ -239,3 +241,119 @@ def task_backfill_page_count(processed_path: Path):
         console.success(f"{updated} updated, {skipped} skipped (already had page_count)", indent=False)
 
     logger.debug(f"Backfill complete: {updated} updated, {skipped} skipped, {errors} errors")
+
+
+def task_backfill_mapping_keys(processed_path: Path):
+    """Backfill document_type_key and issuing_party_key for existing metadata files."""
+    console = get_console()
+    setup_task_logging(processed_path, "backfill_mapping_keys")
+
+    updated = 0
+    skipped = 0
+    errors = 0
+
+    for metadata_path, pdf_path, data in load_validated_metadata(
+        processed_path, require_pdf=False, validate=False, show_progress=True, progress_desc="Backfilling mapping keys"
+    ):
+        try:
+            doc_type_raw = data.get("document_type_raw")
+            issuer_raw = data.get("issuing_party_raw")
+
+            expected_dt_key = slugify_key(doc_type_raw) if doc_type_raw else None
+            expected_ip_key = slugify_key(issuer_raw) if issuer_raw else None
+
+            if data.get("document_type_key") == expected_dt_key and data.get("issuing_party_key") == expected_ip_key:
+                skipped += 1
+                continue
+
+            if expected_dt_key is not None:
+                data["document_type_key"] = expected_dt_key
+            if expected_ip_key is not None:
+                data["issuing_party_key"] = expected_ip_key
+            data["update_date"] = datetime.now().strftime("%Y-%m-%d")
+
+            with open(metadata_path, "w", encoding="utf-8") as f:
+                json.dump(data, f, indent=2)
+
+            updated += 1
+
+        except Exception as e:
+            logger.error(f"Failed to process {metadata_path.name}: {e}")
+            errors += 1
+
+    if updated == 0 and skipped == 0 and errors == 0:
+        console.warning("No metadata files found", indent=False)
+        return
+
+    if errors > 0:
+        console.warning(f"{updated} updated, {skipped} skipped, {errors} errors", indent=False)
+    else:
+        console.success(f"{updated} updated, {skipped} skipped (already had mapping keys)", indent=False)
+
+    logger.debug(f"Backfill mapping keys complete: {updated} updated, {skipped} skipped, {errors} errors")
+
+
+_MONTH_NAMES = {
+    'jan', 'fev', 'mar', 'abr', 'mai', 'jun', 'jul', 'ago', 'set', 'out', 'nov', 'dez',
+    'janeiro', 'fevereiro', 'marco', 'abril', 'maio', 'junho',
+    'julho', 'agosto', 'setembro', 'outubro', 'novembro', 'dezembro',
+    'feb', 'apr', 'may', 'aug', 'sep', 'oct', 'dec',
+    'january', 'february', 'march', 'april', 'june',
+    'july', 'august', 'september', 'october', 'november', 'december',
+}
+
+
+def has_temporal_tokens(key: str) -> bool:
+    """Check if a slugified key contains temporal tokens (month names or digit-only segments)."""
+    parts = key.split('-')
+    return any(p in _MONTH_NAMES or re.fullmatch(r'\d+', p) for p in parts)
+
+
+def task_tag_dated_types(processed_path: Path, dry_run: bool = False):
+    """Tag documents whose document_type_key contains date/temporal patterns.
+
+    Sets document_type to $UNKNOWN$ so they can be re-extracted with sync --all_unknown.
+    """
+    console = get_console()
+    setup_task_logging(processed_path, "tag_dated_types")
+
+    tagged = 0
+    skipped = 0
+    errors = 0
+
+    for metadata_path, pdf_path, data in load_validated_metadata(
+        processed_path, require_pdf=False, validate=False, show_progress=True, progress_desc="Scanning for dated types"
+    ):
+        try:
+            dt_key = data.get("document_type_key")
+            if not dt_key or not has_temporal_tokens(dt_key):
+                skipped += 1
+                continue
+
+            if dry_run:
+                logger.info(f"[DRY-RUN] Would tag: {metadata_path.name} (key: {dt_key})")
+                tagged += 1
+                continue
+
+            data["document_type"] = "$UNKNOWN$"
+            data["update_date"] = datetime.now().strftime("%Y-%m-%d")
+
+            with open(metadata_path, "w", encoding="utf-8") as f:
+                json.dump(data, f, indent=2)
+
+            logger.info(f"Tagged: {metadata_path.name} (key: {dt_key})")
+            tagged += 1
+
+        except Exception as e:
+            logger.error(f"Failed to process {metadata_path.name}: {e}")
+            errors += 1
+
+    if tagged == 0 and skipped == 0 and errors == 0:
+        console.warning("No metadata files found", indent=False)
+        return
+
+    prefix = "[DRY-RUN] " if dry_run else ""
+    if errors > 0:
+        console.warning(f"{prefix}{tagged} tagged, {skipped} skipped, {errors} errors", indent=False)
+    else:
+        console.success(f"{prefix}{tagged} tagged, {skipped} skipped (no temporal pattern)", indent=False)
