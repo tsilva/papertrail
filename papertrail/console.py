@@ -5,7 +5,6 @@ from dataclasses import dataclass
 from typing import Any, Generator, Sequence
 
 from rich.console import Console
-from rich.panel import Panel
 from rich.progress import (
     BarColumn,
     MofNCompleteColumn,
@@ -16,9 +15,7 @@ from rich.progress import (
     TimeElapsedColumn,
 )
 from rich.rule import Rule
-from rich.status import Status
 from rich.table import Table
-from rich.text import Text
 
 
 @dataclass
@@ -175,7 +172,7 @@ class PapertrailConsole:
         """Context manager for a step with spinner progress indicator.
 
         Shows a spinner while the step is running, then replaces it with
-        an appropriate symbol (✓/!/✗) when the step completes.
+        an appropriate symbol (\u2713/!/\u2717) when the step completes.
 
         Args:
             message: Step description to display.
@@ -187,7 +184,7 @@ class PapertrailConsole:
             with console.step_progress("Download files") as step:
                 # do work...
                 step.success("Downloaded 5 files")
-            # Output: ✓ Download files — Downloaded 5 files
+            # Output: \u2713 Download files \u2014 Downloaded 5 files
         """
         ctx = StepContext()
 
@@ -206,7 +203,7 @@ class PapertrailConsole:
         # Print the final result line
         result = ctx.result
         if result.status == "success":
-            symbol = "[green]✓[/green]"
+            symbol = "[green]\u2713[/green]"
             msg_style = "[green]"
             detail_style = "[dim]"
         elif result.status == "warning":
@@ -214,17 +211,17 @@ class PapertrailConsole:
             msg_style = "[yellow]"
             detail_style = "[dim yellow]"
         elif result.status == "error":
-            symbol = "[red]✗[/red]"
+            symbol = "[red]\u2717[/red]"
             msg_style = "[red]"
             detail_style = "[red]"
         else:
             # No result set, default to success
-            symbol = "[green]✓[/green]"
+            symbol = "[green]\u2713[/green]"
             msg_style = "[green]"
             detail_style = "[dim]"
 
         if result.message:
-            self.console.print(f"{symbol} {msg_style}{message}[/] — {detail_style}{result.message}[/]")
+            self.console.print(f"{symbol} {msg_style}{message}[/] \u2014 {detail_style}{result.message}[/]")
         else:
             self.console.print(f"{symbol} {msg_style}{message}[/]")
 
@@ -315,42 +312,6 @@ class PapertrailConsole:
                 transient=transient,
             )
 
-    def summary_table(
-        self,
-        title: str,
-        rows: Sequence[tuple[str, str, str]],
-        headers: tuple[str, str, str] = ("Item", "Status", "Details"),
-    ) -> None:
-        """Display a formatted summary table.
-
-        Args:
-            title: Table title.
-            rows: Sequence of (item, status, details) tuples.
-                  Status should be "FOUND", "MISSING", "OK", "ERROR", etc.
-            headers: Column headers.
-        """
-        table = Table(title=title, show_header=True, header_style="bold")
-
-        table.add_column(headers[0], style="cyan", no_wrap=True)
-        table.add_column(headers[1], justify="center")
-        table.add_column(headers[2], style="dim")
-
-        for item, status, details in rows:
-            status_upper = status.upper()
-            if status_upper in ("FOUND", "OK", "PASS", "SUCCESS"):
-                status_styled = f"[green]\u2713 {status}[/green]"
-            elif status_upper in ("MISSING", "ERROR", "FAIL"):
-                status_styled = f"[red]\u2717 {status}[/red]"
-            elif status_upper in ("SKIP", "SKIPPED", "WARN", "WARNING"):
-                status_styled = f"[yellow]! {status}[/yellow]"
-            else:
-                status_styled = status
-
-            table.add_row(item, status_styled, details)
-
-        self.console.print()
-        self.console.print(table)
-
     def validation_table(
         self,
         title: str,
@@ -381,35 +342,6 @@ class PapertrailConsole:
         self.console.print()
         self.console.print(table)
 
-    def stats(self, **kwargs: Any) -> None:
-        """Display inline stats in a compact format.
-
-        Args:
-            **kwargs: Key-value pairs to display as stats.
-        """
-        parts = []
-        for key, value in kwargs.items():
-            # Convert underscores to spaces and title case
-            label = key.replace("_", " ").title()
-            parts.append(f"[cyan]{label}:[/cyan] {value}")
-
-        self.console.print("   " + " | ".join(parts))
-
-    def panel(
-        self,
-        content: str,
-        title: str | None = None,
-        style: str = "cyan",
-    ) -> None:
-        """Display content in a bordered panel.
-
-        Args:
-            content: Panel content.
-            title: Optional panel title.
-            style: Border style color.
-        """
-        self.console.print(Panel(content, title=title, border_style=style))
-
 
 # Global console instance for convenience
 _console: PapertrailConsole | None = None
@@ -425,9 +357,3 @@ def get_console() -> PapertrailConsole:
     if _console is None:
         _console = PapertrailConsole()
     return _console
-
-
-def reset_console() -> None:
-    """Reset the global console instance (useful for testing)."""
-    global _console
-    _console = None

@@ -24,23 +24,6 @@ except ImportError:
             return json.load(f)
 
 
-def load_metadata_file(json_path: Path) -> DocumentMetadata:
-    """
-    Load and validate metadata from a JSON file.
-
-    Args:
-        json_path: Path to the JSON metadata file
-
-    Returns:
-        Validated DocumentMetadata instance
-
-    Raises:
-        Various validation errors if the file is invalid
-    """
-    data = _load_json_fast(json_path)
-    return DocumentMetadata.model_validate(data)
-
-
 def load_json_data(json_path: Path) -> dict:
     """
     Load raw JSON data from a file.
