@@ -274,14 +274,7 @@ def main():
         "--profile",
         type=str,
         help="Configuration profile to use (e.g., 'default', 'personal', 'work'). "
-             "If not specified, uses 'default' profile if available, otherwise legacy .env configuration."
-    )
-    parser.add_argument(
-        "--env",
-        type=str,
-        default="bridge",
-        help="Environment to use (loads .env.{name}). Default: bridge. "
-             "Example: --env local loads .env.local for local LLM proxy."
+             "If not specified, uses 'default' profile if available."
     )
     parser.add_argument(
         "--verbose", "-v",

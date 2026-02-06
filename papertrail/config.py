@@ -21,7 +21,7 @@ def set_current_profile(profile: Optional[Profile]) -> None:
     Set the current active profile.
 
     Args:
-        profile: Profile to set as active, or None to use legacy .env mode
+        profile: Profile to set as active
     """
     global _current_profile
     _current_profile = profile
@@ -32,7 +32,7 @@ def get_current_profile() -> Optional[Profile]:
     Get the current active profile.
 
     Returns:
-        Current profile, or None if using legacy .env mode
+        Current profile, or None if not set
     """
     return _current_profile
 
@@ -54,7 +54,7 @@ def get_gmail_config_paths() -> dict[str, Path]:
     Get paths to Gmail API configuration files.
 
     If a profile is active, uses paths from the profile.
-    Otherwise, falls back to legacy config directory paths.
+    Otherwise, uses default credential directory paths.
 
     Returns:
         Dictionary with Gmail config file paths
