@@ -109,6 +109,7 @@ def setup_logging(
     root = logging.getLogger('papertrail')
     root.setLevel(logging.DEBUG)
     root.handlers.clear()
+    root.propagate = False
 
     # Console handler - use Rich for styled output
     if use_rich:
