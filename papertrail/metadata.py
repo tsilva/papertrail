@@ -178,12 +178,10 @@ def build_hash_index(directory: Path) -> tuple[dict[str, Path], dict[str, Path]]
 
     for json_path, data in iter_json_files(directory):
         pdf_path = json_path.with_suffix(".pdf")
-        # Index by content hash (primary) - support both old and new field names
-        content_hash = data.get('content_hash') or data.get('hash')
+        content_hash = data.get('content_hash')
         if content_hash:
             content_hash_index[content_hash] = pdf_path
-        # Index by file hash (for quick filtering)
-        file_hash = data.get('file_hash') or data.get('_old_hash')
+        file_hash = data.get('file_hash')
         if file_hash:
             file_hash_index[file_hash] = pdf_path
 
@@ -224,29 +222,7 @@ def save_metadata_json(pdf_path: Path, metadata: DocumentMetadata) -> None:
     """
     json_path = pdf_path.with_suffix('.json')
     with open(json_path, "w", encoding="utf-8") as f:
-        json.dump(metadata.model_dump(by_alias=True), f, indent=4, ensure_ascii=False)
-
-
-def get_field_with_aliases(data: dict, field_name: str, aliases: list[str]):
-    """
-    Get field value, falling back to aliases if needed.
-
-    Useful for handling field name migrations (e.g., 'content_hash' vs 'hash').
-
-    Args:
-        data: Dictionary to search
-        field_name: Primary field name
-        aliases: List of alternative field names to try
-
-    Returns:
-        Field value or None if not found
-    """
-    if field_name in data:
-        return data[field_name]
-    for alias in aliases:
-        if alias in data:
-            return data[alias]
-    return None
+        json.dump(metadata.model_dump(), f, indent=4, ensure_ascii=False)
 
 
 def load_validated_metadata(

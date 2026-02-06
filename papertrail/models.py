@@ -87,14 +87,18 @@ class DocumentMetadata(BaseModel):
     reasoning: str = Field(description="Why this classification was chosen.")
 
     # Hash and timestamp fields
-    content_hash: str = Field(description="Content-based SHA256 hash (first 8 chars).", alias="hash")
-    file_hash: Optional[str] = Field(default=None, description="File-based SHA256 hash for quick filtering.", alias="_old_hash")
+    content_hash: str = Field(description="Content-based SHA256 hash (first 8 chars).")
+    file_hash: Optional[str] = Field(default=None, description="File-based SHA256 hash for quick filtering.")
     create_date: Optional[str] = Field(default=None, description="Date this metadata was created.")
     update_date: Optional[str] = Field(default=None, description="Date this metadata was last updated.")
 
     # Raw extracted values before normalization
     document_type_raw: Optional[str] = Field(default=None, description="Original document type as extracted.")
     issuing_party_raw: Optional[str] = Field(default=None, description="Original issuing party as extracted.")
+
+    # Slugified mapping keys for traceability (derived from *_raw via slugify_key)
+    document_type_key: Optional[str] = Field(default=None, description="Slugified mapping key for document type lookup.")
+    issuing_party_key: Optional[str] = Field(default=None, description="Slugified mapping key for issuing party lookup.")
 
     # Document properties
     page_count: Optional[int] = Field(default=None, description="Number of pages in the PDF document.")
@@ -103,9 +107,6 @@ class DocumentMetadata(BaseModel):
 
     # QR code data
     qrcode: Optional[dict] = Field(default=None, description="Raw QR code data if extracted.")
-
-    class Config:
-        populate_by_name = True
 
     @field_validator('issue_date', mode='before')
     @classmethod

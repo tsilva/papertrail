@@ -80,6 +80,8 @@ from papertrail.tasks import (
     task_export_all_dates,
     check_files_exist,
     task_backfill_page_count,
+    task_backfill_mapping_keys,
+    task_tag_dated_types,
     task_bootstrap_mappings,
     task_review_rejected,
     task_gmail_download,
@@ -287,7 +289,8 @@ def main():
         'extract_new', 'rename_files', 'validate_metadata', 'export_excel',
         'copy_matching', 'export_all_dates', 'check_files_exist', 'pipeline',
         'gmail_download', 'bootstrap_mappings',
-        'backfill_page_count', 'review_rejected', 'sync', 'validate_extraction',
+        'backfill_page_count', 'backfill_mapping_keys', 'tag_dated_types',
+        'review_rejected', 'sync', 'validate_extraction',
         'qr_inventory', 'apply_export_mappings'
     ], help="Task to perform.")
     parser.add_argument("processed_path", type=str, nargs='?', help="Path to output folder.")
@@ -341,6 +344,16 @@ def main():
     if args.task == "backfill_page_count":
         processed = require_path(parser, args.processed_path or get_profile_path("processed"), "processed_path")
         task_backfill_page_count(processed)
+        return
+
+    if args.task == "backfill_mapping_keys":
+        processed = require_path(parser, args.processed_path or get_profile_path("processed"), "processed_path")
+        task_backfill_mapping_keys(processed)
+        return
+
+    if args.task == "tag_dated_types":
+        processed = require_path(parser, args.processed_path or get_profile_path("processed"), "processed_path")
+        task_tag_dated_types(processed, dry_run=args.dry_run)
         return
 
     if args.task == "sync":

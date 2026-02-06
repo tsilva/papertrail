@@ -27,6 +27,7 @@ from papertrail.llm import (
 from papertrail.pdf import render_pdf_to_images, find_pdf_files, get_page_count
 from papertrail.metadata import build_hash_index, save_metadata_json
 from papertrail.hashing import hash_file_fast, hash_file_content
+from papertrail.mappings import slugify_key
 
 def enum_value(v):
     """Extract value from enum or return as-is."""
@@ -303,6 +304,8 @@ def classify_pdf_document(pdf_path: Path, file_hash: str, failure_logger=None,
             content_hash=file_hash,
             document_type_raw=raw_metadata.document_type,
             issuing_party_raw=raw_metadata.issuing_party,
+            document_type_key=slugify_key(raw_metadata.document_type) if raw_metadata.document_type else None,
+            issuing_party_key=slugify_key(raw_metadata.issuing_party) if raw_metadata.issuing_party else None,
             issuer_tax_number=final_tax_number,
             locale=final_locale,
             qrcode=qr_raw_data,
@@ -582,10 +585,10 @@ def task_sync(processed_path: Path, dry_run: bool = False,
                     file_hash = hash_file_fast(pdf_path)
                     create_date = datetime.now().strftime("%Y-%m-%d")
                 else:
-                    content_hash = old_data.get("content_hash") or old_data.get("hash")
+                    content_hash = old_data.get("content_hash")
                     if not content_hash:
                         return (metadata_path, old_data, None, "No content_hash in metadata")
-                    file_hash = old_data.get("file_hash") or old_data.get("_old_hash")
+                    file_hash = old_data.get("file_hash")
                     create_date = old_data.get("create_date")
 
                 new_metadata = classify_pdf_document(pdf_path, content_hash, doc_logger=thread_doc_logger)

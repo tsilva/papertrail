@@ -65,6 +65,8 @@ from papertrail.tasks.validation import (
     validate_merged_pdf,
     check_files_exist,
     task_backfill_page_count,
+    task_backfill_mapping_keys,
+    task_tag_dated_types,
 )
 from papertrail.tasks.export import (
     export_metadata_to_excel,
