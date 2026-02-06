@@ -218,7 +218,7 @@ class DocumentLogger:
         """Log raw extracted metadata fields."""
         parts = []
         for key in ("document_type", "document_title", "issuing_party", "issue_date", "confidence",
-                     "service_name", "total_amount", "total_amount_currency", "reasoning"):
+                     "total_amount", "total_amount_currency", "reasoning"):
             val = raw_metadata_dict.get(key)
             if val is not None:
                 parts.append(f'{key}="{val}"' if isinstance(val, str) else f"{key}={val}")
@@ -250,7 +250,7 @@ class DocumentLogger:
         """Log final saved metadata values."""
         parts = []
         for key in ("document_type", "issuing_party", "date_issued",
-                     "total_amount", "total_amount_currency", "service_name"):
+                     "total_amount", "total_amount_currency", "document_title"):
             val = metadata_dict.get(key)
             if val is not None:
                 parts.append(f"{key}={val}")

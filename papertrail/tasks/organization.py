@@ -30,8 +30,8 @@ def file_name_from_metadata(metadata: DocumentMetadata, file_hash: str) -> str:
         sanitize_filename_component(metadata.issuing_party.value)
     ]
 
-    if metadata.service_name:
-        parts.append(sanitize_filename_component(metadata.service_name))
+    if metadata.document_title:
+        parts.append(sanitize_filename_component(metadata.document_title))
 
     if metadata.total_amount is not None:
         amount = f"{metadata.total_amount:.0f}" if metadata.total_amount.is_integer() else f"{metadata.total_amount:.2f}"

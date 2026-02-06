@@ -81,7 +81,6 @@ from papertrail.tasks import (
     check_files_exist,
     task_backfill_page_count,
     task_backfill_mapping_keys,
-    task_backfill_document_title,
     task_tag_dated_types,
     task_fix_unicode,
     task_bootstrap_mappings,
@@ -285,7 +284,7 @@ def main():
         'extract_new', 'rename_files', 'validate_metadata', 'export_excel',
         'copy_matching', 'export_all_dates', 'check_files_exist', 'pipeline',
         'gmail_download', 'bootstrap_mappings',
-        'backfill_page_count', 'backfill_mapping_keys', 'backfill_document_title', 'tag_dated_types',
+        'backfill_page_count', 'backfill_mapping_keys', 'tag_dated_types',
         'review_rejected', 'fix_unicode', 'sync', 'validate_extraction',
         'qr_inventory', 'apply_export_mappings'
     ], help="Task to perform (default: pipeline).")
@@ -345,11 +344,6 @@ def main():
     if args.task == "backfill_mapping_keys":
         processed = require_path(parser, args.processed_path or get_profile_path("processed"), "processed_path")
         task_backfill_mapping_keys(processed)
-        return
-
-    if args.task == "backfill_document_title":
-        processed = require_path(parser, args.processed_path or get_profile_path("processed"), "processed_path")
-        task_backfill_document_title(processed)
         return
 
     if args.task == "tag_dated_types":
