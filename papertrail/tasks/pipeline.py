@@ -258,7 +258,7 @@ def pipeline(export_date_arg=None, processed_path_override=None):
     with console.step_progress("Regenerate orphaned PDFs") as step:
         try:
             stdout, _ = run_step(
-                f'"{sys.executable}" "{main_script}" regenerate_orphans "{PROCESSED_FILES_DIR}"',
+                f'"{sys.executable}" "{main_script}" sync "{PROCESSED_FILES_DIR}"',
                 "Regenerate orphaned PDFs"
             )
             if "No orphaned PDF files found" in stdout:
