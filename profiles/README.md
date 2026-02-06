@@ -8,7 +8,6 @@ Profile-based configuration system for managing multiple papertrail environments
    ```bash
    mkdir profiles/default
    cp profiles/profile.yaml.example profiles/default/profile.yaml
-   cp profiles/mappings.yaml.example profiles/default/mappings.yaml
    ```
 
 2. **Edit the profile with your settings:**
@@ -28,17 +27,13 @@ Each profile is a self-contained folder under `profiles/`:
 ```
 profiles/
   profile.yaml.example         # Template for new profiles
-  mappings.yaml.example         # Template for mappings
   README.md                     # This file
   default/                      # "default" profile
     profile.yaml                # Profile configuration
-    mappings.yaml               # Raw -> canonical normalization mappings
-    rejected_values.yaml        # Rejected normalizations (auto-generated)
     qr_inventory.yaml           # QR code inventory (auto-generated)
     qr_inventory.checkpoint.yaml
   personal/                     # "personal" profile (example)
     profile.yaml
-    mappings.yaml
     ...
 ```
 
@@ -268,13 +263,10 @@ Example setup for personal and work:
 profiles/
   default/
     profile.yaml        # Auto-loaded if --profile not specified
-    mappings.yaml
   personal/
     profile.yaml        # Personal documents
-    mappings.yaml
   work/
     profile.yaml        # Work documents
-    mappings.yaml
 ```
 
 Switch between them:
@@ -294,13 +286,11 @@ Create a new profile directory and copy templates:
 # Default profile
 mkdir profiles/default
 cp profiles/profile.yaml.example profiles/default/profile.yaml
-cp profiles/mappings.yaml.example profiles/default/mappings.yaml
 vim profiles/default/profile.yaml
 
 # Personal profile
 mkdir profiles/personal
 cp profiles/profile.yaml.example profiles/personal/profile.yaml
-cp profiles/mappings.yaml.example profiles/personal/mappings.yaml
 vim profiles/personal/profile.yaml
 ```
 
@@ -315,7 +305,7 @@ Settings are resolved in the following order (highest priority first):
 
 ## External Profiles Directory
 
-Profile data files (`profile.yaml`, `mappings.yaml`, etc.) are gitignored in the papertrail repo since they contain personal/sensitive data. To version-control your profiles separately (e.g., in a private git repo), set the `PAPERTRAIL_PROFILES_DIR` environment variable:
+Profile data files (`profile.yaml`, etc.) are gitignored in the papertrail repo since they contain personal/sensitive data. To version-control your profiles separately (e.g., in a private git repo), set the `PAPERTRAIL_PROFILES_DIR` environment variable:
 
 ```bash
 # Point to an external directory
@@ -341,7 +331,6 @@ git init
 # Set up your profile
 mkdir default
 cp /path/to/papertrail/profiles/profile.yaml.example default/profile.yaml
-cp /path/to/papertrail/profiles/mappings.yaml.example default/mappings.yaml
 vim default/profile.yaml
 
 # Add to shell profile for persistence

@@ -6,44 +6,7 @@ from enum import Enum
 from pathlib import Path
 from typing import Optional
 
-import yaml
-
 from papertrail.config import get_current_profile
-
-
-def _load_mappings_canonicals(field: str) -> set[str]:
-    """Load canonical values from mappings.yaml for a given field.
-
-    Args:
-        field: Section name in mappings.yaml (e.g. 'document_types' or 'issuing_parties')
-
-    Returns:
-        Set of canonical values for the field.
-    """
-    profile = get_current_profile()
-    if profile and profile.profile_dir:
-        config_paths = [profile.profile_dir / "mappings.yaml"]
-    else:
-        config_paths = [Path(__file__).parent.parent / "profiles" / "default" / "mappings.yaml"]
-
-    values = set()
-
-    for config_path in config_paths:
-        if config_path.exists():
-            try:
-                with open(config_path, "r", encoding="utf-8") as f:
-                    mappings = yaml.safe_load(f)
-
-                if mappings and field in mappings:
-                    field_data = mappings[field]
-                    if "mappings" in field_data:
-                        values.update(field_data["mappings"].values())
-
-                break  # Found and loaded, stop searching
-            except Exception:
-                continue
-
-    return values
 
 
 # ============================================================================
@@ -140,7 +103,6 @@ def _load_enum_values(
     fallback_list: list[str],
     json_field: str,
     enum_prefix: str,
-    mappings_field: str,
 ) -> list[str]:
     """Shared loader for document types and issuing parties.
 
@@ -150,7 +112,6 @@ def _load_enum_values(
         fallback_list: Hardcoded fallback values.
         json_field: Key to read from metadata JSON files.
         enum_prefix: Prefix for clean_enum_string (e.g. 'DocumentType').
-        mappings_field: Section name in mappings.yaml (e.g. 'document_types' or 'issuing_parties').
 
     Returns:
         Sorted list of enum values.
@@ -191,9 +152,6 @@ def _load_enum_values(
             except Exception:
                 continue
 
-    # Merge in canonical values from mappings.yaml
-    values_set.update(_load_mappings_canonicals(mappings_field))
-
     values_set.add("$UNKNOWN$")
     return sorted(values_set)
 
@@ -202,7 +160,7 @@ def load_document_types(processed_files_dir: Optional[str] = None) -> list[str]:
     """Load document types from profile predefined, processed files, or fallback."""
     return _load_enum_values(
         processed_files_dir, "document_types", FALLBACK_DOCUMENT_TYPES,
-        "document_type", "DocumentType", "document_types",
+        "document_type", "DocumentType",
     )
 
 
@@ -210,7 +168,7 @@ def load_issuing_parties(processed_files_dir: Optional[str] = None) -> list[str]
     """Load issuing parties from profile predefined, processed files, or fallback."""
     return _load_enum_values(
         processed_files_dir, "issuing_parties", FALLBACK_ISSUING_PARTIES,
-        "issuing_party", "IssuingParty", "issuing_parties",
+        "issuing_party", "IssuingParty",
     )
 
 

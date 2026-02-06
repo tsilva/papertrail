@@ -224,22 +224,9 @@ class DocumentLogger:
                 parts.append(f'{key}="{val}"' if isinstance(val, str) else f"{key}={val}")
         self._logger.debug(f"[RAW] {' '.join(parts)}")
 
-    def log_normalization(self, field: str, raw: str, normalized: str, tier: int) -> None:
-        """Log a normalization step with tier info."""
-        tag = f"[TIER-{tier}-HIT]" if tier == 1 else f"[TIER-{tier}-LLM]"
-        self._logger.debug(f"{tag} {field}: '{raw}' -> '{normalized}'")
-
-    def log_mapping_saved(self, field: str, raw: str, canonical: str) -> None:
-        """Log when a new mapping is saved."""
-        self._logger.debug(f"[MAPPING-SAVED] {field}: '{raw}' -> '{canonical}'")
-
-    def log_rejected(self, field: str, raw: str, normalized: str) -> None:
-        """Log when a normalization is rejected."""
-        self._logger.debug(f"[REJECTED] {field}: '{raw}' -> '{normalized}' (not in canonical list)")
-
-    def log_stale_mapping(self, field: str, raw: str, stale_value: str) -> None:
-        """Log when a Tier 1 mapping is stale (canonical no longer in enum)."""
-        self._logger.debug(f"[STALE-MAPPING] {field}: '{raw}' -> '{stale_value}' (not in current enum, will re-normalize via Tier 2)")
+    def log_normalization(self, field: str, raw: str, normalized: str) -> None:
+        """Log a normalization step."""
+        self._logger.debug(f"[NORM] {field}: '{raw}' -> '{normalized}'")
 
     def log_timing(self, operation: str, seconds: float) -> None:
         """Log timing for an operation."""

@@ -35,9 +35,7 @@ Processes new PDFs through the classification pipeline:
 3. **Content hash** for remaining files (renders all pages at 150 DPI, hashes pixel data) — catches true duplicates even with different PDF metadata
 4. **Classify** each truly new PDF:
    - **Phase 1 — Raw extraction** (`classify_pdf_document`, line 175): Renders first 2 pages as JPEG, sends to LLM via OpenRouter with vision, extracts metadata exactly as it appears on the document into `DocumentMetadataRaw`
-   - **Phase 2 — Normalization** (`normalize_metadata` in `papertrail/llm.py`): Maps raw values to canonical enums using two-tier lookup:
-     - **Tier 1 — Mappings lookup**: Checks `config/mappings.yaml` for known raw-to-canonical mappings (no LLM call)
-     - **Tier 2 — LLM fallback**: If not found, uses LLM to normalize, then saves the new mapping for reuse
+   - **Phase 2 — Normalization** (`normalize_metadata` in `papertrail/llm.py`): Uses LLM to map raw values to canonical enums, validates against allowed lists, falls back to `$UNKNOWN$`
 5. **Save** the classified PDF (copied to processed directory) and its metadata JSON sidecar file
 
 ### Step 5: Rename files
@@ -89,7 +87,7 @@ Gmail / mbox / archives
   LLM Vision (Phase 1: raw extraction)
         │
         ▼
-  Normalization (Phase 2: mappings → LLM fallback)
+  Normalization (Phase 2: LLM normalization)
         │
         ▼
   PDF + metadata.json in paths.processed

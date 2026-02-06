@@ -183,8 +183,6 @@ migration_dry_run*.txt
 
 # Profile data (per-profile, contain local paths and personal data)
 profiles/*/profile.yaml
-profiles/*/mappings.yaml
-profiles/*/rejected_values.yaml
 profiles/*/qr_inventory.yaml
 profiles/*/qr_inventory.checkpoint.yaml
 

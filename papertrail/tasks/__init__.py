@@ -65,17 +65,11 @@ from papertrail.tasks.validation import (
     validate_merged_pdf,
     check_files_exist,
     task_backfill_page_count,
-    task_backfill_mapping_keys,
-    task_tag_dated_types,
     task_fix_unicode,
 )
 from papertrail.tasks.export import (
     export_metadata_to_excel,
     task_export_all_dates,
-)
-from papertrail.tasks.mappings_tasks import (
-    task_bootstrap_mappings,
-    task_review_rejected,
 )
 from papertrail.tasks.gmail_task import task_gmail_download
 from papertrail.tasks.pipeline import pipeline

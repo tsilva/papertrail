@@ -101,10 +101,6 @@ class DocumentMetadata(BaseModel):
     document_title: Optional[str] = Field(default=None, description="Specific subject, product, service, or transaction described in the document. Null if no specific subject beyond the document type is identifiable.")
     issuing_party_raw: Optional[str] = Field(default=None, description="Original issuing party as extracted.")
 
-    # Slugified mapping keys for traceability (derived from *_raw via slugify_key)
-    document_type_key: Optional[str] = Field(default=None, description="Slugified mapping key for document type lookup.")
-    issuing_party_key: Optional[str] = Field(default=None, description="Slugified mapping key for issuing party lookup.")
-
     # Document properties
     page_count: Optional[int] = Field(default=None, description="Number of pages in the PDF document.")
     issuer_tax_number: Optional[str] = Field(default=None, description="Issuer tax identification number.")

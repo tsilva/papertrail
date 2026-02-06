@@ -135,8 +135,6 @@ python main.py export_excel /path/to/processed --excel_output_path invoices.xlsx
 | `export_all_dates` | Export files by date ranges |
 | `pipeline` | Full end-to-end workflow |
 | `gmail_download` | Download Gmail attachments |
-| `bootstrap_mappings` | Populate mappings from existing metadata |
-| `review_rejected` | Review rejected normalization values |
 
 ### Full Pipeline
 
@@ -161,16 +159,7 @@ graph LR
 
 **Phase 1 — Raw Extraction**: Renders PDF pages as images, sends to vision LLM, extracts metadata exactly as it appears on the document.
 
-**Phase 2 — Normalization**: Maps raw values to canonical forms using learned mappings.
-
-### Two-Tier Normalization
-
-papertrail learns from your documents. When it sees "Anthropic, PBC" the first time, it normalizes to `anthropic` and remembers. Next time—instant lookup, no LLM call.
-
-```
-Raw: "Anthropic, PBC" → Check mappings.yaml → Found! → Return "anthropic"
-Raw: "New Vendor Inc" → Not found → LLM → "new-vendor" → Save mapping
-```
+**Phase 2 — Normalization**: LLM maps raw values to canonical forms, validated against known lists.
 
 ### Two-Tier Hashing
 

@@ -62,8 +62,6 @@ from papertrail.profiles import (
     ProfileError,
 )
 from papertrail.enums import reset_enum_cache
-from papertrail.mappings import MappingsManager
-from papertrail.rejected import RejectedValuesManager
 from papertrail.nif_lookup import NIFLookupCache
 from papertrail.logging_utils import setup_logging, get_logger
 from papertrail.console import get_console
@@ -80,11 +78,7 @@ from papertrail.tasks import (
     task_export_all_dates,
     check_files_exist,
     task_backfill_page_count,
-    task_backfill_mapping_keys,
-    task_tag_dated_types,
     task_fix_unicode,
-    task_bootstrap_mappings,
-    task_review_rejected,
     task_gmail_download,
     pipeline,
     task_qr_inventory,
@@ -105,8 +99,6 @@ class AppContext:
     """Runtime application context holding all initialized resources."""
     model_id: str
     openai_client: any
-    mappings_manager: any
-    rejected_manager: any
     nif_cache: any  # NIFLookupCache or None
 
 
@@ -164,10 +156,7 @@ def initialize_config(profile_name: Optional[str] = None) -> None:
         console.error("Please check your network connection and the base_url in your profile.", indent=False)
         sys.exit(1)
 
-    profile_dir = profile.profile_dir
     cache_dir = get_cache_dir()
-    mappings_path = profile_dir / "mappings.yaml"
-    rejected_path = profile_dir / "rejected_values.yaml"
     nif_cache_path = cache_dir / "nif_cache.yaml"
 
     # Initialize NIF cache if enabled
@@ -179,8 +168,6 @@ def initialize_config(profile_name: Optional[str] = None) -> None:
     _ctx = AppContext(
         model_id=profile.openrouter.model_id,
         openai_client=get_openai_client(),
-        mappings_manager=MappingsManager(mappings_path),
-        rejected_manager=RejectedValuesManager(rejected_path),
         nif_cache=nif_cache,
     )
 
@@ -282,9 +269,9 @@ def main():
     parser.add_argument("task", type=str, nargs='?', default='pipeline', choices=[
         'extract_new', 'rename_files', 'validate_metadata', 'export_excel',
         'copy_matching', 'export_all_dates', 'check_files_exist', 'pipeline',
-        'gmail_download', 'bootstrap_mappings',
-        'backfill_page_count', 'backfill_mapping_keys', 'tag_dated_types',
-        'review_rejected', 'fix_unicode', 'sync', 'validate_extraction',
+        'gmail_download',
+        'backfill_page_count',
+        'fix_unicode', 'sync', 'validate_extraction',
         'qr_inventory'
     ], help="Task to perform (default: pipeline).")
     parser.add_argument("processed_path", type=str, nargs='?', help="Path to output folder.")
@@ -329,28 +316,9 @@ def main():
             sys.exit(1)
         return
 
-    if args.task == "review_rejected":
-        task_review_rejected(get_ctx().rejected_manager, get_ctx().mappings_manager)
-        return
-
-    if args.task == "bootstrap_mappings":
-        processed = require_path(parser, args.processed_path or get_profile_path("processed"), "processed_path")
-        task_bootstrap_mappings(processed, get_ctx().mappings_manager)
-        return
-
     if args.task == "backfill_page_count":
         processed = require_path(parser, args.processed_path or get_profile_path("processed"), "processed_path")
         task_backfill_page_count(processed)
-        return
-
-    if args.task == "backfill_mapping_keys":
-        processed = require_path(parser, args.processed_path or get_profile_path("processed"), "processed_path")
-        task_backfill_mapping_keys(processed)
-        return
-
-    if args.task == "tag_dated_types":
-        processed = require_path(parser, args.processed_path or get_profile_path("processed"), "processed_path")
-        task_tag_dated_types(processed, dry_run=args.dry_run)
         return
 
     if args.task == "fix_unicode":

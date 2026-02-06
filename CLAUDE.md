@@ -13,53 +13,35 @@ AI-powered PDF document classification and organization tool using vision LLMs v
 
 These are core constraints that must be preserved in all changes:
 
-1. **Deterministic normalization**: Same raw value MUST always produce same canonical value. This is enforced by the mappings lookup — never bypass `MappingsManager`.
+1. **Raw value preservation**: Original extracted text MUST be stored in `*_raw` fields (`document_type_raw`, `issuing_party_raw`). This enables re-normalization when needed.
 
-2. **Raw value preservation**: Original extracted text MUST be stored in `*_raw` fields (`document_type_raw`, `issuing_party_raw`). This enables re-normalization when mappings improve.
+2. **Content hash is truth**: Duplicate detection uses `hash_content` (rendered pixels), not `hash_file` (raw bytes). Two PDFs with identical visual content are duplicates even if their bytes differ.
 
-3. **Content hash is truth**: Duplicate detection uses `hash_content` (rendered pixels), not `hash_file` (raw bytes). Two PDFs with identical visual content are duplicates even if their bytes differ.
+3. **`$UNKNOWN$` is the only fallback**: Unrecognized values become `$UNKNOWN$`, never empty string, `null`, or made-up values. This sentinel is used for filtering and re-processing.
 
-4. **`$UNKNOWN$` is the only fallback**: Unrecognized values become `$UNKNOWN$`, never empty string, `null`, or made-up values. This sentinel is used for filtering and re-processing.
+4. **QR overrides LLM**: When QR extraction succeeds, those fields have 100% confidence and MUST override LLM-extracted values in the merge phase.
 
-5. **QR overrides LLM**: When QR extraction succeeds, those fields have 100% confidence and MUST override LLM-extracted values in the merge phase.
-
-6. **Mappings are append-only during processing**: Never delete or modify mappings during `extract_new`. Mappings can only be edited via `review_rejected` task or manual YAML edits.
-
-7. **Sidecar JSON is authoritative**: The `.json` file is the source of truth for metadata. The filename is derived from it, not vice versa. If they disagree, `rename_files` fixes the filename.
+5. **Sidecar JSON is authoritative**: The `.json` file is the source of truth for metadata. The filename is derived from it, not vice versa. If they disagree, `rename_files` fixes the filename.
 
 ## Architecture
 
 ### Four-Phase Extraction Pipeline
 1. **Phase 0 - QR Extraction** (optional): Scans PDF for QR codes, extracts metadata with 100% confidence (e.g., Portuguese invoice QR codes)
 2. **Phase 1 - Raw Extraction** (`classify_pdf_document`): Renders first 2 pages as JPEG, sends to LLM with vision. For `issuing_party`, extracts EXACTLY as appears. For `document_type`, extracts only the core type label (strips dates, billing periods, reference numbers). For `document_title`, extracts the specific subject/product/service/transaction (e.g., "YouTube Premium", "Claude API")
-3. **Phase 2 - Normalization** (`normalize_metadata`): Maps raw values to canonical enums using two-tier lookup
+3. **Phase 2 - Normalization** (`normalize_metadata`): LLM maps raw values to canonical enums, validates against allowed lists, falls back to `$UNKNOWN$`
 4. **Phase 3 - Merge**: QR-extracted values override LLM values (QR is 100% accurate)
 5. **Phase 4 - NIF Enrichment** (optional): If tax number present, looks up official issuer name via nif.pt web scraping
 
-### Normalization (Mapping Persistence)
-Ensures deterministic normalization by persisting successful mappings:
-
-1. **TIER 1 - Mappings Lookup** (`MappingsManager`): Check `profiles/<name>/mappings.yaml` for known raw → canonical mappings (instant, no LLM call)
-2. **TIER 2 - LLM Fallback**: If not found, use LLM to normalize, then save mapping for reuse
+### Normalization (LLM-Based)
+Every extraction uses the LLM to normalize raw values to canonical forms:
 
 ```
-Raw: "Anthropic, PBC" → Check mappings.yaml → Found! → Return "anthropic" (no LLM)
-Raw: "New Vendor Inc" → Check mappings.yaml → Not found → LLM → "new-vendor" → Save to mappings.yaml
+Raw: "Anthropic, PBC" → LLM → "anthropic" (validated against enum list)
+Raw: "New Vendor Inc" → LLM → "new-vendor" (validated against enum list)
+Raw: "Unknown Corp" → LLM → "xyz" (not in enum) → "$UNKNOWN$" (fallback)
 ```
 
-The slugified mapping key (e.g., `"anthropic-pbc"` from `"Anthropic, PBC"`) is stored in `document_type_key` / `issuing_party_key` fields on each document's metadata, enabling reverse lookup from mappings.yaml entries to source documents.
-
-Mappings file uses a flat structure — a single alphabetically-sorted `mappings` dict per field. Canonical values are derived on-the-fly from the unique set of mapping values (no separate canonicals list):
-```yaml
-document_types:
-  mappings:
-    "factura": "invoice"
-    "invoice": "invoice"
-issuing_parties:
-  mappings:
-    "amazon-web-services": "amazon"
-    "anthropic-pbc": "anthropic"
-```
+The LLM receives the full list of canonical document types and issuing parties, and maps raw values to the best match. Values not in the canonical list are rejected and fall back to `$UNKNOWN$`.
 
 ### Two-Tier Hashing
 - **Fast hash** (`hash_file_fast`): SHA256 of raw bytes, 8 chars - for quick duplicate filtering
@@ -150,9 +132,7 @@ Document types and issuing parties are loaded dynamically from existing metadata
 |------|---------|-----------|
 | `main.py` | Core app | Entry point, CLI tasks |
 | `papertrail/models.py` | Pydantic models | `DocumentMetadataRaw`, `DocumentMetadata` |
-| `papertrail/llm.py` | LLM classification | `normalize_metadata` with two-tier lookup |
-| `papertrail/mappings.py` | Mapping persistence | `MappingsManager` class |
-| `papertrail/rejected.py` | Rejected values tracking | `RejectedValuesManager` class |
+| `papertrail/llm.py` | LLM classification | `normalize_metadata` with LLM normalization |
 | `papertrail/logging_utils.py` | Logging infrastructure | `setup_task_logging`, `DocumentLogger`, `setup_logging` |
 | `papertrail/hashing.py` | File hashing | `HashCache`, `hash_file_fast`, `hash_file_content` |
 | `papertrail/nif_lookup.py` | NIF → issuer lookup | `NIFLookupCache` class |
@@ -170,7 +150,7 @@ DocumentMetadataInput  # With enum validation
 DocumentMetadata       # Full: hashes, timestamps, raw values
 ```
 
-Fields: `class_confidence`, `class_reasoning`, `date_created`, `date_issued`, `date_updated`, `document_type`, `document_type_key`, `document_type_raw`, `document_title`, `hash_content`, `hash_file`, `issuer_tax_number`, `issuing_party`, `issuing_party_key`, `issuing_party_raw`, `locale`, `page_count`, `qrcode`, `total_amount`, `total_amount_currency`
+Fields: `class_confidence`, `class_reasoning`, `date_created`, `date_issued`, `date_updated`, `document_type`, `document_type_raw`, `document_title`, `hash_content`, `hash_file`, `issuer_tax_number`, `issuing_party`, `issuing_party_raw`, `locale`, `page_count`, `qrcode`, `total_amount`, `total_amount_currency`
 
 The `document_title` field stores the specific subject, product, service, or transaction described in the document (e.g., "YouTube Premium", "Claude API"). It is null when no specific subject beyond the document type is identifiable. The `document_type` / `document_type_raw` fields contain only the cleaned core type label (e.g., "Fatura").
 
@@ -206,11 +186,7 @@ Generated by `file_name_from_metadata()` (line 447). All components lowercase, s
 | `check_files_exist` | Validate against schema | `--check_schema_path` (optional) |
 | `pipeline` | Full end-to-end workflow | `--export_date` (optional) |
 | `gmail_download` | Download email attachments from Gmail | None (uses profile) |
-| `bootstrap_mappings` | Populate mappings from existing metadata | - |
 | `backfill_page_count` | Add page_count to existing metadata | - |
-| `backfill_mapping_keys` | Add document_type_key/issuing_party_key to existing metadata | - |
-| `tag_dated_types` | Tag documents with date-contaminated document_type_key as $UNKNOWN$ | `--dry_run` |
-| `review_rejected` | Review rejected normalization values | - |
 | `fix_unicode` | Fix escaped Unicode in metadata JSON files | - |
 | `sync` | Sync metadata (default: orphans only) | `--all`, `--pattern`, `--all_unknown`, `--dry_run` |
 | `validate_extraction` | Validate extraction quality, flag issues | `--pattern` (optional) |
@@ -256,7 +232,7 @@ python main.py extract_new /path/to/processed  # Auto-uses default profile if av
 ### Logs Directory
 
 Task runs create timestamped log files in `{processed_path}/logs/`:
-- `logs/extract_new_YYYYMMDD_HHMMSS.log` — per-document extraction details with `[QR-EXTRACT]`, `[QR-MERGE]`, `[NIF-CACHE-HIT]`, `[NIF-WEB-LOOKUP]`, `[NIF-ENRICH]`, `[RAW]`, `[TIER-1-HIT]`, `[TIER-2-LLM]`, `[STALE-MAPPING]`, `[TIMING]`, `[FINAL]` markers
+- `logs/extract_new_YYYYMMDD_HHMMSS.log` — per-document extraction details with `[QR-EXTRACT]`, `[QR-MERGE]`, `[NIF-CACHE-HIT]`, `[NIF-WEB-LOOKUP]`, `[NIF-ENRICH]`, `[RAW]`, `[NORM]`, `[TIMING]`, `[FINAL]` markers
 - `logs/sync_YYYYMMDD_HHMMSS.log` — sync with before/after diffs
 - `logs/pipeline_YYYYMMDD_HHMMSS.log` — full pipeline run
 - `logs/validate_extraction_YYYYMMDD_HHMMSS.log` — extraction quality audit
@@ -267,8 +243,6 @@ Task runs create timestamped log files in `{processed_path}/logs/`:
 
 **Profile-specific files** in `profiles/<name>/` (gitignored):
 - `profile.yaml` - Profile configuration (copy from `profiles/profile.yaml.example`)
-- `mappings.yaml` - Raw → canonical mappings for deterministic normalization (copy from `profiles/mappings.yaml.example`)
-- `rejected_values.yaml` - Rejected normalizations for review (auto-generated, see `review_rejected` task)
 - `qr_inventory.yaml` - QR code inventory results (auto-generated by `qr_inventory` task)
 
 **Cache files** in `.cache/` (gitignored, auto-generated):
@@ -290,26 +264,6 @@ Task runs create timestamped log files in `{processed_path}/logs/`:
 **Add new issuing party**: Same - dynamically loaded from processed metadata
 **Verify duplicate detection**: `check-hash <pdf>` shows both fast and content hashes
 **Add new QR format**: Add detection function and parser in `papertrail/qr/extractor.py`, add model in `papertrail/qr/models.py`
-
-### Mappings Workflow
-
-1. **Bootstrap from existing data**: `python main.py bootstrap_mappings /path/to/processed`
-   - Scans existing metadata files, extracts raw → canonical pairs
-   - Adds them to the flat mappings dict
-
-2. **Process new documents**: `python main.py extract_new /path/to/processed --raw_path /path/to/raw`
-   - Known mappings use Tier 1 (no LLM call)
-   - New values go through Tier 2 (LLM), then saved to mappings
-   - Values rejected by validation are logged to `profiles/<name>/rejected_values.yaml`
-
-3. **Review rejected values**: `python main.py review_rejected`
-   - When LLM suggests a canonical not in the allowed list, it's logged as rejected
-   - Review to: add as new mapping, map to existing canonical, or ignore
-
-4. **Fix existing $UNKNOWN$ values**: `python main.py fix_unknown /path/to/processed`
-   - Re-normalizes documents that have $UNKNOWN$ using stored raw values
-   - Use `--dry_run` to preview changes without modifying files
-   - After fixing, run `rename_files` to update filenames
 
 ## Testing
 

@@ -27,7 +27,6 @@ from papertrail.llm import (
 from papertrail.pdf import render_pdf_to_images, find_pdf_files, get_page_count
 from papertrail.metadata import build_hash_index, save_metadata_json
 from papertrail.hashing import hash_file_fast, hash_file_content
-from papertrail.mappings import slugify_key
 
 def enum_value(v):
     """Extract value from enum or return as-is."""
@@ -217,7 +216,7 @@ def classify_pdf_document(pdf_path: Path, file_hash: str, failure_logger=None,
         # Phase 2: Normalization
         t0 = _time.monotonic()
         normalized_doc_type, normalized_issuing_party = normalize_metadata(
-            raw_metadata, ctx.openai_client, ctx.model_id, mappings=ctx.mappings_manager,
+            raw_metadata, ctx.openai_client, ctx.model_id,
             doc_logger=doc_logger,
         )
         if doc_logger:
@@ -269,7 +268,7 @@ def classify_pdf_document(pdf_path: Path, file_hash: str, failure_logger=None,
                     reasoning="NIF lookup override",
                 )
                 _, nif_normalized_issuer = normalize_metadata(
-                    nif_raw, ctx.openai_client, ctx.model_id, mappings=ctx.mappings_manager,
+                    nif_raw, ctx.openai_client, ctx.model_id,
                 )
 
                 # Only use the NIF-derived issuer if normalization succeeded
@@ -303,8 +302,6 @@ def classify_pdf_document(pdf_path: Path, file_hash: str, failure_logger=None,
             document_type_raw=raw_metadata.document_type,
             document_title=raw_metadata.document_title,
             issuing_party_raw=raw_metadata.issuing_party,
-            document_type_key=slugify_key(raw_metadata.document_type) if raw_metadata.document_type else None,
-            issuing_party_key=slugify_key(raw_metadata.issuing_party) if raw_metadata.issuing_party else None,
             issuer_tax_number=final_tax_number,
             locale=final_locale,
             qrcode=qr_raw_data,
