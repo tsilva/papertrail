@@ -7,13 +7,13 @@ from typing import Optional
 
 import fitz  # PyMuPDF
 
-from papertrail.cache_base import BaseYamlCache
 from papertrail.logging_utils import get_logger
+from papertrail.yaml_utils import load_yaml, save_yaml
 
 logger = get_logger('hashing')
 
 
-class HashCache(BaseYamlCache):
+class HashCache:
     """Cache file_hash -> content_hash mappings to avoid recomputation.
 
     This dramatically speeds up operations that need content hashes by
@@ -22,16 +22,42 @@ class HashCache(BaseYamlCache):
     file hash as a cache key.
     """
 
-    _data_key = "cache"
-
     def __init__(self, cache_path: Optional[Path] = None):
         """Initialize the hash cache.
 
         Args:
             cache_path: Path to the YAML cache file. Defaults to config/hash_cache.yaml
         """
-        default_path = Path(__file__).parent.parent / "config" / "hash_cache.yaml"
-        super().__init__(cache_path, default_path)
+        if cache_path is None:
+            cache_path = Path(__file__).parent.parent / "config" / "hash_cache.yaml"
+        self.path = cache_path
+        self._cache: dict[str, str] = {}
+        self._dirty = False
+        self._load()
+
+    def _load(self) -> None:
+        try:
+            data = load_yaml(self.path)
+            self._cache = data.get("cache", {})
+        except Exception:
+            self._cache = {}
+
+    def save(self) -> None:
+        if not self._dirty:
+            return
+        save_yaml(self.path, {"cache": self._cache})
+        self._dirty = False
+
+    def get(self, key: str) -> Optional[str]:
+        return self._cache.get(key)
+
+    def set(self, key: str, value: str) -> None:
+        if self._cache.get(key) != value:
+            self._cache[key] = value
+            self._dirty = True
+
+    def __len__(self) -> int:
+        return len(self._cache)
 
 
 def hash_file_fast(path: Path) -> str:

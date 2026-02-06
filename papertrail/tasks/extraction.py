@@ -26,7 +26,10 @@ from papertrail.llm import (
 from papertrail.pdf import render_pdf_to_images, find_pdf_files, get_page_count
 from papertrail.metadata import build_hash_index, save_metadata_json
 from papertrail.hashing import hash_file_fast, hash_file_content
-from papertrail.cache_base import enum_value
+
+def enum_value(v):
+    """Extract value from enum or return as-is."""
+    return v.value if hasattr(v, 'value') else v
 from papertrail.tasks import task_log_context
 from papertrail.qr import extract_metadata_from_qr, QRExtractedMetadata
 from papertrail.nif_lookup import NIFLookupCache
