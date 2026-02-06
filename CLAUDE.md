@@ -53,20 +53,20 @@ file_hash "b2c3d4e5" → cache lookup → miss → compute content_hash → save
 The `validate_metadata` task uses parallelization (`ProcessPoolExecutor`) for cache misses, providing ~4-8x speedup on cold cache and ~50-100x on warm cache.
 
 ### QR Code Extraction (`papertrail/qr/`)
-Modular QR code extraction with handler-based architecture for different QR formats.
+QR code extraction for Portuguese invoice QR codes (Portaria 195/2020).
 
 **Supported formats:**
 - **Portuguese Invoice QR** (Portaria 195/2020): `A:NIF*B:NIF*D:FT*F:YYYYMMDD*O:amount*...`
 
 **How it works:**
 ```
-PDF → render pages at 300 DPI → pyzbar decode → detect QR type → parse with handler → QRExtractedMetadata
+PDF → render pages at 300 DPI → pyzbar decode → detect QR type → parse → QRExtractedMetadata
 ```
 
 **Key components:**
 - `extract_metadata_from_qr(pdf_path)` - Main entry point, returns `(QRExtractedMetadata, raw_data_dict)` tuple
-- `QRHandler` - Abstract base class for format handlers
-- `PortugueseInvoiceHandler` - Parses PT invoice QR codes
+- `is_portuguese_invoice_qr(content)` - Detection function
+- `parse_portuguese_invoice_qr(qr_data)` - Parser for PT invoice QR codes
 
 **Portuguese QR fields extracted:**
 - `issue_date` from F field (YYYYMMDD → YYYY-MM-DD)
@@ -132,7 +132,7 @@ Document types and issuing parties are loaded dynamically from existing metadata
 | `scripts/check_hash.py` | Verify hashes | CLI: `check-hash` |
 | `papertrail/gmail.py` | Gmail API client | `GmailDownloader`, `download_gmail_attachments` |
 | `papertrail/mbox.py` | Mbox extraction | `extract_mbox_attachments` |
-| `papertrail/qr/` | QR code extraction | `extract_metadata_from_qr`, `PortugueseInvoiceHandler` |
+| `papertrail/qr/` | QR code extraction | `extract_metadata_from_qr`, `parse_portuguese_invoice_qr` |
 | `papertrail/tasks/qr_inventory.py` | QR inventory task | `task_qr_inventory` |
 
 ## Data Models (Pydantic)
@@ -259,7 +259,7 @@ Task runs create timestamped log files in `{processed_path}/logs/`:
 **Add new document type**: Just process documents with that type - it's automatically added from metadata
 **Add new issuing party**: Same - dynamically loaded from processed metadata
 **Verify duplicate detection**: `check-hash <pdf>` shows both fast and content hashes
-**Add new QR handler**: Create handler in `papertrail/qr/handlers/`, implement `QRHandler` interface, register in `handlers/__init__.py`
+**Add new QR format**: Add detection function and parser in `papertrail/qr/extractor.py`, add model in `papertrail/qr/models.py`
 
 ### Mappings Workflow
 
