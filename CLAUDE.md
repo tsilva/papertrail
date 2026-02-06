@@ -97,7 +97,7 @@ PDF → render pages at 300 DPI → pyzbar decode → detect QR type → parse �
 
 **Portuguese QR fields extracted:**
 - `issue_date` from F field (YYYYMMDD → YYYY-MM-DD, stored as `date_issued` in sidecar JSON)
-- `document_type` from D field (FT → invoice, NC → credit-note, etc.)
+- `document_type` from D field (FT → invoice, NC → invoice-credit, ND → invoice-debit, etc.)
 - `total_amount` from O field (gross total)
 - `issuer_tax_number` from A field (raw NIF without country prefix)
 - `atcud` from H field (unique document code)

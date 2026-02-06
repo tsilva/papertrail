@@ -36,7 +36,7 @@ document_types:
     - "receipt"
     - "statement"
     - "contract"
-    - "notification"
+    - "notice"
     - "unknown"
 
 # Issuing party configuration
