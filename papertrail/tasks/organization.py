@@ -1,5 +1,6 @@
 """File renaming and organization tasks."""
 
+import json
 import re
 import shutil
 import unicodedata
@@ -187,7 +188,14 @@ def copy_matching_files(
                         stats['skipped'] += 1
 
             if should_copy:
-                shutil.copy2(file, dest_file)
+                if file.suffix.lower() == '.json':
+                    with open(file, 'r', encoding='utf-8') as f_in:
+                        data = json.load(f_in)
+                    data['source_filename'] = file.with_suffix('.pdf').name
+                    with open(dest_file, 'w', encoding='utf-8') as f_out:
+                        json.dump(data, f_out, indent=4, ensure_ascii=False, sort_keys=True)
+                else:
+                    shutil.copy2(file, dest_file)
                 stats['copied'] += 1
 
             progress.update(task, advance=1)
