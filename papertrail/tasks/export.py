@@ -28,7 +28,7 @@ def export_metadata_to_excel(processed_path: Path, excel_output_path: str):
     for metadata_path, metadata in load_json_files_parallel(processed_path, validate=True, show_progress=True, progress_desc="Collecting metadata"):
         metadata_dict = metadata.model_dump()
 
-        metadata_dict.pop("reasoning", None)
+        metadata_dict.pop("class_reasoning", None)
 
         pdf_path = metadata_path.with_suffix(".pdf")
         filename = pdf_path.name if pdf_path.exists() else ""
@@ -36,7 +36,7 @@ def export_metadata_to_excel(processed_path: Path, excel_output_path: str):
         metadata_dict["filename_length"] = len(filename)
 
         try:
-            date_parts = metadata.issue_date.split('-')
+            date_parts = metadata.date_issued.split('-')
             metadata_dict["year"] = int(date_parts[0])
             metadata_dict["month"] = int(date_parts[1])
         except (IndexError, ValueError, AttributeError):
@@ -51,7 +51,7 @@ def export_metadata_to_excel(processed_path: Path, excel_output_path: str):
     if metadata_list:
         df = pd.DataFrame(metadata_list)
         ordered_cols = [
-            "confidence", "issue_date", "year", "month", "content_hash", "file_hash",
+            "class_confidence", "date_issued", "year", "month", "hash_content", "hash_file",
             "filename", "filename_length", "page_count", "document_type", "document_type_raw",
             "document_title", "issuing_party", "issuing_party_raw", "service_name",
             "total_amount", "total_amount_currency"
@@ -59,8 +59,8 @@ def export_metadata_to_excel(processed_path: Path, excel_output_path: str):
         extra_cols = [col for col in df.columns if col not in ordered_cols]
         df = df[ordered_cols + extra_cols]
 
-        if "issue_date" in df.columns:
-            df = df.sort_values(by="issue_date", ascending=False)
+        if "date_issued" in df.columns:
+            df = df.sort_values(by="date_issued", ascending=False)
 
         with pd.ExcelWriter(excel_output_path, engine='openpyxl') as writer:
             df.to_excel(writer, index=False, sheet_name='Sheet1')

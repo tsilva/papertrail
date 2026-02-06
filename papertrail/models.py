@@ -78,20 +78,25 @@ class DocumentMetadata(BaseModel):
     Used after normalization when document_type and issuing_party
     have been mapped to canonical values.
     """
-    issue_date: str = Field(description="Date issued, format: YYYY-MM-DD.")
+    # Classification fields
+    class_confidence: float = Field(description="Confidence score between 0 and 1.")
+    class_reasoning: str = Field(description="Why this classification was chosen.")
+
+    # Date fields
+    date_created: Optional[str] = Field(default=None, description="Date this metadata was created.")
+    date_issued: str = Field(description="Date issued, format: YYYY-MM-DD.")
+    date_updated: Optional[str] = Field(default=None, description="Date this metadata was last updated.")
+
+    # Document fields
     document_type: DocumentType = Field(description="Type of document.")
     issuing_party: IssuingParty = Field(description="Issuer name.")
     service_name: Optional[str] = Field(default=None, description="Product/service name if applicable.")
     total_amount: Optional[float] = Field(default=None, description="Total currency amount.")
     total_amount_currency: Optional[str] = Field(default=None, description="Currency of the total amount.")
-    confidence: float = Field(description="Confidence score between 0 and 1.")
-    reasoning: str = Field(description="Why this classification was chosen.")
 
-    # Hash and timestamp fields
-    content_hash: str = Field(description="Content-based SHA256 hash (first 8 chars).")
-    file_hash: Optional[str] = Field(default=None, description="File-based SHA256 hash for quick filtering.")
-    create_date: Optional[str] = Field(default=None, description="Date this metadata was created.")
-    update_date: Optional[str] = Field(default=None, description="Date this metadata was last updated.")
+    # Hash fields
+    hash_content: str = Field(description="Content-based SHA256 hash (first 8 chars).")
+    hash_file: Optional[str] = Field(default=None, description="File-based SHA256 hash for quick filtering.")
 
     # Raw extracted values before normalization
     document_type_raw: Optional[str] = Field(default=None, description="Core document type label as extracted by LLM, before normalization. Unlike document_title, this is already cleaned of dates/periods.")
@@ -110,7 +115,7 @@ class DocumentMetadata(BaseModel):
     # QR code data
     qrcode: Optional[dict] = Field(default=None, description="Raw QR code data if extracted.")
 
-    @field_validator('issue_date', mode='before')
+    @field_validator('date_issued', mode='before')
     @classmethod
     def validate_issue_date(cls, value):
         if value is None or (isinstance(value, str) and value.strip() == ""):

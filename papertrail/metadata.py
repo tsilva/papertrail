@@ -161,10 +161,10 @@ def build_hash_index(directory: Path) -> tuple[dict[str, Path], dict[str, Path]]
 
     for json_path, data in iter_json_files(directory):
         pdf_path = json_path.with_suffix(".pdf")
-        content_hash = data.get('content_hash')
+        content_hash = data.get('hash_content')
         if content_hash:
             content_hash_index[content_hash] = pdf_path
-        file_hash = data.get('file_hash')
+        file_hash = data.get('hash_file')
         if file_hash:
             file_hash_index[file_hash] = pdf_path
 
@@ -184,7 +184,7 @@ def get_unique_dates(directory: Path) -> list[str]:
     dates_set = set()
 
     for _, data in iter_json_files(directory):
-        issue_date = data.get("issue_date", "")
+        issue_date = data.get("date_issued", "")
         if issue_date and issue_date != "$UNKNOWN$":
             # Extract YYYY-MM portion
             match = re.match(r"^(\d{4}-\d{2})", issue_date)

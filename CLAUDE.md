@@ -17,7 +17,7 @@ These are core constraints that must be preserved in all changes:
 
 2. **Raw value preservation**: Original extracted text MUST be stored in `*_raw` fields (`document_type_raw`, `issuing_party_raw`). This enables re-normalization when mappings improve.
 
-3. **Content hash is truth**: Duplicate detection uses `content_hash` (rendered pixels), not `file_hash` (raw bytes). Two PDFs with identical visual content are duplicates even if their bytes differ.
+3. **Content hash is truth**: Duplicate detection uses `hash_content` (rendered pixels), not `hash_file` (raw bytes). Two PDFs with identical visual content are duplicates even if their bytes differ.
 
 4. **`$UNKNOWN$` is the only fallback**: Unrecognized values become `$UNKNOWN$`, never empty string, `null`, or made-up values. This sentinel is used for filtering and re-processing.
 
@@ -66,15 +66,15 @@ issuing_parties:
 - **Content hash** (`hash_file_content`): Renders all pages at 150 DPI, hashes pixel data - detects true duplicates even if PDF metadata differs
 
 ### Hash Caching (`HashCache`)
-Content hashing is expensive (~1-2s per file). The `HashCache` class caches file_hash → content_hash mappings in `.cache/hash_cache.yaml`:
+Content hashing is expensive (~1-2s per file). The `HashCache` class caches hash_file → hash_content mappings in `.cache/hash_cache.yaml`:
 
 1. Compute fast file hash (cheap, ~0.05s)
 2. Check cache for existing mapping
 3. If cache miss, compute content hash (expensive) and save to cache
 
 ```
-file_hash "a1b2c3d4" → cache lookup → hit → return cached content_hash
-file_hash "b2c3d4e5" → cache lookup → miss → compute content_hash → save → return
+hash_file "a1b2c3d4" → cache lookup → hit → return cached hash_content
+hash_file "b2c3d4e5" → cache lookup → miss → compute hash_content → save → return
 ```
 
 The `validate_metadata` task uses parallelization (`ProcessPoolExecutor`) for cache misses, providing ~4-8x speedup on cold cache and ~50-100x on warm cache.
@@ -96,7 +96,7 @@ PDF → render pages at 300 DPI → pyzbar decode → detect QR type → parse �
 - `parse_portuguese_invoice_qr(qr_data)` - Parser for PT invoice QR codes
 
 **Portuguese QR fields extracted:**
-- `issue_date` from F field (YYYYMMDD → YYYY-MM-DD)
+- `issue_date` from F field (YYYYMMDD → YYYY-MM-DD, stored as `date_issued` in sidecar JSON)
 - `document_type` from D field (FT → invoice, NC → credit-note, etc.)
 - `total_amount` from O field (gross total)
 - `issuer_tax_number` from A field (raw NIF without country prefix)
@@ -171,7 +171,7 @@ DocumentMetadataInput  # With enum validation
 DocumentMetadata       # Full: hashes, timestamps, raw values
 ```
 
-Fields: `issue_date`, `document_type`, `document_title`, `issuing_party`, `service_name`, `total_amount`, `total_amount_currency`, `confidence`, `reasoning`, `content_hash`, `file_hash`, `create_date`, `update_date`, `document_type_raw`, `issuing_party_raw`, `document_type_key`, `issuing_party_key`, `page_count`, `issuer_tax_number`, `locale`, `qrcode`
+Fields: `class_confidence`, `class_reasoning`, `date_created`, `date_issued`, `date_updated`, `document_type`, `document_type_key`, `document_type_raw`, `document_title`, `hash_content`, `hash_file`, `issuer_tax_number`, `issuing_party`, `issuing_party_key`, `issuing_party_raw`, `locale`, `page_count`, `qrcode`, `service_name`, `total_amount`, `total_amount_currency`
 
 The `document_title` field stores the full document heading verbatim (e.g., "Detalhe da Fatura de Abril 2024"), while `document_type` / `document_type_raw` contain only the cleaned core type label (e.g., "Fatura"). This split prevents mapping key pollution from date-contaminated type values.
 
