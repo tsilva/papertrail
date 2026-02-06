@@ -9,7 +9,8 @@
 # Canonical values are derived from the unique set of mapping values.
 # No separate canonicals list is needed — just add mappings.
 #
-# Copy this file to config/mappings.yaml and customize as needed.
+# Copy this file to your profile directory and customize as needed:
+#   cp profiles/mappings.yaml.example profiles/default/mappings.yaml
 # The actual mappings.yaml is gitignored as it may contain personal vendor names.
 
 # Document type mappings (raw → canonical)

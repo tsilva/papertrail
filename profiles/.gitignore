@@ -1,6 +1,10 @@
-# Ignore all YAML profile files (contain local paths and potentially sensitive info)
-*.yaml
+# Ignore per-profile data files (contain local paths and personal data)
+*/profile.yaml
+*/mappings.yaml
+*/rejected_values.yaml
+*/qr_inventory.yaml
+*/qr_inventory.checkpoint.yaml
 
-# Allow example templates
+# Allow example templates and docs
 !*.example
 !README.md

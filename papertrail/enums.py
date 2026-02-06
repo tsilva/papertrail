@@ -20,10 +20,11 @@ def _load_mappings_canonicals(field: str) -> set[str]:
     Returns:
         Set of canonical values for the field.
     """
-    config_paths = [
-        Path(__file__).parent.parent / "config" / "mappings.yaml",
-        Path.cwd() / "config" / "mappings.yaml",
-    ]
+    profile = get_current_profile()
+    if profile and profile.profile_dir:
+        config_paths = [profile.profile_dir / "mappings.yaml"]
+    else:
+        config_paths = [Path(__file__).parent.parent / "profiles" / "default" / "mappings.yaml"]
 
     values = set()
 

@@ -24,8 +24,13 @@ def _get_rejected_manager() -> RejectedValuesManager:
     """Get or create the rejected values manager."""
     global _rejected_manager
     if _rejected_manager is None:
-        config_dir = Path(__file__).parent.parent / "config"
-        _rejected_manager = RejectedValuesManager(config_dir / "rejected_values.yaml")
+        from papertrail.config import get_current_profile
+        profile = get_current_profile()
+        if profile and profile.profile_dir:
+            rejected_path = profile.profile_dir / "rejected_values.yaml"
+        else:
+            rejected_path = Path(__file__).parent.parent / "profiles" / "default" / "rejected_values.yaml"
+        _rejected_manager = RejectedValuesManager(rejected_path)
     return _rejected_manager
 
 
