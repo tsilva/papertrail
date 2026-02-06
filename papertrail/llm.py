@@ -267,6 +267,18 @@ def normalize_metadata(
         doc_type = mappings.get_mapping(raw_metadata.document_type, "document_types")
         issuing_party = mappings.get_mapping(raw_metadata.issuing_party, "issuing_parties")
 
+        # Validate Tier 1 results against current enums (stale mappings fall through to Tier 2)
+        if doc_type and doc_type not in DOCUMENT_TYPES:
+            logger.warning(f"[STALE-MAPPING] document_type: '{doc_type}' not in current enum for raw '{raw_metadata.document_type}', will re-normalize")
+            if doc_logger:
+                doc_logger.log_stale_mapping("document_type", raw_metadata.document_type, doc_type)
+            doc_type = None
+        if issuing_party and issuing_party not in ISSUING_PARTIES:
+            logger.warning(f"[STALE-MAPPING] issuing_party: '{issuing_party}' not in current enum for raw '{raw_metadata.issuing_party}', will re-normalize")
+            if doc_logger:
+                doc_logger.log_stale_mapping("issuing_party", raw_metadata.issuing_party, issuing_party)
+            issuing_party = None
+
         if doc_type and doc_logger:
             doc_logger.log_normalization("document_type", raw_metadata.document_type, doc_type, tier=1)
         if issuing_party and doc_logger:

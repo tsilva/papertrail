@@ -69,7 +69,15 @@ def run_step(cmd: str, step_desc: str) -> tuple[str, str]:
 
     if result.returncode != 0:
         logger.error(f"{step_desc} failed with exit code {result.returncode}.")
-        raise RuntimeError(f"Failed with exit code {result.returncode}")
+        # Surface last meaningful stderr/stdout line in the error
+        detail = ""
+        for output in (result.stderr, result.stdout):
+            if output:
+                lines = [l.strip() for l in output.strip().splitlines() if l.strip()]
+                if lines:
+                    detail = f": {lines[-1]}"
+                    break
+        raise RuntimeError(f"Failed with exit code {result.returncode}{detail}")
 
     logger.debug(f"### {step_desc}... Finished.")
     return result.stdout, result.stderr
@@ -186,21 +194,22 @@ def pipeline(export_date_arg=None, processed_path_override=None):
 
     processed_files_excel_path = Path(PROCESSED_FILES_DIR) / "processed_files.xlsx"
 
-    # Step 1: Gmail download
-    with console.step_progress("Download Gmail attachments") as step:
-        try:
-            stdout, _ = run_step(
-                f'"{sys.executable}" "{main_script}" gmail_download',
-                "Download Gmail attachments"
-            )
-            # Parse and show result
-            if "messages processed" in stdout:
-                step.success(stdout.strip().split('\n')[-1] if stdout.strip() else "Completed")
-            else:
-                step.success("Completed")
-        except RuntimeError as e:
-            step.error(str(e))
-            sys.exit(1)
+    # Step 1: Gmail download (skip if disabled, non-fatal on failure)
+    if profile.gmail.enabled:
+        with console.step_progress("Download Gmail attachments") as step:
+            try:
+                stdout, _ = run_step(
+                    f'"{sys.executable}" "{main_script}" gmail_download',
+                    "Download Gmail attachments"
+                )
+                # Parse and show result
+                if "messages processed" in stdout:
+                    step.success(stdout.strip().split('\n')[-1] if stdout.strip() else "Completed")
+                else:
+                    step.success("Completed")
+            except RuntimeError as e:
+                step.warning(f"Gmail download failed, continuing pipeline ({e})")
+                logger.warning(f"Gmail download failed (non-fatal): {e}")
 
     for rd in raw_dirs:
         # Mbox extraction
