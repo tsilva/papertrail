@@ -4,7 +4,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
-from papertrail.cache_base import validate_field
+from papertrail.constants import validate_field
 from papertrail.constants import FIELDS
 from papertrail.yaml_utils import load_yaml, save_yaml
 

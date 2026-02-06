@@ -7,13 +7,13 @@ import urllib.error
 from pathlib import Path
 from typing import Optional
 
-from papertrail.cache_base import BaseYamlCache
 from papertrail.logging_utils import get_logger
+from papertrail.yaml_utils import load_yaml, save_yaml
 
 logger = get_logger('nif_lookup')
 
 
-class NIFLookupCache(BaseYamlCache):
+class NIFLookupCache:
     """Cache NIF → issuer name mappings with web scraping fallback.
 
     Two-tier lookup following existing patterns:
@@ -27,7 +27,6 @@ class NIFLookupCache(BaseYamlCache):
     """
 
     WEB_URL = "https://www.nif.pt/{nif}/"
-    _data_key = "nif_to_issuer"
 
     def __init__(self, cache_path: Optional[Path] = None):
         """Initialize the NIF lookup cache.
@@ -36,8 +35,19 @@ class NIFLookupCache(BaseYamlCache):
             cache_path: Path to the YAML cache file. Defaults to config/nif_cache.yaml
         """
         self._lock = threading.Lock()
-        default_path = Path(__file__).parent.parent / "config" / "nif_cache.yaml"
-        super().__init__(cache_path, default_path)
+        if cache_path is None:
+            cache_path = Path(__file__).parent.parent / "config" / "nif_cache.yaml"
+        self.path = cache_path
+        self._cache: dict[str, str] = {}
+        self._dirty = False
+        self._load()
+
+    def _load(self) -> None:
+        try:
+            data = load_yaml(self.path)
+            self._cache = data.get("nif_to_issuer", {})
+        except Exception:
+            self._cache = {}
 
     @staticmethod
     def normalize_nif(nif: str) -> str:
@@ -119,7 +129,13 @@ class NIFLookupCache(BaseYamlCache):
     def save(self) -> None:
         """Save cache to YAML file if dirty (thread-safe)."""
         with self._lock:
-            super().save()
+            if not self._dirty:
+                return
+            save_yaml(self.path, {"nif_to_issuer": self._cache})
+            self._dirty = False
+
+    def __len__(self) -> int:
+        return len(self._cache)
 
     def get(self, nif: str) -> Optional[str]:
         """Get cached issuer name for a NIF.
