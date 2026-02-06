@@ -1,6 +1,5 @@
 """Gmail download task."""
 
-import sys
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -20,7 +19,7 @@ def task_gmail_download():
     profile = get_current_profile()
     if not profile:
         console.error("No profile is active.", indent=False)
-        sys.exit(1)
+        raise RuntimeError("No profile is active.")
 
     raw_paths = profile.paths.raw
     processed_path_str = profile.paths.processed
@@ -35,7 +34,7 @@ def task_gmail_download():
         if not processed_path_str:
             missing.append("paths.processed")
         console.error(f"Missing required profile settings: {', '.join(missing)}", indent=False)
-        sys.exit(1)
+        raise RuntimeError(f"Missing required profile settings: {', '.join(missing)}")
 
     raw_path = Path(raw_paths[0])
     processed_path = Path(processed_path_str)
@@ -58,11 +57,11 @@ def task_gmail_download():
         )
     except FileNotFoundError as e:
         console.error(f"Gmail credentials not found: {e}", indent=False)
-        sys.exit(1)
+        raise RuntimeError(f"Gmail credentials not found: {e}") from e
     except Exception as e:
         error_type = type(e).__name__
         console.error(f"Gmail download failed ({error_type}): {e}", indent=False)
-        sys.exit(1)
+        raise RuntimeError(f"Gmail download failed ({error_type}): {e}") from e
 
     # Log details to file
     logger.debug(f"Messages found: {stats['messages_found']}")

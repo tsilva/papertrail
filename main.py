@@ -323,7 +323,10 @@ def main():
         return
 
     if args.task == "gmail_download":
-        task_gmail_download()
+        try:
+            task_gmail_download()
+        except RuntimeError:
+            sys.exit(1)
         return
 
     if args.task == "review_rejected":
