@@ -68,6 +68,7 @@ from papertrail.tasks.validation import (
     task_backfill_mapping_keys,
     task_backfill_document_title,
     task_tag_dated_types,
+    task_fix_unicode,
 )
 from papertrail.tasks.export import (
     export_metadata_to_excel,

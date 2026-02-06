@@ -364,16 +364,16 @@ Respond in JSON format:
             if doc_logger:
                 doc_logger.log_normalization("issuing_party", raw_metadata.issuing_party, issuing_party, tier=2)
 
-        # Save successful LLM mappings for reuse
-        # IMPORTANT: Don't save mappings that result in $UNKNOWN$ - these are rejections, not valid mappings
+        # Save LLM mappings for reuse (including $UNKNOWN$ — so rejected values
+        # are cached in TIER 1 and visible in mappings.yaml for user review)
         if mappings:
-            if need_doc_type and raw_metadata.document_type != "$UNKNOWN$" and doc_type != "$UNKNOWN$":
+            if need_doc_type and raw_metadata.document_type != "$UNKNOWN$":
                 mappings.add_mapping(
                     raw_metadata.document_type, doc_type, "document_types"
                 )
                 if doc_logger:
                     doc_logger.log_mapping_saved("document_types", raw_metadata.document_type, doc_type)
-            if need_issuing_party and raw_metadata.issuing_party != "$UNKNOWN$" and issuing_party != "$UNKNOWN$":
+            if need_issuing_party and raw_metadata.issuing_party != "$UNKNOWN$":
                 mappings.add_mapping(
                     raw_metadata.issuing_party, issuing_party, "issuing_parties"
                 )

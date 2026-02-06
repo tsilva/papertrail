@@ -83,6 +83,7 @@ from papertrail.tasks import (
     task_backfill_mapping_keys,
     task_backfill_document_title,
     task_tag_dated_types,
+    task_fix_unicode,
     task_bootstrap_mappings,
     task_review_rejected,
     task_gmail_download,
@@ -126,6 +127,8 @@ def initialize_config(profile_name: Optional[str] = None) -> None:
     global _ctx
 
     profiles_dir = get_profiles_dir()
+    if os.environ.get("PAPERTRAIL_PROFILES_DIR"):
+        logger.info(f"Using external profiles directory: {profiles_dir}")
     profiles_exist = profiles_dir.exists() and list_available_profiles()
 
     if not profiles_exist:
@@ -290,7 +293,7 @@ def main():
         'copy_matching', 'export_all_dates', 'check_files_exist', 'pipeline',
         'gmail_download', 'bootstrap_mappings',
         'backfill_page_count', 'backfill_mapping_keys', 'backfill_document_title', 'tag_dated_types',
-        'review_rejected', 'sync', 'validate_extraction',
+        'review_rejected', 'fix_unicode', 'sync', 'validate_extraction',
         'qr_inventory', 'apply_export_mappings'
     ], help="Task to perform.")
     parser.add_argument("processed_path", type=str, nargs='?', help="Path to output folder.")
@@ -359,6 +362,11 @@ def main():
     if args.task == "tag_dated_types":
         processed = require_path(parser, args.processed_path or get_profile_path("processed"), "processed_path")
         task_tag_dated_types(processed, dry_run=args.dry_run)
+        return
+
+    if args.task == "fix_unicode":
+        processed = require_path(parser, args.processed_path or get_profile_path("processed"), "processed_path")
+        task_fix_unicode(processed)
         return
 
     if args.task == "sync":
