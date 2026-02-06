@@ -99,8 +99,8 @@ class PortugueseInvoiceQR:
             "FT": "invoice",
             "FS": "invoice",  # Simplified invoice
             "FR": "receipt",
-            "NC": "credit-note",
-            "ND": "debit-note",
+            "NC": "invoice-credit",
+            "ND": "invoice-debit",
             "RC": "receipt",
             "RG": "receipt",
         }
