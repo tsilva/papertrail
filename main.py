@@ -281,14 +281,14 @@ def main():
         action="store_true",
         help="Enable verbose output with timestamps and debug messages."
     )
-    parser.add_argument("task", type=str, choices=[
+    parser.add_argument("task", type=str, nargs='?', default='pipeline', choices=[
         'extract_new', 'rename_files', 'validate_metadata', 'export_excel',
         'copy_matching', 'export_all_dates', 'check_files_exist', 'pipeline',
         'gmail_download', 'bootstrap_mappings',
         'backfill_page_count', 'backfill_mapping_keys', 'backfill_document_title', 'tag_dated_types',
         'review_rejected', 'fix_unicode', 'sync', 'validate_extraction',
         'qr_inventory', 'apply_export_mappings'
-    ], help="Task to perform.")
+    ], help="Task to perform (default: pipeline).")
     parser.add_argument("processed_path", type=str, nargs='?', help="Path to output folder.")
     parser.add_argument("--raw_path", type=str, help="Path to documents folder(s). Use ';' to separate multiple paths.")
     parser.add_argument("--excel_output_path", type=str, help="Path to output Excel file.")
