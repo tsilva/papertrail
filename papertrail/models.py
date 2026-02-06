@@ -54,9 +54,8 @@ class DocumentMetadataRaw(BaseModel):
     """
     issue_date: str = Field(description="Date issued, format: YYYY-MM-DD.")
     document_type: str = Field(description="Core document type label only, stripped of dates/periods/numbers (e.g., 'Fatura' not 'Fatura de Agosto 2021').")
-    document_title: Optional[str] = Field(default=None, description="Full document title/heading as it appears on the document, verbatim including dates and context.")
+    document_title: Optional[str] = Field(default=None, description="Specific subject, product, service, or transaction described in the document. Null if no specific subject beyond the document type is identifiable.")
     issuing_party: str = Field(description="Issuer name (exactly as it appears on document).")
-    service_name: Optional[str] = Field(default=None, description="Product/service name if applicable.")
     total_amount: Optional[float] = Field(default=None, description="Total currency amount.")
     total_amount_currency: Optional[str] = Field(default=None, description="Currency of the total amount.")
     confidence: float = Field(description="Confidence score between 0 and 1.")
@@ -90,7 +89,6 @@ class DocumentMetadata(BaseModel):
     # Document fields
     document_type: DocumentType = Field(description="Type of document.")
     issuing_party: IssuingParty = Field(description="Issuer name.")
-    service_name: Optional[str] = Field(default=None, description="Product/service name if applicable.")
     total_amount: Optional[float] = Field(default=None, description="Total currency amount.")
     total_amount_currency: Optional[str] = Field(default=None, description="Currency of the total amount.")
 
@@ -100,7 +98,7 @@ class DocumentMetadata(BaseModel):
 
     # Raw extracted values before normalization
     document_type_raw: Optional[str] = Field(default=None, description="Core document type label as extracted by LLM, before normalization. Unlike document_title, this is already cleaned of dates/periods.")
-    document_title: Optional[str] = Field(default=None, description="Full document title/heading as it appears on the document, verbatim.")
+    document_title: Optional[str] = Field(default=None, description="Specific subject, product, service, or transaction described in the document. Null if no specific subject beyond the document type is identifiable.")
     issuing_party_raw: Optional[str] = Field(default=None, description="Original issuing party as extracted.")
 
     # Slugified mapping keys for traceability (derived from *_raw via slugify_key)

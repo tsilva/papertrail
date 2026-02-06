@@ -362,8 +362,17 @@ def pipeline(export_date_arg=None, processed_path_override=None):
                         step.warning(f"{passed} checks passed, {missing_count} missing")
                     else:
                         step.success(f"{passed} checks passed")
+                elif re.search(r'(\d+)\s+checks?\s+passed', combined):
+                    passed = int(re.search(r'(\d+)\s+checks?\s+passed', combined).group(1))
+                    step.success(f"{passed} checks passed")
                 else:
                     step.success("Validation completed")
+
+                # Show which validations are missing
+                missing_items = re.findall(r'\[MISSING\]\s+(.+)', combined)
+                if missing_items:
+                    for item in missing_items:
+                        console.warning(item.strip())
             except RuntimeError as e:
                 step.error(str(e))
                 sys.exit(1)

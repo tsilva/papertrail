@@ -76,7 +76,7 @@ validations:
     - document_type: "invoice"
       issuing_party: "Amazon"
     - document_type: "receipt"
-      service_name: "AWS"
+      document_title: "AWS"
   # Or use external file
   # validations_file: "../config/file_check_validations.json"
 

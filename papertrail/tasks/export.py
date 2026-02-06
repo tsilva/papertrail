@@ -53,7 +53,7 @@ def export_metadata_to_excel(processed_path: Path, excel_output_path: str):
         ordered_cols = [
             "class_confidence", "date_issued", "year", "month", "hash_content", "hash_file",
             "filename", "filename_length", "page_count", "document_type", "document_type_raw",
-            "document_title", "issuing_party", "issuing_party_raw", "service_name",
+            "document_title", "issuing_party", "issuing_party_raw",
             "total_amount", "total_amount_currency"
         ]
         extra_cols = [col for col in df.columns if col not in ordered_cols]
