@@ -3,53 +3,13 @@
 import json
 import os
 from datetime import datetime
-from pathlib import Path
-from typing import Any, Optional, TYPE_CHECKING
+from typing import Any, Optional
 
 from papertrail.logging_utils import get_logger, DocumentLogger
 from papertrail.models import DocumentMetadataRaw, DOCUMENT_TYPES, ISSUING_PARTIES
 from papertrail.qr.models import QRExtractedMetadata
-from papertrail.rejected import RejectedValuesManager
 
 logger = get_logger('llm')
-
-if TYPE_CHECKING:
-    from papertrail.mappings import MappingsManager
-
-# Global rejected values manager (lazy-loaded)
-_rejected_manager: Optional[RejectedValuesManager] = None
-
-
-def _get_rejected_manager() -> RejectedValuesManager:
-    """Get or create the rejected values manager."""
-    global _rejected_manager
-    if _rejected_manager is None:
-        from papertrail.config import get_current_profile
-        profile = get_current_profile()
-        if profile and profile.profile_dir:
-            rejected_path = profile.profile_dir / "rejected_values.yaml"
-        else:
-            rejected_path = Path(__file__).parent.parent / "profiles" / "default" / "rejected_values.yaml"
-        _rejected_manager = RejectedValuesManager(rejected_path)
-    return _rejected_manager
-
-
-def _log_rejected_value(field: str, normalized: str, raw: str) -> None:
-    """Log a rejected normalization for review.
-
-    Called when the LLM suggests a canonical value that's not in the allowed list.
-
-    Args:
-        field: Field name ('document_types' or 'issuing_parties')
-        normalized: The canonical value suggested by the LLM (rejected)
-        raw: The original raw value from extraction
-    """
-    manager = _get_rejected_manager()
-    is_new = manager.add_rejected(field, normalized, raw)
-    if is_new:
-        logger.info(f"New rejected {field} logged: '{normalized}' (raw: '{raw}')")
-    else:
-        logger.debug(f"Duplicate rejection: '{normalized}' (raw: '{raw}')")
 
 
 def _extract_json_from_response(content: str) -> str:
@@ -237,61 +197,25 @@ def normalize_metadata(
     raw_metadata: DocumentMetadataRaw,
     client,
     model_id: Optional[str] = None,
-    mappings: Optional["MappingsManager"] = None,
     doc_logger: Optional[DocumentLogger] = None,
 ) -> tuple[str, str]:
     """
     Phase 2: Normalize raw extracted values to canonical enum values.
 
-    Uses a two-tier approach:
-    1. TIER 1: Check persistent mappings file (instant, no LLM call)
-    2. TIER 2: Fall back to LLM normalization, then save mapping for reuse
+    Always uses LLM to normalize, then validates against canonical lists.
+    Invalid values fall back to $UNKNOWN$.
 
     Args:
         raw_metadata: Raw metadata from phase 1 extraction
         client: OpenAI client instance
         model_id: Model ID to use (defaults to OPENROUTER_MODEL_ID env var)
-        mappings: Optional MappingsManager for persistent mapping lookup/storage
+        doc_logger: Optional DocumentLogger for structured logging
 
     Returns:
         Tuple of (normalized_document_type, normalized_issuing_party)
     """
     if model_id is None:
         model_id = os.getenv("OPENROUTER_MODEL_ID")
-
-    doc_type = None
-    issuing_party = None
-
-    # TIER 1: Check mappings file first (no LLM call needed)
-    if mappings:
-        doc_type = mappings.get_mapping(raw_metadata.document_type, "document_types")
-        issuing_party = mappings.get_mapping(raw_metadata.issuing_party, "issuing_parties")
-
-        # Validate Tier 1 results against current enums (stale mappings fall through to Tier 2)
-        if doc_type and doc_type not in DOCUMENT_TYPES:
-            logger.warning(f"[STALE-MAPPING] document_type: '{doc_type}' not in current enum for raw '{raw_metadata.document_type}', will re-normalize")
-            if doc_logger:
-                doc_logger.log_stale_mapping("document_type", raw_metadata.document_type, doc_type)
-            doc_type = None
-        if issuing_party and issuing_party not in ISSUING_PARTIES:
-            logger.warning(f"[STALE-MAPPING] issuing_party: '{issuing_party}' not in current enum for raw '{raw_metadata.issuing_party}', will re-normalize")
-            if doc_logger:
-                doc_logger.log_stale_mapping("issuing_party", raw_metadata.issuing_party, issuing_party)
-            issuing_party = None
-
-        if doc_type and doc_logger:
-            doc_logger.log_normalization("document_type", raw_metadata.document_type, doc_type, tier=1)
-        if issuing_party and doc_logger:
-            doc_logger.log_normalization("issuing_party", raw_metadata.issuing_party, issuing_party, tier=1)
-
-        if doc_type and issuing_party:
-            # Both found in mappings - no LLM needed!
-            return doc_type, issuing_party
-
-    # TIER 2: Fall back to LLM for unknown values
-    # Determine which fields need LLM normalization
-    need_doc_type = doc_type is None
-    need_issuing_party = issuing_party is None
 
     normalization_prompt = f"""You are a metadata normalization assistant. Your job is to map extracted document values to their canonical forms.
 
@@ -344,57 +268,29 @@ Respond in JSON format:
         if not content:
             logger.debug("Empty response from normalization LLM")
             logger.debug(f"Full response: {response}")
-            return doc_type or "$UNKNOWN$", issuing_party or "$UNKNOWN$"
+            return "$UNKNOWN$", "$UNKNOWN$"
 
         # Extract JSON from the response (handle markdown code blocks)
         content = _extract_json_from_response(content)
         result = json.loads(content)
-        llm_doc_type = result.get("document_type", "$UNKNOWN$")
-        llm_issuing_party = result.get("issuing_party", "$UNKNOWN$")
+        doc_type = result.get("document_type", "$UNKNOWN$")
+        issuing_party = result.get("issuing_party", "$UNKNOWN$")
 
         # Validate that the returned values are actually in the canonical lists
-        if llm_doc_type not in DOCUMENT_TYPES:
-            logger.warning(f"Rejected doc_type '{llm_doc_type}' (not in canonical list)")
-            _log_rejected_value("document_types", llm_doc_type, raw_metadata.document_type)
-            if doc_logger:
-                doc_logger.log_rejected("document_type", raw_metadata.document_type, llm_doc_type)
-            llm_doc_type = "$UNKNOWN$"
-        if llm_issuing_party not in ISSUING_PARTIES:
-            logger.warning(f"Rejected issuing_party '{llm_issuing_party}' (not in canonical list)")
-            _log_rejected_value("issuing_parties", llm_issuing_party, raw_metadata.issuing_party)
-            if doc_logger:
-                doc_logger.log_rejected("issuing_party", raw_metadata.issuing_party, llm_issuing_party)
-            llm_issuing_party = "$UNKNOWN$"
+        if doc_type not in DOCUMENT_TYPES:
+            logger.warning(f"Rejected doc_type '{doc_type}' (not in canonical list)")
+            doc_type = "$UNKNOWN$"
+        if issuing_party not in ISSUING_PARTIES:
+            logger.warning(f"Rejected issuing_party '{issuing_party}' (not in canonical list)")
+            issuing_party = "$UNKNOWN$"
 
-        # Use LLM results for fields that needed normalization
-        if need_doc_type:
-            doc_type = llm_doc_type
-            if doc_logger:
-                doc_logger.log_normalization("document_type", raw_metadata.document_type, doc_type, tier=2)
-        if need_issuing_party:
-            issuing_party = llm_issuing_party
-            if doc_logger:
-                doc_logger.log_normalization("issuing_party", raw_metadata.issuing_party, issuing_party, tier=2)
-
-        # Save LLM mappings for reuse (including $UNKNOWN$ — so rejected values
-        # are cached in TIER 1 and visible in mappings.yaml for user review)
-        if mappings:
-            if need_doc_type and raw_metadata.document_type != "$UNKNOWN$":
-                mappings.add_mapping(
-                    raw_metadata.document_type, doc_type, "document_types"
-                )
-                if doc_logger:
-                    doc_logger.log_mapping_saved("document_types", raw_metadata.document_type, doc_type)
-            if need_issuing_party and raw_metadata.issuing_party != "$UNKNOWN$":
-                mappings.add_mapping(
-                    raw_metadata.issuing_party, issuing_party, "issuing_parties"
-                )
-                if doc_logger:
-                    doc_logger.log_mapping_saved("issuing_parties", raw_metadata.issuing_party, issuing_party)
+        if doc_logger:
+            doc_logger.log_normalization("document_type", raw_metadata.document_type, doc_type)
+            doc_logger.log_normalization("issuing_party", raw_metadata.issuing_party, issuing_party)
 
         return doc_type, issuing_party
 
     except Exception as e:
         logger.error(f"Normalization failed: {e}, using $UNKNOWN$ for both fields")
         logger.debug("Traceback:", exc_info=True)
-        return doc_type or "$UNKNOWN$", issuing_party or "$UNKNOWN$"
+        return "$UNKNOWN$", "$UNKNOWN$"
