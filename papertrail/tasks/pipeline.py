@@ -300,19 +300,27 @@ def pipeline(export_date_arg=None, processed_path_override=None):
     if os.path.exists(export_date_dir):
         shutil.rmtree(export_date_dir)
 
-    # Copy matching documents
+    # Copy matching documents (direct call with optional export prefix config)
+    from papertrail.tasks.organization import copy_matching_files
+
+    export_file_config = None
+    if profile.export.file_mappings.enabled:
+        export_file_config = profile.export.file_mappings
+
     with console.step_progress(f"Copy matching documents ({export_date})") as step:
         try:
-            stdout, _ = run_step(
-                f'"{sys.executable}" "{main_script}" copy_matching "{PROCESSED_FILES_DIR}" --pattern "{export_date}" --copy_dest_folder "{export_date_dir}"',
-                f"Copy matching documents ({export_date})"
+            copy_stats = copy_matching_files(
+                Path(PROCESSED_FILES_DIR),
+                export_date,
+                Path(export_date_dir),
+                export_config=export_file_config,
             )
-            stats = _parse_step_output(stdout, "")
-            if stats.get('copied'):
-                step.success(f"Copied {stats['copied']} files to {Path(export_date_dir).name}")
+            copied = copy_stats.get('copied', 0)
+            if copied:
+                step.success(f"Copied {copied} files to {Path(export_date_dir).name}")
             else:
                 step.success("Completed")
-        except RuntimeError as e:
+        except Exception as e:
             step.error(str(e))
             sys.exit(1)
 
