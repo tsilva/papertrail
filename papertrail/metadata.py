@@ -222,7 +222,7 @@ def save_metadata_json(pdf_path: Path, metadata: DocumentMetadata) -> None:
     """
     json_path = pdf_path.with_suffix('.json')
     with open(json_path, "w", encoding="utf-8") as f:
-        json.dump(metadata.model_dump(), f, indent=4, ensure_ascii=False)
+        json.dump(metadata.model_dump(), f, indent=4, ensure_ascii=False, sort_keys=True)
 
 
 def load_validated_metadata(
