@@ -66,7 +66,6 @@ from papertrail.tasks.validation import (
     check_files_exist,
     task_backfill_page_count,
     task_backfill_mapping_keys,
-    task_backfill_document_title,
     task_tag_dated_types,
     task_fix_unicode,
 )
