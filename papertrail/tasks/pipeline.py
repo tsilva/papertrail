@@ -248,38 +248,21 @@ def pipeline(export_date_arg=None, processed_path_override=None):
                 step.warning("No archives found")
             logger.debug("### Google Takeout archive extraction... Finished.")
 
-    # Extract new documents
-    with console.step_progress("Extract new documents") as step:
-        try:
-            stdout, _ = run_step(
-                f'"{sys.executable}" "{main_script}" extract_new "{PROCESSED_FILES_DIR}" --raw_path "{";".join(raw_dirs)}"',
-                "Extract new documents"
-            )
-            stats = _parse_step_output(stdout, "")
-            if stats.get('scanned'):
-                step.success(f"{stats['scanned']} PDFs scanned, {stats.get('new', 0)} new to process")
-            else:
-                step.success("Completed")
-        except RuntimeError as e:
-            step.error(str(e))
-            sys.exit(1)
+    # Extract new documents (called directly for live progress)
+    from papertrail.tasks.extraction import task_extract_new
+    try:
+        task_extract_new(Path(PROCESSED_FILES_DIR), [Path(d) for d in raw_dirs])
+    except Exception as e:
+        console.error(str(e))
+        sys.exit(1)
 
-    # Regenerate orphaned PDFs
-    with console.step_progress("Regenerate orphaned PDFs") as step:
-        try:
-            stdout, _ = run_step(
-                f'"{sys.executable}" "{main_script}" sync "{PROCESSED_FILES_DIR}"',
-                "Regenerate orphaned PDFs"
-            )
-            if "No orphaned PDF files found" in stdout:
-                step.success("No orphans found")
-            elif match := re.search(r'(\d+)\s+orphaned files regenerated', stdout):
-                step.success(f"{match.group(1)} regenerated")
-            else:
-                step.success("Completed")
-        except RuntimeError as e:
-            step.error(str(e))
-            sys.exit(1)
+    # Regenerate orphaned PDFs (called directly for live progress)
+    from papertrail.tasks.extraction import task_sync
+    try:
+        task_sync(Path(PROCESSED_FILES_DIR))
+    except Exception as e:
+        console.error(str(e))
+        sys.exit(1)
 
     # Rename files
     with console.step_progress("Rename files") as step:
