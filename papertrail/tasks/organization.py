@@ -76,9 +76,13 @@ def rename_pdf_files(pdf_paths, file_hash_map, known_content_hashes, known_file_
     """Rename multiple PDF files."""
     console = get_console()
 
-    with console.progress("Processing PDFs", total=len(pdf_paths)) as progress:
-        task = progress.add_task("Processing PDFs", total=len(pdf_paths))
+    with console.progress("Extracting", total=len(pdf_paths)) as progress:
+        task = progress.add_task("Extracting", total=len(pdf_paths))
         for pdf_path in pdf_paths:
+            name = pdf_path.stem
+            if len(name) > 40:
+                name = name[:37] + "..."
+            progress.update(task, description=f"[dim]{name}[/dim]")
             rename_single_pdf(pdf_path, file_hash_map[pdf_path], processed_path, known_content_hashes, known_file_hashes,
                               failure_logger, doc_logger=doc_logger)
             progress.update(task, advance=1)

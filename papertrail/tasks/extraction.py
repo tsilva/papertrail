@@ -662,11 +662,16 @@ def task_sync(processed_path: Path, dry_run: bool = False,
                     logger.debug(f"Renamed: {old_pdf_path.name} -> {new_pdf_path.name}")
                     renamed_count += 1
 
+        def _truncated_name(path: Path) -> str:
+            name = path.stem
+            return name[:37] + "..." if len(name) > 40 else name
+
         if workers == 1:
             # Sequential path (single worker)
             with console.progress("Syncing", total=len(targets)) as progress:
                 task = progress.add_task("Syncing", total=len(targets))
                 for item in targets:
+                    progress.update(task, description=f"[dim]{_truncated_name(item[1])}[/dim]")
                     metadata_path, old_data, new_metadata, error = classify_one(item)
                     process_result(metadata_path, old_data, new_metadata, error)
                     progress.update(task, advance=1)
@@ -677,6 +682,8 @@ def task_sync(processed_path: Path, dry_run: bool = False,
                 with console.progress("Syncing", total=len(futures)) as progress:
                     task = progress.add_task("Syncing", total=len(futures))
                     for future in as_completed(futures):
+                        item = futures[future]
+                        progress.update(task, description=f"[dim]{_truncated_name(item[1])}[/dim]")
                         metadata_path, old_data, new_metadata, error = future.result()
                         process_result(metadata_path, old_data, new_metadata, error)
                         progress.update(task, advance=1)
