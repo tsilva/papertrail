@@ -5,7 +5,6 @@ import logging
 import os
 import re
 import shutil
-import subprocess
 import sys
 import tempfile
 import time
@@ -46,86 +45,12 @@ def suppress_console_logging():
             handler.setLevel(level)
 
 
-def run_step(cmd: str, step_desc: str) -> tuple[str, str]:
-    """Run a pipeline step, capturing output to the pipeline log.
-
-    Args:
-        cmd: Command to execute.
-        step_desc: Human-readable step description.
-
-    Returns:
-        Tuple of (stdout, stderr) from the command.
-    """
-    logger.debug(f"### {step_desc}...")
-    result = subprocess.run(cmd, shell=True, text=True, capture_output=True)
-
-    # Log all output to file
-    if result.stdout:
-        for line in result.stdout.rstrip().split('\n'):
-            logger.debug(line)
-    if result.stderr:
-        for line in result.stderr.rstrip().split('\n'):
-            logger.debug(line)
-
-    if result.returncode != 0:
-        logger.error(f"{step_desc} failed with exit code {result.returncode}.")
-        # Surface last meaningful stderr/stdout line in the error
-        detail = ""
-        for output in (result.stderr, result.stdout):
-            if output:
-                lines = [l.strip() for l in output.strip().splitlines() if l.strip()]
-                if lines:
-                    detail = f": {lines[-1]}"
-                    break
-        raise RuntimeError(f"Failed with exit code {result.returncode}{detail}")
-
-    logger.debug(f"### {step_desc}... Finished.")
-    return result.stdout, result.stderr
-
-
-def _parse_step_output(stdout: str, stderr: str) -> dict:
-    """Parse step output to extract summary statistics.
-
-    Args:
-        stdout: Standard output from the step.
-        stderr: Standard error from the step.
-
-    Returns:
-        Dictionary with extracted statistics.
-    """
-    combined = stdout + stderr
-    stats = {}
-
-    # Try to extract common patterns
-    # e.g., "13 PDFs scanned, 0 new to process"
-    if match := re.search(r'(\d+)\s+PDFs?\s+scanned', combined):
-        stats['scanned'] = int(match.group(1))
-    if match := re.search(r'(\d+)\s+new\s+to\s+process', combined):
-        stats['new'] = int(match.group(1))
-    # e.g., "3194 files validated, 0 renamed"
-    if match := re.search(r'(\d+)\s+files?\s+validated', combined):
-        stats['validated'] = int(match.group(1))
-    if match := re.search(r'(\d+)\s+renamed', combined):
-        stats['renamed'] = int(match.group(1))
-    # e.g., "Exported 3194 entries"
-    if match := re.search(r'Exported\s+(\d+)\s+entr', combined):
-        stats['exported'] = int(match.group(1))
-    # e.g., "Copied 14 files"
-    if match := re.search(r'Copied\s+(\d+)\s+files?', combined):
-        stats['copied'] = int(match.group(1))
-
-    return stats
-
-
 def pipeline(export_date_arg=None, processed_path_override=None):
     """Run the full document processing pipeline."""
     from papertrail.config import get_passwords, get_validations
 
     console = get_console()
     start_time = time.time()
-
-    # Resolve main.py path for subprocess calls
-    main_script = str(Path(__file__).parents[1].parent / "main.py")
 
     profile = get_current_profile()
     if not profile:
@@ -194,20 +119,36 @@ def pipeline(export_date_arg=None, processed_path_override=None):
 
     processed_files_excel_path = Path(PROCESSED_FILES_DIR) / "processed_files.xlsx"
 
-    # Step 1: Gmail download (skip if disabled, non-fatal on failure)
+    # ── Stage 1: Ingest raw files ──────────────────────────────────────
+
+    # Gmail download (skip if disabled, non-fatal on failure)
     if profile.gmail.enabled:
         with console.step_progress("Download Gmail attachments") as step:
             try:
-                stdout, _ = run_step(
-                    f'"{sys.executable}" "{main_script}" gmail_download',
-                    "Download Gmail attachments"
+                from papertrail.gmail import download_gmail_attachments
+
+                raw_path = Path(raw_dirs[0])
+                raw_path.mkdir(parents=True, exist_ok=True)
+
+                end_date = datetime.now()
+                gmail_start = (end_date.replace(day=1) - timedelta(days=1)).replace(day=1)
+                logger.debug(f"Gmail date range: {gmail_start.date()} to {end_date.date()}")
+
+                stats = download_gmail_attachments(
+                    output_dir=raw_path,
+                    start_date=gmail_start,
+                    end_date=end_date,
                 )
-                # Parse and show result
-                if "messages processed" in stdout:
-                    step.success(stdout.strip().split('\n')[-1] if stdout.strip() else "Completed")
+                if stats['attachments_downloaded'] > 0:
+                    step.success(
+                        f"{stats['messages_processed']} messages processed, "
+                        f"{stats['attachments_downloaded']} new attachments"
+                    )
+                elif stats['messages_processed'] > 0:
+                    step.success(f"{stats['messages_processed']} messages processed, 0 new attachments")
                 else:
-                    step.success("Completed")
-            except RuntimeError as e:
+                    step.warning("No messages found")
+            except Exception as e:
                 step.warning(f"Gmail download failed, continuing pipeline ({e})")
                 logger.warning(f"Gmail download failed (non-fatal): {e}")
 
@@ -248,7 +189,8 @@ def pipeline(export_date_arg=None, processed_path_override=None):
                 step.warning("No archives found")
             logger.debug("### Google Takeout archive extraction... Finished.")
 
-    # Extract new documents (called directly for live progress)
+    # ── Stage 2: Extract new documents ─────────────────────────────────
+
     from papertrail.tasks.extraction import task_extract_new
     try:
         task_extract_new(Path(PROCESSED_FILES_DIR), [Path(d) for d in raw_dirs])
@@ -256,7 +198,8 @@ def pipeline(export_date_arg=None, processed_path_override=None):
         console.error(str(e))
         sys.exit(1)
 
-    # Regenerate orphaned PDFs (called directly for live progress)
+    # ── Stage 3: Sync orphans ──────────────────────────────────────────
+
     from papertrail.tasks.extraction import task_sync
     try:
         task_sync(Path(PROCESSED_FILES_DIR))
@@ -264,43 +207,41 @@ def pipeline(export_date_arg=None, processed_path_override=None):
         console.error(str(e))
         sys.exit(1)
 
-    # Rename files
+    # ── Stage 4: Rename files ──────────────────────────────────────────
+
+    from papertrail.tasks.organization import task_rename_files
+
     with console.step_progress("Rename files") as step:
         try:
-            stdout, _ = run_step(
-                f'"{sys.executable}" "{main_script}" rename_files "{PROCESSED_FILES_DIR}"',
-                "Rename files"
-            )
-            stats = _parse_step_output(stdout, "")
-            if stats.get('validated'):
-                step.success(f"{stats['validated']} files validated, {stats.get('renamed', 0)} renamed")
-            else:
-                step.success("Completed")
-        except RuntimeError as e:
+            stats = task_rename_files(Path(PROCESSED_FILES_DIR), quiet=True)
+            step.success(f"{stats['validated']} files validated, {stats['renamed']} renamed")
+        except Exception as e:
             step.error(str(e))
             sys.exit(1)
 
-    # Export to Excel
+    # ── Stage 5: Export to Excel ───────────────────────────────────────
+
+    from papertrail.tasks.export import export_metadata_to_excel
+
     with console.step_progress("Export to Excel") as step:
         try:
-            stdout, _ = run_step(
-                f'"{sys.executable}" "{main_script}" export_excel "{PROCESSED_FILES_DIR}" --excel_output_path "{processed_files_excel_path}"',
-                "Export to Excel"
+            stats = export_metadata_to_excel(
+                Path(PROCESSED_FILES_DIR), str(processed_files_excel_path), quiet=True
             )
-            stats = _parse_step_output(stdout, "")
-            if stats.get('exported'):
+            if stats['exported']:
                 step.success(f"Exported {stats['exported']} entries")
             else:
-                step.success("Completed")
-        except RuntimeError as e:
+                step.warning("No valid metadata found to export")
+        except Exception as e:
             step.error(str(e))
             sys.exit(1)
+
+    # ── Stage 6: Build monthly export ──────────────────────────────────
 
     # Purge export date folder before copying
     if os.path.exists(export_date_dir):
         shutil.rmtree(export_date_dir)
 
-    # Copy matching documents (direct call with optional export prefix config)
     from papertrail.tasks.organization import copy_matching_files
 
     export_file_config = None
@@ -324,7 +265,6 @@ def pipeline(export_date_arg=None, processed_path_override=None):
             step.error(str(e))
             sys.exit(1)
 
-    # Merge PDFs using pdf_gluer package
     with console.step_progress("Merge PDFs") as step:
         logger.debug("### Merge PDFs...")
         try:
@@ -341,34 +281,26 @@ def pipeline(export_date_arg=None, processed_path_override=None):
     with suppress_console_logging():
         validate_merged_pdf(Path(export_date_dir))
 
-    # Validate exported files
+    # ── Stage 7: Validate exported files ───────────────────────────────
+
+    from papertrail.tasks.validation import check_files_exist
+
     with console.step_progress("Validate exported files") as step:
         if validations_file_path:
             try:
-                stdout, stderr = run_step(
-                    f'"{sys.executable}" "{main_script}" check_files_exist "{export_date_dir}" --check_schema_path "{validations_file_path}"',
-                    "Validate exported files"
+                stats = check_files_exist(
+                    Path(export_date_dir), Path(validations_file_path), quiet=True
                 )
-                # Parse validation results - look for pass/fail counts
-                combined = stdout + stderr
-                if match := re.search(r'(\d+)\s+checks?\s+passed.*?(\d+)\s+missing', combined):
-                    passed, missing_count = int(match.group(1)), int(match.group(2))
-                    if missing_count > 0:
-                        step.warning(f"{passed} checks passed, {missing_count} missing")
-                    else:
-                        step.success(f"{passed} checks passed")
-                elif re.search(r'(\d+)\s+checks?\s+passed', combined):
-                    passed = int(re.search(r'(\d+)\s+checks?\s+passed', combined).group(1))
-                    step.success(f"{passed} checks passed")
+                if stats['all_passed']:
+                    step.success(f"{stats['passed']} checks passed")
                 else:
-                    step.success("Validation completed")
+                    step.warning(f"{stats['passed']} checks passed, {stats['missing']} missing")
 
                 # Show which validations are missing
-                missing_items = re.findall(r'\[MISSING\]\s+(.+)', combined)
-                if missing_items:
-                    for item in missing_items:
-                        console.warning(item.strip())
-            except RuntimeError as e:
+                if stats['missing_items']:
+                    for item in stats['missing_items']:
+                        console.warning(item)
+            except Exception as e:
                 step.error(str(e))
                 sys.exit(1)
         else:

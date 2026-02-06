@@ -89,18 +89,26 @@ def rename_pdf_files(pdf_paths, file_hash_map, known_content_hashes, known_file_
             progress.update(task, advance=1)
 
 
-def task_rename_files(processed_path: Path):
-    """Rename existing PDF files based on metadata."""
+def task_rename_files(processed_path: Path, quiet: bool = False) -> dict:
+    """Rename existing PDF files based on metadata.
+
+    Args:
+        processed_path: Path to processed documents directory.
+        quiet: If True, suppress progress bars and console output.
+
+    Returns:
+        Dict with 'validated' and 'renamed' counts.
+    """
     from papertrail.metadata import load_json_files_parallel
 
     console = get_console()
 
-    with task_log_context(processed_path, "rename_files"):
+    with task_log_context(processed_path, "rename_files", show_header=not quiet):
         logger.debug("Renaming existing PDF files and metadata based on metadata...")
 
         valid_entries = []
 
-        for metadata_path, metadata in load_json_files_parallel(processed_path, validate=True, show_progress=True, progress_desc="Validating metadata"):
+        for metadata_path, metadata in load_json_files_parallel(processed_path, validate=True, show_progress=not quiet, progress_desc="Validating metadata"):
             pdf_path = metadata_path.with_suffix(".pdf")
             if not pdf_path.exists():
                 logger.warning(f"Skipping {metadata_path.name}: PDF file not found")
@@ -129,9 +137,11 @@ def task_rename_files(processed_path: Path):
             except Exception as e:
                 logger.error(f"Failed to rename {old_pdf_path.name}: {e}")
 
-        # Console output
-        console.success(f"{len(valid_entries)} files validated, {renamed_count} renamed", indent=False)
+        if not quiet:
+            console.success(f"{len(valid_entries)} files validated, {renamed_count} renamed", indent=False)
         logger.debug(f"Renaming complete. Renamed {renamed_count} files.")
+
+    return {'validated': len(valid_entries), 'renamed': renamed_count}
 
 
 def _get_nested_value(metadata: dict, key: str):

@@ -146,10 +146,17 @@ def validate_merged_pdf(folder_path: Path) -> bool:
     return True
 
 
-def check_files_exist(target_folder: Path, validation_schema_path: Path):
-    """Validate files exist based on a schema."""
-    from papertrail.metadata import load_json_data
+def check_files_exist(target_folder: Path, validation_schema_path: Path, quiet: bool = False) -> dict:
+    """Validate files exist based on a schema.
 
+    Args:
+        target_folder: Directory to check for files.
+        validation_schema_path: Path to JSON schema file.
+        quiet: If True, suppress console output (table, summary, missing lines).
+
+    Returns:
+        Dict with 'passed', 'missing', 'missing_items', and 'all_passed'.
+    """
     console = get_console()
 
     with open(validation_schema_path, "r", encoding="utf-8") as f:
@@ -171,11 +178,11 @@ def check_files_exist(target_folder: Path, validation_schema_path: Path):
     missing_count = len(check_results) - passed_count
     all_passed = missing_count == 0
 
-    # Build validation table rows
+    # Build descriptions and collect missing items
+    missing_items = []
     table_rows = []
     sorted_results = sorted(check_results, key=lambda x: (not x[0], x[1]))
     for found, idx, check in sorted_results:
-        # Build a readable description from the check criteria
         desc_parts = []
         if "document_type" in check:
             desc_parts.append(check["document_type"])
@@ -185,33 +192,29 @@ def check_files_exist(target_folder: Path, validation_schema_path: Path):
             desc_parts.append(f"[{check['document_title']}]")
 
         description = " ".join(desc_parts) if desc_parts else str(check)
-        status = "FOUND" if found else "MISSING"
         table_rows.append({"description": description, "found": found})
+
+        if not found:
+            missing_items.append(description)
 
         # Log to file
         logger.debug(f"{'[OK]' if found else '[FAIL]'} {check} -- {'FOUND' if found else 'NOT FOUND'}")
 
-    # Display validation table
-    console.validation_table("File Validation Results", table_rows)
+    if not quiet:
+        # Display validation table
+        console.validation_table("File Validation Results", table_rows)
 
-    # Print machine-parseable lines for missing items (used by pipeline)
-    for found, idx, check in check_results:
-        if not found:
-            desc_parts = []
-            if "document_type" in check:
-                desc_parts.append(check["document_type"])
-            if "issuing_party" in check:
-                desc_parts.append(f"({check['issuing_party']})")
-            if "document_title" in check:
-                desc_parts.append(f"[{check['document_title']}]")
-            desc = " ".join(desc_parts) if desc_parts else str(check)
-            print(f"[MISSING] {desc}")
+        # Print machine-parseable lines for missing items
+        for item in missing_items:
+            print(f"[MISSING] {item}")
 
-    # Summary
-    if all_passed:
-        console.success(f"{passed_count} checks passed", indent=False)
-    else:
-        console.warning(f"{passed_count} checks passed, {missing_count} missing", indent=False)
+        # Summary
+        if all_passed:
+            console.success(f"{passed_count} checks passed", indent=False)
+        else:
+            console.warning(f"{passed_count} checks passed, {missing_count} missing", indent=False)
+
+    return {'passed': passed_count, 'missing': missing_count, 'missing_items': missing_items, 'all_passed': all_passed}
 
 
 def task_backfill_page_count(processed_path: Path):

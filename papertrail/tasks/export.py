@@ -18,14 +18,23 @@ from papertrail.tasks.validation import validate_merged_pdf
 logger = get_logger('cli')
 
 
-def export_metadata_to_excel(processed_path: Path, excel_output_path: str):
-    """Export metadata to an Excel file."""
+def export_metadata_to_excel(processed_path: Path, excel_output_path: str, quiet: bool = False) -> dict:
+    """Export metadata to an Excel file.
+
+    Args:
+        processed_path: Path to processed documents directory.
+        excel_output_path: Path to output Excel file.
+        quiet: If True, suppress progress bars and console output.
+
+    Returns:
+        Dict with 'exported' count.
+    """
     from papertrail.metadata import load_json_files_parallel
 
     console = get_console()
     metadata_list = []
 
-    for metadata_path, metadata in load_json_files_parallel(processed_path, validate=True, show_progress=True, progress_desc="Collecting metadata"):
+    for metadata_path, metadata in load_json_files_parallel(processed_path, validate=True, show_progress=not quiet, progress_desc="Collecting metadata"):
         metadata_dict = metadata.model_dump()
 
         metadata_dict.pop("class_reasoning", None)
@@ -82,10 +91,14 @@ def export_metadata_to_excel(processed_path: Path, excel_output_path: str):
                     col_letter = get_column_letter(df.columns.get_loc(col) + 1)
                     worksheet.column_dimensions[col_letter].hidden = True
 
-        console.success(f"Exported {len(df)} entries", indent=False)
+        if not quiet:
+            console.success(f"Exported {len(df)} entries", indent=False)
         logger.debug(f"Exported {len(df)} entries to {excel_output_path}")
+        return {'exported': len(df)}
     else:
-        console.warning("No valid metadata found to export", indent=False)
+        if not quiet:
+            console.warning("No valid metadata found to export", indent=False)
+        return {'exported': 0}
 
 
 def calculate_directory_hash(directory: Path) -> str:
