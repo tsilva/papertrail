@@ -223,7 +223,7 @@ def task_backfill_page_count(processed_path: Path):
             data["update_date"] = datetime.now().strftime("%Y-%m-%d")
 
             with open(metadata_path, "w", encoding="utf-8") as f:
-                json.dump(data, f, indent=2)
+                json.dump(data, f, indent=4, ensure_ascii=False, sort_keys=True)
 
             updated += 1
 
@@ -273,7 +273,7 @@ def task_backfill_mapping_keys(processed_path: Path):
             data["update_date"] = datetime.now().strftime("%Y-%m-%d")
 
             with open(metadata_path, "w", encoding="utf-8") as f:
-                json.dump(data, f, indent=2)
+                json.dump(data, f, indent=4, ensure_ascii=False, sort_keys=True)
 
             updated += 1
 
@@ -339,7 +339,7 @@ def task_tag_dated_types(processed_path: Path, dry_run: bool = False):
             data["update_date"] = datetime.now().strftime("%Y-%m-%d")
 
             with open(metadata_path, "w", encoding="utf-8") as f:
-                json.dump(data, f, indent=2)
+                json.dump(data, f, indent=4, ensure_ascii=False, sort_keys=True)
 
             logger.info(f"Tagged: {metadata_path.name} (key: {dt_key})")
             tagged += 1
@@ -389,7 +389,7 @@ def task_backfill_document_title(processed_path: Path):
             data["update_date"] = datetime.now().strftime("%Y-%m-%d")
 
             with open(metadata_path, "w", encoding="utf-8") as f:
-                json.dump(data, f, indent=2)
+                json.dump(data, f, indent=4, ensure_ascii=False, sort_keys=True)
 
             updated += 1
 
@@ -407,3 +407,45 @@ def task_backfill_document_title(processed_path: Path):
         console.success(f"{updated} updated, {skipped} skipped (already had document_title)", indent=False)
 
     logger.debug(f"Backfill document_title complete: {updated} updated, {skipped} skipped, {errors} errors")
+
+
+def task_fix_unicode(processed_path: Path):
+    """Fix Unicode escape sequences in metadata JSON files.
+
+    Re-saves JSON files that contain \\uXXXX escape sequences with literal UTF-8 characters.
+    """
+    console = get_console()
+    setup_task_logging(processed_path, "fix_unicode")
+
+    fixed = 0
+    skipped = 0
+    errors = 0
+
+    for metadata_path, pdf_path, data in load_validated_metadata(
+        processed_path, require_pdf=False, validate=False, show_progress=True, progress_desc="Fixing Unicode escapes"
+    ):
+        try:
+            raw_content = metadata_path.read_text(encoding="utf-8")
+            if "\\u00" not in raw_content:
+                skipped += 1
+                continue
+
+            with open(metadata_path, "w", encoding="utf-8") as f:
+                json.dump(data, f, indent=4, ensure_ascii=False, sort_keys=True)
+
+            fixed += 1
+
+        except Exception as e:
+            logger.error(f"Failed to process {metadata_path.name}: {e}")
+            errors += 1
+
+    if fixed == 0 and skipped == 0 and errors == 0:
+        console.warning("No metadata files found", indent=False)
+        return
+
+    if errors > 0:
+        console.warning(f"{fixed} fixed, {skipped} skipped, {errors} errors", indent=False)
+    else:
+        console.success(f"{fixed} fixed, {skipped} skipped (already UTF-8)", indent=False)
+
+    logger.debug(f"Fix unicode complete: {fixed} fixed, {skipped} skipped, {errors} errors")

@@ -313,6 +313,41 @@ Settings are resolved in the following order (highest priority first):
 3. **Active profile** (selected via `--profile`)
 4. **Default profile** (if no `--profile` specified and `profiles/default/profile.yaml` exists)
 
+## External Profiles Directory
+
+Profile data files (`profile.yaml`, `mappings.yaml`, etc.) are gitignored in the papertrail repo since they contain personal/sensitive data. To version-control your profiles separately (e.g., in a private git repo), set the `PAPERTRAIL_PROFILES_DIR` environment variable:
+
+```bash
+# Point to an external directory
+export PAPERTRAIL_PROFILES_DIR=~/my-private-profiles
+
+# Or inline with the command
+PAPERTRAIL_PROFILES_DIR=~/my-private-profiles python main.py --profile default pipeline
+```
+
+**How it works:**
+- If `PAPERTRAIL_PROFILES_DIR` is set and points to an existing directory, profiles are loaded from there
+- If the env var is unset or the directory doesn't exist, falls back to the repo's `profiles/` directory
+- The external directory uses the same structure: `<dir>/<profile-name>/profile.yaml`
+
+**Example setup with a private git repo:**
+
+```bash
+# Create a private repo for your profiles
+mkdir ~/my-private-profiles
+cd ~/my-private-profiles
+git init
+
+# Set up your profile
+mkdir default
+cp /path/to/papertrail/profiles/profile.yaml.example default/profile.yaml
+cp /path/to/papertrail/profiles/mappings.yaml.example default/mappings.yaml
+vim default/profile.yaml
+
+# Add to shell profile for persistence
+echo 'export PAPERTRAIL_PROFILES_DIR=~/my-private-profiles' >> ~/.bashrc
+```
+
 ## Troubleshooting
 
 ### Profile Not Found
