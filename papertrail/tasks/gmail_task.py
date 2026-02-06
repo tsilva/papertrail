@@ -7,7 +7,6 @@ from pathlib import Path
 from papertrail.config import get_current_profile
 from papertrail.console import get_console
 from papertrail.logging_utils import get_logger, setup_task_logging
-from papertrail.metadata import get_unique_dates
 
 logger = get_logger('cli')
 
@@ -45,15 +44,9 @@ def task_gmail_download():
 
     end_date = datetime.now()
 
-    unique_dates = get_unique_dates(processed_path) if processed_path.exists() else []
-
-    if unique_dates:
-        most_recent = unique_dates[0]
-        start_date = datetime.strptime(f"{most_recent}-01", "%Y-%m-%d")
-        logger.debug(f"Date range: {start_date.date()} to {end_date.date()}")
-    else:
-        start_date = end_date - timedelta(days=30)
-        logger.debug("No processed files found. Using default range: last 30 days")
+    # Default: current month + previous month
+    start_date = (end_date.replace(day=1) - timedelta(days=1)).replace(day=1)
+    logger.debug(f"Date range: {start_date.date()} to {end_date.date()}")
 
     logger.debug(f"Downloading attachments to: {raw_path}")
 
