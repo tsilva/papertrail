@@ -2,6 +2,7 @@
 
 import fcntl
 import json
+import shutil
 import time as _time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
@@ -602,10 +603,11 @@ def task_sync(processed_path: Path, dry_run: bool = False,
         still_unknown_count = 0
         failed_count = 0
         new_count = 0
+        renamed_count = 0
 
         def process_result(metadata_path, old_data, new_metadata, error):
             """Process a single extraction result and save JSON immediately."""
-            nonlocal fixed_count, still_unknown_count, failed_count, new_count
+            nonlocal fixed_count, still_unknown_count, failed_count, new_count, renamed_count
 
             if error:
                 logger.error(f"Failed {metadata_path.name}: {error}")
@@ -644,6 +646,18 @@ def task_sync(processed_path: Path, dry_run: bool = False,
             if not dry_run:
                 save_metadata_json(metadata_path.with_suffix(".pdf"), new_metadata)
 
+                # Rename PDF+JSON pair if filename changed
+                from papertrail.tasks.organization import file_name_from_metadata
+                new_filename = file_name_from_metadata(new_metadata, new_metadata.content_hash)
+                new_pdf_path = metadata_path.parent / new_filename
+                old_pdf_path = metadata_path.with_suffix(".pdf")
+                if old_pdf_path != new_pdf_path:
+                    new_json_path = new_pdf_path.with_suffix(".json")
+                    shutil.move(str(old_pdf_path), str(new_pdf_path))
+                    shutil.move(str(metadata_path), str(new_json_path))
+                    logger.debug(f"Renamed: {old_pdf_path.name} -> {new_pdf_path.name}")
+                    renamed_count += 1
+
         if workers == 1:
             # Sequential path (backwards compatible)
             with console.progress("Syncing", total=len(targets)) as progress:
@@ -669,6 +683,8 @@ def task_sync(processed_path: Path, dry_run: bool = False,
             parts.append(f"{new_count} new")
         if fixed_count > 0:
             parts.append(f"{fixed_count} changed")
+        if renamed_count > 0:
+            parts.append(f"{renamed_count} renamed")
         if still_unknown_count > 0:
             parts.append(f"{still_unknown_count} unchanged")
         if failed_count > 0:
@@ -683,12 +699,10 @@ def task_sync(processed_path: Path, dry_run: bool = False,
         else:
             console.info(f"No changes ({still_unknown_count} files checked)", indent=False)
 
-        logger.debug(f"New: {new_count}, Changed: {fixed_count}, Unchanged: {still_unknown_count}, Failed: {failed_count}")
+        logger.debug(f"New: {new_count}, Changed: {fixed_count}, Renamed: {renamed_count}, Unchanged: {still_unknown_count}, Failed: {failed_count}")
 
         if dry_run:
             console.detail("(dry run - no files were modified)", indent=False)
-        elif new_count > 0 or fixed_count > 0:
-            console.detail("Run 'rename_files' task to update filenames based on new metadata.", indent=False)
 
 
 def task_validate_extraction(processed_path: Path, pattern: str = None):
