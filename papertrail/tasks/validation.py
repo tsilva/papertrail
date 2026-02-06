@@ -33,9 +33,9 @@ def validate_metadata(output_path: Path):
         output_path, require_pdf=False, validate=True
     ):
         try:
-            content_hash = metadata.content_hash
+            content_hash = metadata.hash_content
             if not content_hash:
-                errors.append((metadata_path, "Missing 'content_hash' in metadata."))
+                errors.append((metadata_path, "Missing 'hash_content' in metadata."))
                 continue
 
             if not pdf_path.exists():
@@ -104,7 +104,7 @@ def validate_metadata(output_path: Path):
             continue
 
         if expected_hash != actual_hash:
-            errors.append((metadata_path, f"Hash mismatch: metadata content_hash is '{expected_hash}', actual is '{actual_hash}'."))
+            errors.append((metadata_path, f"Hash mismatch: metadata hash_content is '{expected_hash}', actual is '{actual_hash}'."))
             continue
 
         if expected_hash not in pdf_path.name:
@@ -220,7 +220,7 @@ def task_backfill_page_count(processed_path: Path):
 
             page_count = get_page_count(pdf_path)
             data["page_count"] = page_count
-            data["update_date"] = datetime.now().strftime("%Y-%m-%d")
+            data["date_updated"] = datetime.now().strftime("%Y-%m-%d")
 
             with open(metadata_path, "w", encoding="utf-8") as f:
                 json.dump(data, f, indent=4, ensure_ascii=False, sort_keys=True)
@@ -270,7 +270,7 @@ def task_backfill_mapping_keys(processed_path: Path):
                 data["document_type_key"] = expected_dt_key
             if expected_ip_key is not None:
                 data["issuing_party_key"] = expected_ip_key
-            data["update_date"] = datetime.now().strftime("%Y-%m-%d")
+            data["date_updated"] = datetime.now().strftime("%Y-%m-%d")
 
             with open(metadata_path, "w", encoding="utf-8") as f:
                 json.dump(data, f, indent=4, ensure_ascii=False, sort_keys=True)
@@ -336,7 +336,7 @@ def task_tag_dated_types(processed_path: Path, dry_run: bool = False):
                 continue
 
             data["document_type"] = "$UNKNOWN$"
-            data["update_date"] = datetime.now().strftime("%Y-%m-%d")
+            data["date_updated"] = datetime.now().strftime("%Y-%m-%d")
 
             with open(metadata_path, "w", encoding="utf-8") as f:
                 json.dump(data, f, indent=4, ensure_ascii=False, sort_keys=True)
@@ -386,7 +386,7 @@ def task_backfill_document_title(processed_path: Path):
                 continue
 
             data["document_title"] = doc_type_raw
-            data["update_date"] = datetime.now().strftime("%Y-%m-%d")
+            data["date_updated"] = datetime.now().strftime("%Y-%m-%d")
 
             with open(metadata_path, "w", encoding="utf-8") as f:
                 json.dump(data, f, indent=4, ensure_ascii=False, sort_keys=True)

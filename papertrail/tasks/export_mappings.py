@@ -94,7 +94,7 @@ def _build_filename_from_fields(metadata: dict, fields: List[str]) -> str:
 
     Args:
         metadata: Document metadata dictionary.
-        fields: List of field names to include (e.g., ["issue_date", "issuing_party"]).
+        fields: List of field names to include (e.g., ["date_issued", "issuing_party"]).
 
     Returns:
         Sanitized filename string with hash suffix and .pdf extension.
@@ -114,7 +114,7 @@ def _build_filename_from_fields(metadata: dict, fields: List[str]) -> str:
             parts.append(sanitize_filename_component(str(value)))
 
     # Always append hash for uniqueness
-    file_hash = metadata.get("hash", "")
+    file_hash = metadata.get("hash_content", "")
     parts.append(f"{file_hash}.pdf")
 
     return " - ".join(parts).lower()

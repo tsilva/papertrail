@@ -244,7 +244,7 @@ class DocumentLogger:
     def log_final(self, metadata_dict: dict) -> None:
         """Log final saved metadata values."""
         parts = []
-        for key in ("document_type", "issuing_party", "issue_date",
+        for key in ("document_type", "issuing_party", "date_issued",
                      "total_amount", "total_amount_currency", "service_name"):
             val = metadata_dict.get(key)
             if val is not None:

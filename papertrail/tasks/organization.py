@@ -25,7 +25,7 @@ def sanitize_filename_component(s: str) -> str:
 def file_name_from_metadata(metadata: DocumentMetadata, file_hash: str) -> str:
     """Generate a filename from metadata."""
     parts = [
-        sanitize_filename_component(metadata.issue_date),
+        sanitize_filename_component(metadata.date_issued),
         sanitize_filename_component(metadata.document_type.value),
         sanitize_filename_component(metadata.issuing_party.value)
     ]
@@ -51,7 +51,7 @@ def rename_single_pdf(pdf_path: Path, content_hash: str, processed_path: Path,
     try:
         file_hash = hash_file_fast(pdf_path)
         metadata = classify_pdf_document(pdf_path, content_hash, failure_logger, doc_logger=doc_logger)
-        metadata.file_hash = file_hash
+        metadata.hash_file = file_hash
 
         filename = file_name_from_metadata(metadata, content_hash)
         new_pdf_path = processed_path / filename
@@ -107,7 +107,7 @@ def task_rename_files(processed_path: Path):
 
         renamed_count = 0
         for old_pdf_path, metadata in valid_entries:
-            content_hash = metadata.content_hash
+            content_hash = metadata.hash_content
             new_filename = file_name_from_metadata(metadata, content_hash)
             new_pdf_path = processed_path / new_filename
             new_metadata_path = new_pdf_path.with_suffix(".json")

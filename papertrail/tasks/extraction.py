@@ -293,15 +293,15 @@ def classify_pdf_document(pdf_path: Path, file_hash: str, failure_logger=None,
             ctx.nif_cache.save()
 
         metadata = DocumentMetadata(
-            issue_date=final_issue_date,
+            date_issued=final_issue_date,
             document_type=final_doc_type,
             issuing_party=normalized_issuing_party,
             service_name=raw_metadata.service_name,
             total_amount=final_amount,
             total_amount_currency=final_currency,
-            confidence=1.0 if qr_metadata else raw_metadata.confidence,
-            reasoning=raw_metadata.reasoning,
-            content_hash=file_hash,
+            class_confidence=1.0 if qr_metadata else raw_metadata.confidence,
+            class_reasoning=raw_metadata.reasoning,
+            hash_content=file_hash,
             document_type_raw=raw_metadata.document_type,
             document_title=raw_metadata.document_title,
             issuing_party_raw=raw_metadata.issuing_party,
@@ -313,8 +313,8 @@ def classify_pdf_document(pdf_path: Path, file_hash: str, failure_logger=None,
         )
 
         now = datetime.now().strftime("%Y-%m-%d")
-        metadata.create_date = now
-        metadata.update_date = now
+        metadata.date_created = now
+        metadata.date_updated = now
         metadata.page_count = get_page_count(pdf_path)
 
         if doc_logger:
@@ -525,7 +525,7 @@ def _collect_sync_targets(processed_path: Path, all_unknown: bool = False,
                     has_unknown = (
                         data.get("document_type") == "$UNKNOWN$"
                         or data.get("issuing_party") == "$UNKNOWN$"
-                        or data.get("issue_date") == "$UNKNOWN$"
+                        or data.get("date_issued") == "$UNKNOWN$"
                     )
                     if has_unknown:
                         pdf_path = metadata_path.with_suffix(".pdf")
@@ -586,16 +586,16 @@ def task_sync(processed_path: Path, dry_run: bool = False,
                     file_hash = hash_file_fast(pdf_path)
                     create_date = datetime.now().strftime("%Y-%m-%d")
                 else:
-                    content_hash = old_data.get("content_hash")
+                    content_hash = old_data.get("hash_content")
                     if not content_hash:
-                        return (metadata_path, old_data, None, "No content_hash in metadata")
-                    file_hash = old_data.get("file_hash")
-                    create_date = old_data.get("create_date")
+                        return (metadata_path, old_data, None, "No hash_content in metadata")
+                    file_hash = old_data.get("hash_file")
+                    create_date = old_data.get("date_created")
 
                 new_metadata = classify_pdf_document(pdf_path, content_hash, doc_logger=thread_doc_logger)
-                new_metadata.file_hash = file_hash
-                new_metadata.create_date = create_date
-                new_metadata.update_date = datetime.now().strftime("%Y-%m-%d")
+                new_metadata.hash_file = file_hash
+                new_metadata.date_created = create_date
+                new_metadata.date_updated = datetime.now().strftime("%Y-%m-%d")
                 return (metadata_path, old_data, new_metadata, None)
             except Exception as e:
                 return (metadata_path, old_data, None, str(e))
@@ -620,7 +620,7 @@ def task_sync(processed_path: Path, dry_run: bool = False,
 
             new_doc_type = enum_value(new_metadata.document_type)
             new_issuer = enum_value(new_metadata.issuing_party)
-            new_date = new_metadata.issue_date
+            new_date = new_metadata.date_issued
 
             if old_data is None:
                 # Fresh extraction - no comparison possible
@@ -630,14 +630,14 @@ def task_sync(processed_path: Path, dry_run: bool = False,
                 changes = []
                 old_doc_type = old_data.get("document_type", "")
                 old_issuer = old_data.get("issuing_party", "")
-                old_date = old_data.get("issue_date", "")
+                old_date = old_data.get("date_issued", "")
 
                 if old_doc_type != new_doc_type:
                     changes.append(f"document_type: {old_doc_type} -> {new_doc_type}")
                 if old_issuer != new_issuer:
                     changes.append(f"issuing_party: {old_issuer} -> {new_issuer}")
                 if old_date != new_date:
-                    changes.append(f"issue_date: {old_date} -> {new_date}")
+                    changes.append(f"date_issued: {old_date} -> {new_date}")
 
                 if changes:
                     logger.debug(f"Changed {metadata_path.name}: {', '.join(changes)}")
@@ -652,7 +652,7 @@ def task_sync(processed_path: Path, dry_run: bool = False,
 
                 # Rename PDF+JSON pair if filename changed
                 from papertrail.tasks.organization import file_name_from_metadata
-                new_filename = file_name_from_metadata(new_metadata, new_metadata.content_hash)
+                new_filename = file_name_from_metadata(new_metadata, new_metadata.hash_content)
                 new_pdf_path = metadata_path.parent / new_filename
                 old_pdf_path = metadata_path.with_suffix(".pdf")
                 if old_pdf_path != new_pdf_path:
@@ -754,15 +754,15 @@ def task_validate_extraction(processed_path: Path, pattern: str = None):
 
                 file_issues = []
 
-                for field in ("document_type", "issuing_party", "issue_date"):
+                for field in ("document_type", "issuing_party", "date_issued"):
                     if data.get(field) == "$UNKNOWN$":
                         file_issues.append(f"{field}=$UNKNOWN$")
 
-                confidence = data.get("confidence")
+                confidence = data.get("class_confidence")
                 if confidence is not None and confidence < 0.7:
                     file_issues.append(f"low_confidence={confidence}")
 
-                for field in ("content_hash", "file_hash", "issue_date", "document_type", "issuing_party"):
+                for field in ("hash_content", "hash_file", "date_issued", "document_type", "issuing_party"):
                     if not data.get(field):
                         file_issues.append(f"missing_{field}")
 
@@ -771,7 +771,7 @@ def task_validate_extraction(processed_path: Path, pattern: str = None):
                     logger.warning(f"[ISSUE] {pdf_path.name}: {', '.join(file_issues)}")
 
                 logger.debug(f"[METADATA] {pdf_path.name}: " + " ".join(
-                    f"{k}={v}" for k, v in data.items() if k != "reasoning"
+                    f"{k}={v}" for k, v in data.items() if k != "class_reasoning"
                 ))
 
                 progress.update(task, advance=1)
