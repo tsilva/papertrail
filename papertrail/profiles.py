@@ -136,6 +136,7 @@ class ExportFileMappingsConfig:
     enabled: bool = False
     output_subfolder: str = "remapped"
     default_prefix: str = ""  # Prefix for files that don't match any rule
+    filename_fields: Optional[List[str]] = None  # Fields to include in remapped filename
     rules: List[ExportMappingRule] = field(default_factory=list)
 
 
@@ -347,6 +348,7 @@ def _parse_profile_dict(data: Dict[str, Any], profile_path: Path) -> Profile:
         enabled=file_mappings_data.get("enabled", False),
         output_subfolder=file_mappings_data.get("output_subfolder", "remapped"),
         default_prefix=file_mappings_data.get("default_prefix", ""),
+        filename_fields=file_mappings_data.get("filename_fields"),
         rules=file_mappings_rules,
     )
     export_config = ExportConfig(file_mappings=file_mappings)

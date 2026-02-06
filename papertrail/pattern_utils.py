@@ -79,4 +79,7 @@ def make_matcher(pattern: str, use_search: bool = False) -> Callable[[str], bool
         else:
             return lambda name: bool(compiled.fullmatch(name))
     else:
+        # Plain string (no glob wildcards) with use_search: substring match
+        if use_search and not any(c in pattern for c in '*?['):
+            return lambda name: pattern in name
         return lambda name: fnmatch.fnmatch(name, pattern)

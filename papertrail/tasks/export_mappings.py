@@ -15,6 +15,7 @@ from papertrail.hashing import hash_file_fast
 from papertrail.logging_utils import get_logger
 from papertrail.profiles import ExportMappingRule
 from papertrail.tasks import task_log_context
+from papertrail.tasks.organization import sanitize_filename_component
 
 logger = get_logger('cli')
 
@@ -43,7 +44,7 @@ def _get_nested_value(metadata: dict, key: str):
     return value
 
 
-def _match_value(actual: str, pattern: str) -> bool:
+def _match_value(actual, pattern: str) -> bool:
     """Match a value against a pattern.
 
     Args:
@@ -51,6 +52,7 @@ def _match_value(actual: str, pattern: str) -> bool:
         pattern: Pattern to match. Supports:
             - Exact match: "invoice"
             - Prefix match: "bank-*" (matches "bank-statement", "bank-transfer", etc.)
+            - Numeric match: "0" matches 0.0 (float/int values compared numerically)
 
     Returns:
         True if matches, False otherwise.
@@ -61,6 +63,12 @@ def _match_value(actual: str, pattern: str) -> bool:
     if pattern.endswith('*'):
         prefix = pattern[:-1]
         return str(actual).startswith(prefix)
+
+    if isinstance(actual, (int, float)):
+        try:
+            return actual == float(pattern)
+        except (ValueError, TypeError):
+            return False
 
     return actual == pattern
 
@@ -79,6 +87,37 @@ def evaluate_mapping_rules(metadata: dict, rules: List[ExportMappingRule]) -> Op
         if all(_match_value(_get_nested_value(metadata, k), v) for k, v in rule.match.items()):
             return rule.prefix
     return None
+
+
+def _build_filename_from_fields(metadata: dict, fields: List[str]) -> str:
+    """Build a filename from selected metadata fields.
+
+    Args:
+        metadata: Document metadata dictionary.
+        fields: List of field names to include (e.g., ["issue_date", "issuing_party"]).
+
+    Returns:
+        Sanitized filename string with hash suffix and .pdf extension.
+    """
+    parts = []
+    for field in fields:
+        if field == "total_amount":
+            amount = metadata.get("total_amount")
+            if amount is not None:
+                amount_str = f"{amount:.0f}" if float(amount) == int(amount) else f"{amount}"
+                currency = metadata.get("total_amount_currency") or ""
+                parts.append(sanitize_filename_component(f"{amount_str} {currency}".strip()))
+            continue
+
+        value = metadata.get(field)
+        if value and str(value).strip():
+            parts.append(sanitize_filename_component(str(value)))
+
+    # Always append hash for uniqueness
+    file_hash = metadata.get("hash", "")
+    parts.append(f"{file_hash}.pdf")
+
+    return " - ".join(parts).lower()
 
 
 def task_apply_export_mappings(
@@ -204,12 +243,18 @@ def _process_date_folder(
         if prefix is None:
             prefix = config.default_prefix
 
+        # Compute base filename (custom fields or original)
+        if config.filename_fields is not None:
+            base_filename = _build_filename_from_fields(metadata, config.filename_fields)
+        else:
+            base_filename = pdf_path.name
+
         # Determine output filename
         if prefix:
-            output_filename = f"{prefix}{pdf_path.name}"
+            output_filename = f"{prefix}{base_filename}"
             stats['remapped'] += 1
         else:
-            output_filename = pdf_path.name
+            output_filename = base_filename
             stats['copied'] += 1
 
         output_path = output_dir / output_filename
