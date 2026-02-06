@@ -134,11 +134,55 @@ def task_rename_files(processed_path: Path):
         logger.debug(f"Renaming complete. Renamed {renamed_count} files.")
 
 
+def _get_nested_value(metadata: dict, key: str):
+    """Get a value from metadata using dot notation (e.g., 'qrcode.qr_type')."""
+    parts = key.split(".")
+    current = metadata
+    for part in parts:
+        if not isinstance(current, dict) or part not in current:
+            return None
+        current = current[part]
+    return current
+
+
+def _match_value(actual, pattern: str) -> bool:
+    """Match a metadata value against a pattern.
+
+    Supports exact match, prefix wildcard ("bank-*"), and numeric match.
+    """
+    if actual is None:
+        return False
+    actual_str = str(actual)
+    if pattern.endswith("*"):
+        return actual_str.startswith(pattern[:-1])
+    return actual_str == pattern
+
+
+def _evaluate_export_prefix(metadata: dict, config) -> str:
+    """Evaluate export prefix rules against metadata. First match wins."""
+    for rule in config.rules:
+        if all(_match_value(_get_nested_value(metadata, k), v) for k, v in rule.match.items()):
+            return rule.prefix
+    return config.default_prefix
+
+
+def _build_filename_from_fields(metadata: dict, fields: list, file_hash: str) -> str:
+    """Build a filename from selected metadata fields."""
+    parts = []
+    for field_name in fields:
+        value = _get_nested_value(metadata, field_name)
+        if value is not None and str(value).strip():
+            parts.append(sanitize_filename_component(str(value)))
+    parts.append(f"{file_hash}.pdf")
+    return " - ".join(parts).lower()
+
+
 def copy_matching_files(
     processed_path: Path,
     pattern: str,
     dest_folder: Path,
-    incremental: bool = False
+    incremental: bool = False,
+    export_config=None,
 ) -> dict:
     """Copy files matching pattern to destination.
 
@@ -148,6 +192,8 @@ def copy_matching_files(
                  Uses partial match (search) by default.
         dest_folder: Destination directory.
         incremental: If True, skip files that already exist with same hash.
+        export_config: Optional ExportFileMappingsConfig. When provided and enabled,
+                       applies prefix rules and optional filename rebuilding.
 
     Returns:
         Dict with 'copied', 'skipped', 'total' counts.
@@ -160,49 +206,111 @@ def copy_matching_files(
     matcher = make_matcher(pattern, use_search=True)
     stats = {'copied': 0, 'skipped': 0, 'total': 0}
 
-    # First pass: count matching files
-    matching_files = []
-    for file in processed_path.iterdir():
-        if not file.is_file():
-            continue
-        if file.suffix.lower() not in [".pdf", ".json"]:
-            continue
-        if not matcher(file.name):
-            continue
-        matching_files.append(file)
+    use_prefixes = export_config is not None and export_config.enabled
 
-    # Second pass: copy with progress
-    with console.progress("Copying files", total=len(matching_files)) as progress:
-        task = progress.add_task("Copying files", total=len(matching_files))
-        for file in matching_files:
-            stats['total'] += 1
-            dest_file = dest_folder / file.name
+    if use_prefixes:
+        # Prefix mode: process PDF+JSON pairs, apply prefixes
+        matching_pdfs = []
+        for file in processed_path.iterdir():
+            if not file.is_file():
+                continue
+            if file.suffix.lower() != ".pdf":
+                continue
+            if not matcher(file.name):
+                continue
+            matching_pdfs.append(file)
 
-            should_copy = True
-            if incremental and dest_file.exists():
-                if file.stat().st_size == dest_file.stat().st_size:
-                    src_hash = hash_file_fast(file)
-                    dst_hash = hash_file_fast(dest_file)
-                    if src_hash == dst_hash:
-                        should_copy = False
-                        stats['skipped'] += 1
+        with console.progress("Copying files", total=len(matching_pdfs)) as progress:
+            task = progress.add_task("Copying files", total=len(matching_pdfs))
+            for pdf_file in matching_pdfs:
+                stats['total'] += 1
+                json_file = pdf_file.with_suffix(".json")
 
-            if should_copy:
-                if file.suffix.lower() == '.json':
-                    with open(file, 'r', encoding='utf-8') as f_in:
-                        data = json.load(f_in)
-                    data['source_filename'] = file.with_suffix('.pdf').name
-                    with open(dest_file, 'w', encoding='utf-8') as f_out:
-                        json.dump(data, f_out, indent=4, ensure_ascii=False, sort_keys=True)
+                # Read metadata for prefix evaluation
+                metadata = {}
+                if json_file.exists():
+                    with open(json_file, 'r', encoding='utf-8') as f_in:
+                        metadata = json.load(f_in)
+
+                prefix = _evaluate_export_prefix(metadata, export_config)
+
+                # Build destination filename
+                if export_config.filename_fields and metadata:
+                    file_hash = metadata.get("hash_content", pdf_file.stem.split(" - ")[-1])
+                    base_name = _build_filename_from_fields(
+                        metadata, export_config.filename_fields, file_hash
+                    )
                 else:
-                    shutil.copy2(file, dest_file)
-                stats['copied'] += 1
+                    base_name = pdf_file.name
 
-            progress.update(task, advance=1)
+                dest_pdf_name = prefix + base_name
+                dest_json_name = Path(dest_pdf_name).with_suffix(".json").name
 
-    # Console output
-    # Count only PDF files for the summary (JSON files are copied alongside)
-    pdf_copied = stats['copied'] // 2 if stats['copied'] > 0 else 0
-    console.success(f"Copied {pdf_copied} files to {dest_folder.name}", indent=False)
+                dest_pdf = dest_folder / dest_pdf_name
+                dest_json = dest_folder / dest_json_name
+
+                should_copy = True
+                if incremental and dest_pdf.exists():
+                    if pdf_file.stat().st_size == dest_pdf.stat().st_size:
+                        src_hash = hash_file_fast(pdf_file)
+                        dst_hash = hash_file_fast(dest_pdf)
+                        if src_hash == dst_hash:
+                            should_copy = False
+                            stats['skipped'] += 1
+
+                if should_copy:
+                    shutil.copy2(pdf_file, dest_pdf)
+                    if json_file.exists():
+                        metadata['source_filename'] = pdf_file.name
+                        with open(dest_json, 'w', encoding='utf-8') as f_out:
+                            json.dump(metadata, f_out, indent=4, ensure_ascii=False, sort_keys=True)
+                    stats['copied'] += 1
+
+                progress.update(task, advance=1)
+
+        console.success(f"Copied {stats['copied']} files to {dest_folder.name}", indent=False)
+    else:
+        # Original behavior: copy both PDF and JSON files directly
+        matching_files = []
+        for file in processed_path.iterdir():
+            if not file.is_file():
+                continue
+            if file.suffix.lower() not in [".pdf", ".json"]:
+                continue
+            if not matcher(file.name):
+                continue
+            matching_files.append(file)
+
+        with console.progress("Copying files", total=len(matching_files)) as progress:
+            task = progress.add_task("Copying files", total=len(matching_files))
+            for file in matching_files:
+                stats['total'] += 1
+                dest_file = dest_folder / file.name
+
+                should_copy = True
+                if incremental and dest_file.exists():
+                    if file.stat().st_size == dest_file.stat().st_size:
+                        src_hash = hash_file_fast(file)
+                        dst_hash = hash_file_fast(dest_file)
+                        if src_hash == dst_hash:
+                            should_copy = False
+                            stats['skipped'] += 1
+
+                if should_copy:
+                    if file.suffix.lower() == '.json':
+                        with open(file, 'r', encoding='utf-8') as f_in:
+                            data = json.load(f_in)
+                        data['source_filename'] = file.with_suffix('.pdf').name
+                        with open(dest_file, 'w', encoding='utf-8') as f_out:
+                            json.dump(data, f_out, indent=4, ensure_ascii=False, sort_keys=True)
+                    else:
+                        shutil.copy2(file, dest_file)
+                    stats['copied'] += 1
+
+                progress.update(task, advance=1)
+
+        # Count only PDF files for the summary (JSON files are copied alongside)
+        pdf_copied = stats['copied'] // 2 if stats['copied'] > 0 else 0
+        console.success(f"Copied {pdf_copied} files to {dest_folder.name}", indent=False)
 
     return stats
