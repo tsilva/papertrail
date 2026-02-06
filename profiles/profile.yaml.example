@@ -67,7 +67,7 @@ passwords:
   passwords:
     - "password1"
     - "password2"
-  # Or use external file (legacy)
+  # Or use external file
   # passwords_file: "../config/passwords.txt"
 
 # File validation rules (inline - recommended)
@@ -77,7 +77,7 @@ validations:
       issuing_party: "Amazon"
     - document_type: "receipt"
       service_name: "AWS"
-  # Or use external file (legacy)
+  # Or use external file
   # validations_file: "../config/file_check_validations.json"
 
 # Pipeline task configuration

@@ -140,7 +140,7 @@ def copy_matching_files(
     Args:
         processed_path: Source directory containing files.
         pattern: Unified pattern (glob or regex, auto-detected).
-                 Uses partial match (search) for backwards compatibility.
+                 Uses partial match (search) by default.
         dest_folder: Destination directory.
         incremental: If True, skip files that already exist with same hash.
 
@@ -151,7 +151,7 @@ def copy_matching_files(
 
     console = get_console()
     dest_folder.mkdir(parents=True, exist_ok=True)
-    # Use search mode for partial matching (backwards compatible with regex_pattern behavior)
+    # Use search mode for partial matching
     matcher = make_matcher(pattern, use_search=True)
     stats = {'copied': 0, 'skipped': 0, 'total': 0}
 

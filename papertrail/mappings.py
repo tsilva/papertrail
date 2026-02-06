@@ -47,8 +47,6 @@ class MappingsManager:
         self._lock = threading.Lock()
         self.path = mappings_path
         self.data = self._load()
-        if self._needs_migration():
-            self._migrate_keys()
 
     def _load(self) -> dict:
         """Load mappings from YAML file, creating empty structure if missing."""
@@ -70,68 +68,6 @@ class MappingsManager:
                     sorted(self.data[field]["mappings"].items())
                 )
         save_yaml(self.path, self.data)
-
-    def _needs_migration(self) -> bool:
-        """Check if mappings need migration from old format or key slugification."""
-        for field in self.FIELDS:
-            field_data = self.data.get(field, {})
-            # Old format detection: has confirmed/auto/canonicals keys
-            if any(k in field_data for k in ("confirmed", "auto", "canonicals")):
-                return True
-            # Slugification check on flat mappings
-            for key in field_data.get("mappings", {}):
-                if slugify_key(key) != key:
-                    return True
-        return False
-
-    def _migrate_keys(self) -> None:
-        """Migrate from old format and/or slugify all mapping keys.
-
-        Old format migration: merge confirmed + auto → single mappings dict
-        (confirmed wins on collision), drop canonicals list.
-
-        Slugification: normalize all keys, merge collisions (keep first).
-        """
-        for field in self.FIELDS:
-            field_data = self.data[field]
-
-            # Detect old format and merge confirmed + auto
-            if any(k in field_data for k in ("confirmed", "auto", "canonicals")):
-                confirmed = field_data.pop("confirmed", {})
-                auto = field_data.pop("auto", {})
-                field_data.pop("canonicals", None)
-
-                # Merge: auto first, then confirmed overwrites (confirmed wins)
-                merged = {}
-                merged.update(auto)
-                merged.update(confirmed)
-
-                # Merge with any existing flat mappings (shouldn't happen, but safe)
-                existing = field_data.get("mappings", {})
-                existing.update(merged)
-                field_data["mappings"] = existing
-
-            # Slugify all keys
-            old_mappings = field_data.get("mappings", {})
-            new_mappings = {}
-            for key, canonical in old_mappings.items():
-                slug = slugify_key(key)
-                if not slug:
-                    continue
-                if slug in new_mappings:
-                    if new_mappings[slug] != canonical:
-                        logger.warning(
-                            "[MAPPING-MIGRATE] Collision in %s: "
-                            "%r→%r and %r→%r both slugify to %r, keeping %r",
-                            field, key, canonical,
-                            slug, new_mappings[slug], slug, new_mappings[slug],
-                        )
-                else:
-                    new_mappings[slug] = canonical
-            field_data["mappings"] = new_mappings
-
-        self._save()
-        logger.info("[MAPPING-MIGRATE] Migrated mapping keys in %s", self.path)
 
     @validate_field(default_return=None)
     def get_mapping(self, raw_value: str, field: str) -> Optional[str]:

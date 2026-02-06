@@ -127,7 +127,7 @@ def setup_logging(
         else:
             console.setLevel(logging.INFO)
     else:
-        # Plain text console handler (for non-TTY or legacy mode)
+        # Plain text console handler (for non-TTY environments)
         console = logging.StreamHandler(sys.stderr)
         if verbose:
             console.setLevel(logging.DEBUG)
