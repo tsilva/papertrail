@@ -324,7 +324,7 @@ def task_qr_inventory(
                 elif qr_type == 'portuguese_invoice' and 'fields' in qr:
                     # Show which fields are extracted
                     sample['fields_present'] = qr['fields']
-                    sample['fields_extracted'] = ['issue_date', 'document_type', 'total_amount', 'issuer_nif', 'atcud']
+                    sample['fields_extracted'] = ['date_issued', 'document_type', 'total_amount', 'issuer_tax_number', 'atcud']
 
                 samples[qr_type].append(sample)
 

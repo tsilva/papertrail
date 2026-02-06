@@ -663,7 +663,7 @@ def task_sync(processed_path: Path, dry_run: bool = False,
                     renamed_count += 1
 
         if workers == 1:
-            # Sequential path (backwards compatible)
+            # Sequential path (single worker)
             with console.progress("Syncing", total=len(targets)) as progress:
                 task = progress.add_task("Syncing", total=len(targets))
                 for item in targets:
