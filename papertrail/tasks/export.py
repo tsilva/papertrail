@@ -2,6 +2,7 @@
 
 import hashlib
 import os
+import shutil
 from pathlib import Path
 
 import pandas as pd
@@ -156,7 +157,11 @@ def task_export_all_dates(
             export_date_dir = export_base_dir / date
             logger.debug(f"[{date}] Processing...")
 
-            stats = copy_matching_files(processed_path, date, export_date_dir, incremental=True)
+            # Purge before export to avoid stale content
+            if export_date_dir.exists():
+                shutil.rmtree(export_date_dir)
+
+            stats = copy_matching_files(processed_path, date, export_date_dir, incremental=False)
             total_copied += stats['copied']
             total_skipped += stats['skipped']
 

@@ -4,6 +4,7 @@ import json
 import logging
 import os
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -303,6 +304,10 @@ def pipeline(export_date_arg=None, processed_path_override=None):
             step.error(str(e))
             sys.exit(1)
 
+    # Purge export date folder before copying
+    if os.path.exists(export_date_dir):
+        shutil.rmtree(export_date_dir)
+
     # Copy matching documents
     with console.step_progress(f"Copy matching documents ({export_date})") as step:
         try:
@@ -335,6 +340,19 @@ def pipeline(export_date_arg=None, processed_path_override=None):
 
     with suppress_console_logging():
         validate_merged_pdf(Path(export_date_dir))
+
+    # Apply export file mappings (if configured)
+    if profile.export.file_mappings.enabled:
+        with console.step_progress("Apply export file mappings") as step:
+            logger.debug("### Apply export file mappings...")
+            from papertrail.tasks.export_mappings import _process_date_folder
+            config = profile.export.file_mappings
+            stats = _process_date_folder(Path(export_date_dir), config, dry_run=False)
+            if stats['remapped'] > 0 or stats['copied'] > 0:
+                step.success(f"{stats['remapped']} remapped, {stats['copied']} copied")
+            else:
+                step.warning("No files to process")
+            logger.debug("### Apply export file mappings... Finished.")
 
     # Validate exported files
     with console.step_progress("Validate exported files") as step:
