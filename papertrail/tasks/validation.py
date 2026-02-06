@@ -357,3 +357,53 @@ def task_tag_dated_types(processed_path: Path, dry_run: bool = False):
         console.warning(f"{prefix}{tagged} tagged, {skipped} skipped, {errors} errors", indent=False)
     else:
         console.success(f"{prefix}{tagged} tagged, {skipped} skipped (no temporal pattern)", indent=False)
+
+
+def task_backfill_document_title(processed_path: Path):
+    """Backfill document_title for existing metadata files that don't have it.
+
+    Sets document_title = document_type_raw for existing docs, since document_type_raw
+    previously contained the full heading text that document_title should hold going forward.
+    """
+    console = get_console()
+    setup_task_logging(processed_path, "backfill_document_title")
+
+    updated = 0
+    skipped = 0
+    errors = 0
+
+    for metadata_path, pdf_path, data in load_validated_metadata(
+        processed_path, require_pdf=False, validate=False, show_progress=True, progress_desc="Backfilling document_title"
+    ):
+        try:
+            if data.get("document_title") is not None:
+                skipped += 1
+                continue
+
+            doc_type_raw = data.get("document_type_raw")
+            if not doc_type_raw:
+                skipped += 1
+                continue
+
+            data["document_title"] = doc_type_raw
+            data["update_date"] = datetime.now().strftime("%Y-%m-%d")
+
+            with open(metadata_path, "w", encoding="utf-8") as f:
+                json.dump(data, f, indent=2)
+
+            updated += 1
+
+        except Exception as e:
+            logger.error(f"Failed to process {metadata_path.name}: {e}")
+            errors += 1
+
+    if updated == 0 and skipped == 0 and errors == 0:
+        console.warning("No metadata files found", indent=False)
+        return
+
+    if errors > 0:
+        console.warning(f"{updated} updated, {skipped} skipped, {errors} errors", indent=False)
+    else:
+        console.success(f"{updated} updated, {skipped} skipped (already had document_title)", indent=False)
+
+    logger.debug(f"Backfill document_title complete: {updated} updated, {skipped} skipped, {errors} errors")

@@ -216,7 +216,7 @@ class DocumentLogger:
     def log_extraction(self, raw_metadata_dict: dict) -> None:
         """Log raw extracted metadata fields."""
         parts = []
-        for key in ("document_type", "issuing_party", "issue_date", "confidence",
+        for key in ("document_type", "document_title", "issuing_party", "issue_date", "confidence",
                      "service_name", "total_amount", "total_amount_currency", "reasoning"):
             val = raw_metadata_dict.get(key)
             if val is not None:
