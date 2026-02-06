@@ -36,7 +36,7 @@ class NIFLookupCache:
         """
         self._lock = threading.Lock()
         if cache_path is None:
-            cache_path = Path(__file__).parent.parent / "config" / "nif_cache.yaml"
+            cache_path = Path(__file__).parent.parent / ".cache" / "nif_cache.yaml"
         self.path = cache_path
         self._cache: dict[str, str] = {}
         self._dirty = False

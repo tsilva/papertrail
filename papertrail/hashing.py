@@ -29,7 +29,7 @@ class HashCache:
             cache_path: Path to the YAML cache file. Defaults to config/hash_cache.yaml
         """
         if cache_path is None:
-            cache_path = Path(__file__).parent.parent / "config" / "hash_cache.yaml"
+            cache_path = Path(__file__).parent.parent / ".cache" / "hash_cache.yaml"
         self.path = cache_path
         self._cache: dict[str, str] = {}
         self._dirty = False

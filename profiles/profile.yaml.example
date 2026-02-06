@@ -1,5 +1,9 @@
-# Default Profile Configuration Template
-# Copy this file to default.yaml and customize with your settings
+# Profile Configuration Template
+# To create a new profile, create a directory and copy this file:
+#   mkdir profiles/myprofile
+#   cp profiles/profile.yaml.example profiles/myprofile/profile.yaml
+# Optionally copy mappings template:
+#   cp profiles/mappings.yaml.example profiles/myprofile/mappings.yaml
 
 profile:
   name: "default"

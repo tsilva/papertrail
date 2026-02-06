@@ -163,6 +163,13 @@ class Profile:
     task_defaults: Dict[str, Any] = field(default_factory=dict)
     _profile_path: Optional[Path] = field(default=None, repr=False)
 
+    @property
+    def profile_dir(self) -> Optional[Path]:
+        """Get the directory containing this profile's config and data files."""
+        if self._profile_path:
+            return self._profile_path.parent
+        return None
+
 
 # ============================================================================
 # Path Resolution
@@ -222,13 +229,13 @@ def get_profiles_dir() -> Path:
 
 
 def list_available_profiles() -> List[str]:
-    """List all available profile names (without .yaml extension)."""
+    """List all available profile names (subdirectories containing profile.yaml)."""
     profiles_dir = get_profiles_dir()
     if not profiles_dir.exists():
         return []
     return sorted([
-        f.stem for f in profiles_dir.glob("*.yaml")
-        if not f.stem.endswith(".example")
+        d.name for d in profiles_dir.iterdir()
+        if d.is_dir() and (d / "profile.yaml").exists()
     ])
 
 
@@ -238,12 +245,13 @@ def load_profile(name: str) -> Profile:
         raise ProfileError("PyYAML is not installed.")
 
     profiles_dir = get_profiles_dir()
-    profile_path = profiles_dir / f"{name}.yaml"
+    profile_path = profiles_dir / name / "profile.yaml"
 
     if not profile_path.exists():
         available = list_available_profiles()
         raise ProfileNotFoundError(
-            f"Profile '{name}' not found. Available: {', '.join(available) or 'none'}"
+            f"Profile '{name}' not found at {profile_path}. "
+            f"Available: {', '.join(available) or 'none'}"
         )
 
     try:

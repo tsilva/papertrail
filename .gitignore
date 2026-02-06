@@ -181,31 +181,19 @@ _helpers.md
 duplicates_report.txt
 migration_dry_run*.txt
 
-# Profile configuration files (contain local paths)
-# Note: .example files in profiles/ are tracked for reference
-profiles/*.yaml
+# Profile data (per-profile, contain local paths and personal data)
+profiles/*/profile.yaml
+profiles/*/mappings.yaml
+profiles/*/rejected_values.yaml
+profiles/*/qr_inventory.yaml
+profiles/*/qr_inventory.checkpoint.yaml
 
 .credentials/*
 
-# Legacy config files (deprecated - use profiles instead)
-config/passwords.txt
-config/file_check_validations.json
-
-# Mappings file (contains personal vendor names)
-config/mappings.yaml
-
-# Rejected values (auto-generated)
-config/rejected_values.yaml
-
-# Hash cache (auto-generated)
-config/hash_cache.yaml
-
-# QR inventory output (auto-generated)
-config/qr_inventory.yaml
-config/qr_inventory.checkpoint.yaml
-
-# Lock files (runtime state)
-config/.extract.lock
+# Cache directory - ignore contents but track .example templates
+!.cache/
+.cache/*
+!.cache/*.example
 
 .claude/settings.local.json
 # Sensitive data - credentials and secrets
@@ -255,6 +243,9 @@ Thumbs.db
 
 
 *cache*
+# Re-allow .cache/ dir and its example templates (overrides *cache* above)
+!.cache/
+!.cache/*.example
 
 # Managed by tsilva/.github
 # Do not remove - synced automatically

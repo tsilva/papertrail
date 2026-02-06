@@ -332,7 +332,7 @@ def task_extract_new(processed_path: Path, raw_paths: list[Path]):
     """Extract and classify new PDF files."""
     from papertrail.tasks.organization import rename_pdf_files
 
-    lock_path = Path(__file__).parents[1].parent / "config" / ".extract.lock"
+    lock_path = Path(__file__).parents[1].parent / ".cache" / ".extract.lock"
     lock_path.parent.mkdir(parents=True, exist_ok=True)
     lock_file = open(lock_path, "w")
     try:

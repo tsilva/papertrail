@@ -185,7 +185,12 @@ def task_qr_inventory(
     setup_task_logging(export_path, "qr_inventory")
 
     if output_path is None:
-        output_path = Path(__file__).parent.parent.parent / "config" / "qr_inventory.yaml"
+        from papertrail.config import get_current_profile
+        profile = get_current_profile()
+        if profile and profile.profile_dir:
+            output_path = profile.profile_dir / "qr_inventory.yaml"
+        else:
+            output_path = Path(__file__).parent.parent.parent / "profiles" / "default" / "qr_inventory.yaml"
 
     checkpoint_path = output_path.with_suffix('.checkpoint.yaml')
 
