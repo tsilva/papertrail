@@ -88,7 +88,6 @@ from papertrail.tasks import (
     task_gmail_download,
     pipeline,
     task_qr_inventory,
-    task_apply_export_mappings,
     task_log_context,
 )
 
@@ -286,7 +285,7 @@ def main():
         'gmail_download', 'bootstrap_mappings',
         'backfill_page_count', 'backfill_mapping_keys', 'tag_dated_types',
         'review_rejected', 'fix_unicode', 'sync', 'validate_extraction',
-        'qr_inventory', 'apply_export_mappings'
+        'qr_inventory'
     ], help="Task to perform (default: pipeline).")
     parser.add_argument("processed_path", type=str, nargs='?', help="Path to output folder.")
     parser.add_argument("--raw_path", type=str, help="Path to documents folder(s). Use ';' to separate multiple paths.")
@@ -373,11 +372,6 @@ def main():
     if args.task == "qr_inventory":
         export = require_path(parser, args.export_path or get_profile_path("export"), "export_path")
         task_qr_inventory(export, resume=not args.no_resume)
-        return
-
-    if args.task == "apply_export_mappings":
-        export = require_path(parser, args.export_path or get_profile_path("export"), "export_path")
-        task_apply_export_mappings(export, dry_run=args.dry_run)
         return
 
     processed_path = require_path(parser, args.processed_path or get_profile_path("processed"), "processed_path")
