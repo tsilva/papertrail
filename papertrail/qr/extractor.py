@@ -10,10 +10,100 @@ import fitz  # PyMuPDF
 from PIL import Image
 
 from papertrail.logging_utils import get_logger
-from papertrail.qr.models import QRCodeData, QRCodeType, QRExtractedMetadata
-from papertrail.qr.handlers import detect_qr_type, get_handler_for_content
+from papertrail.qr.models import QRCodeData, QRCodeType, QRExtractedMetadata, PortugueseInvoiceQR
 
 logger = get_logger('qr.extractor')
+
+
+def is_portuguese_invoice_qr(raw_content: str) -> bool:
+    """Check if content matches Portuguese invoice QR format (Portaria 195/2020).
+
+    Detection criteria:
+    - Starts with 'A:' (issuer NIF field)
+    - Contains '*' delimiters
+    - Contains 'H:' (ATCUD field, mandatory since 2022)
+    """
+    if not raw_content:
+        return False
+    content = raw_content.strip()
+    return content.startswith("A:") and "*" in content and ("*H:" in content or content.startswith("H:"))
+
+
+def detect_qr_type(raw_content: str) -> QRCodeType:
+    """Detect the type of QR code from its content."""
+    if not raw_content:
+        return QRCodeType.UNKNOWN
+
+    if is_portuguese_invoice_qr(raw_content):
+        return QRCodeType.PORTUGUESE_INVOICE
+
+    content = raw_content.strip().lower()
+    if content.startswith(("http://", "https://", "www.")):
+        return QRCodeType.URL
+
+    return QRCodeType.UNKNOWN
+
+
+def parse_portuguese_invoice_qr(qr_data: QRCodeData) -> tuple[Optional[QRExtractedMetadata], Optional[dict]]:
+    """Parse Portuguese invoice QR code and extract metadata."""
+    try:
+        content = qr_data.raw_content.strip()
+        parts = content.split("*")
+
+        fields = {}
+        for part in parts:
+            if ":" not in part:
+                continue
+            key, _, value = part.partition(":")
+            fields[key.strip()] = value.strip()
+
+        if "A" not in fields:
+            logger.debug("Missing required field A (issuer NIF)")
+            return None, None
+
+        def parse_float(key: str, default: float = 0.0) -> float:
+            try:
+                return float(fields.get(key, default))
+            except (ValueError, TypeError):
+                return default
+
+        parsed = PortugueseInvoiceQR(
+            issuer_nif=fields.get("A", ""),
+            buyer_nif=fields.get("B"),
+            country_code=fields.get("C", "PT"),
+            document_type_code=fields.get("D", ""),
+            document_status=fields.get("E", "N"),
+            document_date=fields.get("F", ""),
+            document_number=fields.get("G", ""),
+            atcud=fields.get("H", ""),
+            tax_base_exempt=parse_float("I1"),
+            tax_base_reduced=parse_float("I2"),
+            tax_reduced=parse_float("I3"),
+            tax_base_intermediate=parse_float("I4"),
+            tax_intermediate=parse_float("I5"),
+            tax_base_normal=parse_float("I6"),
+            tax_normal=parse_float("I7"),
+            tax_base_stamp=parse_float("I8"),
+            total_tax=parse_float("N"),
+            gross_total=parse_float("O"),
+            withholding_tax=parse_float("P"),
+            hash_code=fields.get("Q", ""),
+            certificate_number=fields.get("R", ""),
+            extra_fields={k: v for k, v in fields.items()
+                         if k not in ("A", "B", "C", "D", "E", "F", "G", "H",
+                                     "I1", "I2", "I3", "I4", "I5", "I6", "I7", "I8",
+                                     "N", "O", "P", "Q", "R")},
+        )
+
+        raw_data = {
+            "qr_type": "portuguese_invoice",
+            "raw_content": qr_data.raw_content,
+            "page_number": qr_data.page_number,
+        }
+        return parsed.to_extracted_metadata(), raw_data
+    except Exception as e:
+        logger.warning(f"Failed to parse Portuguese invoice QR: {e}")
+        return None, None
 
 # Lazy import pyzbar to allow graceful degradation
 _pyzbar_available = None
@@ -312,9 +402,8 @@ def extract_metadata_from_qr(pdf_path: Path) -> tuple[Optional[QRExtractedMetada
     qr_codes.sort(key=lambda x: priority_order.get(x.qr_type, 15))
 
     for qr_data in qr_codes:
-        handler = get_handler_for_content(qr_data.raw_content)
-        if handler:
-            metadata, raw_data = handler.parse(qr_data)
+        if is_portuguese_invoice_qr(qr_data.raw_content):
+            metadata, raw_data = parse_portuguese_invoice_qr(qr_data)
             if metadata:
                 logger.debug(f"Extracted metadata from {qr_data.qr_type.value} QR: "
                            f"date={metadata.issue_date}, type={metadata.document_type}, "
