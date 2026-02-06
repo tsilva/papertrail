@@ -125,6 +125,28 @@ class NifApiConfig:
 
 
 @dataclass
+class ExportMappingRule:
+    """A single prefix mapping rule for export files."""
+    match: Dict[str, str]
+    prefix: str
+
+
+@dataclass
+class ExportFileMappingsConfig:
+    """Configuration for applying prefixes to exported files."""
+    enabled: bool = False
+    default_prefix: str = ""
+    filename_fields: Optional[List[str]] = None
+    rules: List[ExportMappingRule] = field(default_factory=list)
+
+
+@dataclass
+class ExportConfig:
+    """Export configuration."""
+    file_mappings: ExportFileMappingsConfig = field(default_factory=ExportFileMappingsConfig)
+
+
+@dataclass
 class Profile:
     """Complete profile configuration."""
     profile: ProfileMetadata
@@ -137,6 +159,7 @@ class Profile:
     validations: ValidationsConfig = field(default_factory=ValidationsConfig)
     pipeline: PipelineConfig = field(default_factory=PipelineConfig)
     nif_api: NifApiConfig = field(default_factory=NifApiConfig)
+    export: ExportConfig = field(default_factory=ExportConfig)
     task_defaults: Dict[str, Any] = field(default_factory=dict)
     _profile_path: Optional[Path] = field(default=None, repr=False)
 
@@ -325,6 +348,23 @@ def _parse_profile_dict(data: Dict[str, Any], profile_path: Path) -> Profile:
         enabled=nif_api_data.get("enabled", False),
     )
 
+    export_data = data.get("export", {})
+    fm_data = export_data.get("file_mappings", {})
+    export_rules = []
+    for rule_data in fm_data.get("rules", []):
+        if isinstance(rule_data, dict) and "match" in rule_data and "prefix" in rule_data:
+            export_rules.append(ExportMappingRule(
+                match=rule_data["match"],
+                prefix=rule_data["prefix"],
+            ))
+    export_file_mappings = ExportFileMappingsConfig(
+        enabled=fm_data.get("enabled", False),
+        default_prefix=fm_data.get("default_prefix", ""),
+        filename_fields=fm_data.get("filename_fields"),
+        rules=export_rules,
+    )
+    export_config = ExportConfig(file_mappings=export_file_mappings)
+
     return Profile(
         profile=profile_meta,
         paths=paths,
@@ -336,6 +376,7 @@ def _parse_profile_dict(data: Dict[str, Any], profile_path: Path) -> Profile:
         validations=validations,
         pipeline=pipeline,
         nif_api=nif_api,
+        export=export_config,
         task_defaults=data.get("task_defaults", {}),
         _profile_path=profile_path
     )
