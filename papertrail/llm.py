@@ -141,6 +141,8 @@ def get_system_prompt_raw_extraction(pre_extracted: dict[str, Any] | None = None
         "\n\n"
         "For document_title, extract the specific SUBJECT, PRODUCT, SERVICE, or TRANSACTION described in the document. "
         "This is NOT the document type - it distinguishes this document from others of the same type and issuer. "
+        "Keep it concise (a few words, max ~60 characters). "
+        "For multi-item invoices, use a brief category like 'computer hardware' or 'office supplies' instead of listing every product. "
         "Examples: 'YouTube Premium', 'Claude API', 'TRANSFERÊNCIA PONTUAL A DÉBITO', 'Saúde Multicare Individual'. "
         "If no specific subject beyond what document_type already captures, leave null. "
         "\n\n"
