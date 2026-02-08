@@ -32,7 +32,10 @@ def file_name_from_metadata(metadata: DocumentMetadata, file_hash: str) -> str:
     ]
 
     if metadata.document_title:
-        parts.append(sanitize_filename_component(metadata.document_title))
+        title = sanitize_filename_component(metadata.document_title)
+        if len(title) > 80:
+            title = title[:80].rsplit(" ", 1)[0]
+        parts.append(title)
 
     if metadata.total_amount is not None:
         amount = f"{metadata.total_amount:.0f}" if metadata.total_amount.is_integer() else f"{metadata.total_amount:.2f}"
@@ -182,7 +185,10 @@ def _build_filename_from_fields(metadata: dict, fields: list, file_hash: str) ->
     for field_name in fields:
         value = _get_nested_value(metadata, field_name)
         if value is not None and str(value).strip():
-            parts.append(sanitize_filename_component(str(value)))
+            component = sanitize_filename_component(str(value))
+            if len(component) > 80:
+                component = component[:80].rsplit(" ", 1)[0]
+            parts.append(component)
     parts.append(f"{file_hash}.pdf")
     return " - ".join(parts).lower()
 
