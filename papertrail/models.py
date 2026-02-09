@@ -81,6 +81,8 @@ class DocumentMetadata(BaseModel):
     issuer_tax_number: Optional[str] = Field(default=None)
     locale: Optional[str] = Field(default=None)
     qrcode: Optional[dict] = Field(default=None)
+    bank_statement: Optional[dict] = Field(default=None)
+    source_extension: Optional[str] = Field(default=None)
 
     @field_validator('date_issued', mode='before')
     @classmethod

@@ -22,6 +22,26 @@ except ImportError:
             return json.load(f)
 
 
+def find_companion_file(json_path: Path, metadata: dict = None) -> Path | None:
+    """Find the companion document file for a JSON sidecar.
+
+    Checks source_extension from metadata first, then tries .pdf, .xlsx.
+    """
+    if metadata:
+        ext = metadata.get("source_extension")
+        if ext:
+            candidate = json_path.with_suffix(ext)
+            if candidate.exists():
+                return candidate
+
+    for ext in (".pdf", ".xlsx"):
+        candidate = json_path.with_suffix(ext)
+        if candidate.exists():
+            return candidate
+
+    return None
+
+
 def load_json_data(json_path: Path) -> dict:
     """Load raw JSON data from a file."""
     return _load_json_fast(json_path)
@@ -97,13 +117,13 @@ def build_hash_index(directory: Path) -> tuple[dict[str, Path], dict[str, Path]]
     file_hash_index = {}
 
     for json_path, data in iter_json_files(directory):
-        pdf_path = json_path.with_suffix(".pdf")
+        doc_path = find_companion_file(json_path, data) or json_path.with_suffix(".pdf")
         content_hash = data.get('hash_content')
         if content_hash:
-            content_hash_index[content_hash] = pdf_path
+            content_hash_index[content_hash] = doc_path
         file_hash = data.get('hash_file')
         if file_hash:
-            file_hash_index[file_hash] = pdf_path
+            file_hash_index[file_hash] = doc_path
 
     return content_hash_index, file_hash_index
 
@@ -148,16 +168,20 @@ def load_validated_metadata(
     iterator = get_console().track(json_files, progress_desc) if show_progress else json_files
 
     for json_path in iterator:
-        pdf_path = json_path.with_suffix(".pdf")
+        try:
+            data = _load_json_fast(json_path)
+        except Exception:
+            continue
 
-        if require_pdf and not pdf_path.exists():
+        doc_path = find_companion_file(json_path, data) or json_path.with_suffix(".pdf")
+
+        if require_pdf and not doc_path.exists():
             continue
 
         try:
-            data = _load_json_fast(json_path)
             if validate:
-                yield json_path, pdf_path, DocumentMetadata.model_validate(data)
+                yield json_path, doc_path, DocumentMetadata.model_validate(data)
             else:
-                yield json_path, pdf_path, data
+                yield json_path, doc_path, data
         except Exception:
             continue
