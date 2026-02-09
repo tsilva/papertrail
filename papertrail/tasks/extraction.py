@@ -23,7 +23,7 @@ from papertrail.llm import (
     build_extraction_tools,
     get_qr_exclusions,
 )
-from papertrail.pdf import render_pdf_to_images, find_pdf_files, get_page_count
+from papertrail.pdf import render_pdf_to_images, find_pdf_files, find_document_files, get_page_count
 from papertrail.metadata import build_hash_index, save_metadata_json, load_json_data
 from papertrail.hashing import hash_file_fast, hash_file_content
 
@@ -289,6 +289,46 @@ def task_extract_new(processed_path: Path, raw_paths: list[Path]):
         lock_file.close()
 
 
+def _process_xlsx_files(xlsx_paths: list[Path], known_file_hashes: set,
+                        known_content_hashes: set, processed_path: Path,
+                        console) -> tuple[int, int]:
+    """Process XLSX files (bank statements). Returns (processed, skipped)."""
+    from papertrail.bank_statement import classify_bank_statement
+    from papertrail.tasks.organization import file_name_from_metadata
+
+    processed_count = 0
+    skipped_count = 0
+
+    for xlsx_path in console.track(xlsx_paths, "Processing XLSX"):
+        file_hash = hash_file_fast(xlsx_path)
+        if file_hash in known_file_hashes:
+            skipped_count += 1
+            continue
+
+        metadata = classify_bank_statement(xlsx_path, file_hash)
+        if metadata is None:
+            logger.debug(f"Skipping unrecognized XLSX: {xlsx_path.name}")
+            skipped_count += 1
+            continue
+
+        filename = file_name_from_metadata(metadata, file_hash)
+        new_path = processed_path / filename
+        if new_path.exists():
+            logger.warning(f"Skipping {xlsx_path.name}: destination already exists: {filename}")
+            skipped_count += 1
+            continue
+
+        shutil.copy2(xlsx_path, new_path)
+        save_metadata_json(new_path, metadata)
+
+        known_file_hashes.add(file_hash)
+        known_content_hashes.add(file_hash)
+        processed_count += 1
+        logger.debug(f"Processed XLSX: {xlsx_path.name} -> {filename}")
+
+    return processed_count, skipped_count
+
+
 def _task_extract_new_locked(processed_path: Path, raw_paths: list[Path]):
     """Extract and classify new PDF files (lock already held)."""
     from papertrail.tasks.organization import rename_pdf_files
@@ -309,10 +349,24 @@ def _task_extract_new_locked(processed_path: Path, raw_paths: list[Path]):
         known_content_hashes = set(known_content_hashes_idx.keys())
         known_file_hashes = set(known_file_hashes_idx.keys())
 
-        logger.debug("Scanning for new PDFs...")
-        pdf_paths = find_pdf_files(raw_paths)
-        logger.debug(f"Found {len(pdf_paths)} PDFs in raw directories")
+        # Discover all document files (PDF + XLSX)
+        all_doc_paths = find_document_files(raw_paths)
+        pdf_paths = [p for p in all_doc_paths if p.suffix.lower() == '.pdf']
+        xlsx_paths = [p for p in all_doc_paths if p.suffix.lower() == '.xlsx']
 
+        logger.debug(f"Found {len(pdf_paths)} PDFs and {len(xlsx_paths)} XLSX files in raw directories")
+
+        # Process XLSX files first (deterministic, fast)
+        xlsx_processed = 0
+        if xlsx_paths:
+            xlsx_processed, xlsx_skipped = _process_xlsx_files(
+                xlsx_paths, known_file_hashes, known_content_hashes,
+                processed_path, console,
+            )
+            if xlsx_processed > 0:
+                console.success(f"{xlsx_processed} XLSX file(s) processed", indent=False)
+
+        # Process PDF files
         logger.debug("Stage 1: Quick filtering using fast file hashes...")
 
         # Stage 1: Fast hashing with Rich progress

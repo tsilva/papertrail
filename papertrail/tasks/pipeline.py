@@ -266,6 +266,22 @@ def pipeline(export_date_arg=None, processed_path_override=None):
         except Exception as e:
             logger.debug(f"Failed to cleanup temporary validations file: {e}")
 
+    # Stage 8: Reconcile bank statements (runs last, after all validation)
+    from papertrail.tasks.reconciliation import _discover_bank_statements, _reconcile_single
+    for export_date in export_dates:
+        export_date_dir = os.path.join(EXPORT_FILES_DIR, export_date)
+        if not os.path.exists(export_date_dir):
+            continue
+        bank_statements = _discover_bank_statements(Path(export_date_dir))
+        for bs_path in bank_statements:
+            with console.step_progress(f"Reconcile: {bs_path.name} ({export_date})") as step:
+                try:
+                    _reconcile_single(Path(export_date_dir), bs_path, dry_run=False, console=console)
+                    step.success("Completed")
+                except Exception as e:
+                    step.warning(f"Reconciliation failed: {e}")
+                    logger.warning(f"Reconciliation failed for {bs_path.name}: {e}")
+
     # Show pipeline footer with elapsed time
     elapsed = time.time() - start_time
     console.pipeline_footer(elapsed_seconds=elapsed)
