@@ -24,7 +24,7 @@ from papertrail.llm import (
     get_qr_exclusions,
 )
 from papertrail.pdf import render_pdf_to_images, find_pdf_files, get_page_count
-from papertrail.metadata import build_hash_index, save_metadata_json
+from papertrail.metadata import build_hash_index, save_metadata_json, load_json_data
 from papertrail.hashing import hash_file_fast, hash_file_content
 
 def enum_value(v):
@@ -273,8 +273,6 @@ def classify_pdf_document(pdf_path: Path, file_hash: str, failure_logger=None,
 
 def task_extract_new(processed_path: Path, raw_paths: list[Path]):
     """Extract and classify new PDF files."""
-    from papertrail.tasks.organization import rename_pdf_files
-
     lock_path = Path(__file__).parents[1].parent / ".cache" / ".extract.lock"
     lock_path.parent.mkdir(parents=True, exist_ok=True)
     lock_file = open(lock_path, "w")
@@ -371,27 +369,11 @@ def _task_extract_new_locked(processed_path: Path, raw_paths: list[Path]):
 
 def _collect_sync_targets(processed_path: Path, all_unknown: bool = False,
                           pattern: str = None, orphans_only: bool = False) -> list[tuple]:
-    """Collect files to sync based on targeting mode.
-
-    Args:
-        processed_path: Path to the processed documents directory.
-        all_unknown: If True, collect files with $UNKNOWN$ values (requires existing JSON).
-        pattern: Unified pattern (glob or regex, auto-detected). Supports:
-            - Exact filename: "2025-01-01 - invoice.pdf"
-            - Glob pattern: "*anthropic*.pdf"
-            - Regex pattern: "2025-01-\\d{2}"
-        orphans_only: If True, only collect PDFs without existing metadata JSON.
-                      This is the default when no other flags are specified.
-
-    Returns:
-        List of tuples: (metadata_path, pdf_path, old_data_or_None)
-        old_data is None for PDFs without existing metadata JSON.
-    """
+    """Collect files to sync. Returns list of (metadata_path, pdf_path, old_data_or_None)."""
     from papertrail.pattern_utils import make_matcher
 
     console = get_console()
 
-    # Scan for PDFs, not JSONs - allows processing files without existing metadata
     pdf_files = list(processed_path.rglob("*.pdf"))
     if not pdf_files:
         logger.debug(f"No PDF files found in {processed_path}")
@@ -400,20 +382,16 @@ def _collect_sync_targets(processed_path: Path, all_unknown: bool = False,
     targets = []
 
     if pattern:
-        # Fast path: check if pattern is an exact filename
         target_pdf = processed_path / pattern
         if target_pdf.exists() and target_pdf.suffix.lower() == '.pdf':
             target_json = target_pdf.with_suffix(".json")
             data = None
             if target_json.exists():
-                # Skip if orphans_only and has metadata
                 if orphans_only:
                     return targets
-                with open(target_json, "r", encoding="utf-8") as f:
-                    data = json.load(f)
+                data = load_json_data(target_json)
             targets.append((target_json, target_pdf, data))
         else:
-            # Pattern matching (glob or regex)
             matcher = make_matcher(pattern)
             for pdf_path in console.track(pdf_files, "Matching pattern"):
                 if not matcher(pdf_path.name):
@@ -428,26 +406,22 @@ def _collect_sync_targets(processed_path: Path, all_unknown: bool = False,
                 data = None
                 if has_metadata:
                     try:
-                        with open(metadata_path, "r", encoding="utf-8") as f:
-                            data = json.load(f)
+                        data = load_json_data(metadata_path)
                     except Exception as e:
                         logger.warning(f"Failed to load {metadata_path.name}: {e}")
                 targets.append((metadata_path, pdf_path, data))
 
     elif orphans_only:
-        # Collect only orphans (no pattern, no all_unknown)
         for pdf_path in console.track(pdf_files, "Scanning for orphans"):
             metadata_path = pdf_path.with_suffix(".json")
             if not metadata_path.exists():
                 targets.append((metadata_path, pdf_path, None))
 
     if all_unknown:
-        # all_unknown requires existing JSON files to check for $UNKNOWN$ values
         json_files = list(processed_path.rglob("*.json"))
         for metadata_path in console.track(json_files, "Scanning for $UNKNOWN$"):
             try:
-                with open(metadata_path, "r", encoding="utf-8") as f:
-                    data = json.load(f)
+                data = load_json_data(metadata_path)
                 has_unknown = (
                     data.get("document_type") == "$UNKNOWN$"
                     or data.get("issuing_party") == "$UNKNOWN$"
@@ -462,7 +436,6 @@ def _collect_sync_targets(processed_path: Path, all_unknown: bool = False,
             except Exception as e:
                 logger.warning(f"Skipping {metadata_path.name}: {e}")
 
-    # Sort by PDF filename descending (newest first, since filenames start with YYYY-MM-DD)
     targets.sort(key=lambda t: t[1].name, reverse=True)
     return targets
 
@@ -470,24 +443,9 @@ def _collect_sync_targets(processed_path: Path, all_unknown: bool = False,
 def task_sync(processed_path: Path, dry_run: bool = False,
               all_unknown: bool = False, pattern: str = None,
               workers: int = 1, all: bool = False):
-    """Sync metadata for PDF documents by running the classification pipeline.
-
-    Default behavior (no flags): only process PDFs without metadata (orphans).
-    Use --all to process all matching PDFs, re-extracting existing metadata.
-
-    Args:
-        processed_path: Path to the processed documents directory.
-        dry_run: If True, show what would be changed without modifying files.
-        all_unknown: Re-extract all files with $UNKNOWN$ values.
-        pattern: Unified pattern for matching files (glob or regex, auto-detected).
-        workers: Number of parallel workers (default: 1 for sequential).
-        all: If True, process all matching PDFs (not just orphans).
-    """
+    """Sync metadata by running classification. Default: orphans only."""
     console = get_console()
 
-    # Determine orphans_only mode
-    # Default (no flags): orphans only
-    # With --all, --all_unknown, or --pattern: process accordingly
     orphans_only = not all and not all_unknown and pattern is None
 
     with task_log_context(processed_path, "sync"):
@@ -500,13 +458,10 @@ def task_sync(processed_path: Path, dry_run: bool = False,
         logger.debug(f"Found {len(targets)} files to sync (workers={workers})")
 
         def classify_one(item):
-            """Classify a single document (thread-safe)."""
             metadata_path, pdf_path, old_data = item
-            # Each thread gets its own DocumentLogger instance
             thread_doc_logger = DocumentLogger()
             try:
                 if old_data is None:
-                    # Fresh extraction - compute hashes
                     content_hash = hash_file_content(pdf_path)
                     file_hash = hash_file_fast(pdf_path)
                     create_date = datetime.now().strftime("%Y-%m-%d")
@@ -535,7 +490,6 @@ def task_sync(processed_path: Path, dry_run: bool = False,
         renamed_count = 0
 
         def process_result(metadata_path, old_data, new_metadata, error):
-            """Process a single extraction result and save JSON immediately."""
             nonlocal fixed_count, still_unknown_count, failed_count, new_count, renamed_count
 
             if error:
@@ -548,7 +502,6 @@ def task_sync(processed_path: Path, dry_run: bool = False,
             new_date = new_metadata.date_issued
 
             if old_data is None:
-                # Fresh extraction - no comparison possible
                 logger.debug(f"New extraction: {metadata_path.name} -> {new_doc_type}, {new_issuer}, {new_date}")
                 new_count += 1
             else:
@@ -571,11 +524,9 @@ def task_sync(processed_path: Path, dry_run: bool = False,
                     logger.debug(f"No changes: {metadata_path.name}")
                     still_unknown_count += 1
 
-            # Save JSON immediately after each successful extraction
             if not dry_run:
                 save_metadata_json(metadata_path.with_suffix(".pdf"), new_metadata)
 
-                # Rename PDF+JSON pair if filename changed
                 from papertrail.tasks.organization import file_name_from_metadata
                 new_filename = file_name_from_metadata(new_metadata, new_metadata.hash_content)
                 new_pdf_path = metadata_path.parent / new_filename
@@ -642,13 +593,7 @@ def task_sync(processed_path: Path, dry_run: bool = False,
 
 
 def task_validate_extraction(processed_path: Path, pattern: str = None):
-    """Validate extraction quality by loading and inspecting metadata.
-
-    Args:
-        processed_path: Path to the processed documents directory.
-        pattern: Unified pattern for matching files (glob or regex, auto-detected).
-                 If None, validates all files.
-    """
+    """Validate extraction quality by inspecting metadata for issues."""
     from papertrail.pattern_utils import make_matcher
 
     console = get_console()
@@ -659,7 +604,6 @@ def task_validate_extraction(processed_path: Path, pattern: str = None):
             console.warning("No metadata files found", indent=False)
             return
 
-        # Create matcher if pattern provided
         matcher = make_matcher(pattern) if pattern else None
 
         issues_count = 0
@@ -673,8 +617,7 @@ def task_validate_extraction(processed_path: Path, pattern: str = None):
 
             files_checked += 1
             try:
-                with open(metadata_path, "r", encoding="utf-8") as f:
-                    data = json.load(f)
+                data = load_json_data(metadata_path)
             except Exception as e:
                 logger.warning(f"Failed to read {metadata_path.name}: {e}")
                 issues_count += 1

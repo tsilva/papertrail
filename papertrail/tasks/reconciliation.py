@@ -1,12 +1,4 @@
-"""Bank transaction reconciliation task.
-
-Matches bank transactions from an Excel export (Millennium BCP format)
-to PDF documents with JSON sidecar metadata in an export folder.
-
-Two-phase matching:
-  Phase 1: Deterministic (amount + date proximity)
-  Phase 2: LLM-assisted (fuzzy matching on descriptions)
-"""
+"""Bank transaction reconciliation: matches bank transactions to PDF documents."""
 
 import json
 from dataclasses import dataclass, field
@@ -45,7 +37,7 @@ _DATE_WINDOW_DAYS = 30
 
 @dataclass
 class Transaction:
-    """A bank transaction row from the Excel export."""
+    """A bank transaction row."""
 
     row_number: int
     date_posting: Optional[str]  # Data Lancamento
@@ -59,7 +51,7 @@ class Transaction:
 
 @dataclass
 class PDFCandidate:
-    """A PDF document with metadata available for matching."""
+    """A PDF document available for matching."""
 
     json_path: Path
     pdf_filename: str
@@ -73,7 +65,7 @@ class PDFCandidate:
 
 @dataclass
 class MatchResult:
-    """A match between a transaction and one or more PDFs."""
+    """A match between a transaction and PDFs."""
 
     transaction: Transaction
     pdf_candidates: list[PDFCandidate] = field(default_factory=list)
@@ -101,26 +93,17 @@ def _parse_date(value) -> Optional[str]:
 
 
 def _load_transactions(excel_path: Path) -> list[Transaction]:
-    """Load untreated transactions from a Millennium BCP Excel export.
-
-    Args:
-        excel_path: Path to the transactions.xlsx file.
-
-    Returns:
-        List of Transaction objects where Tratado == "Nao".
-    """
+    """Load untreated transactions from a Millennium BCP Excel export."""
     wb = openpyxl.load_workbook(excel_path, data_only=True)
     ws = wb.active
 
     transactions = []
     for row in ws.iter_rows(min_row=_DATA_START_ROW, max_col=_COL_TRATADO):
-        # Skip empty rows
         if row[_COL_DESCRICAO - 1].value is None:
             continue
 
         treated_val = str(row[_COL_TRATADO - 1].value or "").strip()
 
-        # Only process untreated rows
         if treated_val.lower() not in ("nao", "não", ""):
             continue
 
@@ -149,14 +132,7 @@ def _load_transactions(excel_path: Path) -> list[Transaction]:
 
 
 def _load_pdf_candidates(export_path: Path) -> list[PDFCandidate]:
-    """Load PDF candidates from JSON sidecar metadata in export folder.
-
-    Args:
-        export_path: Path to the export folder (e.g., export/2026-01/).
-
-    Returns:
-        List of PDFCandidate objects.
-    """
+    """Load PDF candidates from JSON sidecar metadata in export folder."""
     candidates = []
     for json_path, data in iter_json_files(export_path):
         pdf_path = json_path.with_suffix(".pdf")
@@ -200,15 +176,7 @@ def _phase1_deterministic_match(
     transactions: list[Transaction],
     candidates: list[PDFCandidate],
 ) -> tuple[list[MatchResult], list[Transaction], list[PDFCandidate]]:
-    """Phase 1: Match transactions to PDFs by amount + date proximity.
-
-    Args:
-        transactions: Untreated transactions.
-        candidates: Available PDF candidates.
-
-    Returns:
-        Tuple of (matches, unmatched_transactions, remaining_candidates).
-    """
+    """Match transactions to PDFs by amount + date proximity."""
     matches: list[MatchResult] = []
     unmatched: list[Transaction] = []
     used_candidates: set[str] = set()  # json_path strings
@@ -216,13 +184,11 @@ def _phase1_deterministic_match(
     for txn in transactions:
         abs_amount = abs(txn.amount)
 
-        # Find all candidates with matching amount
         amount_matches = []
         for cand in candidates:
             if cand.total_amount is None:
                 continue
             if abs(abs_amount - cand.total_amount) <= _AMOUNT_TOLERANCE:
-                # Score by date proximity
                 txn_date = txn.date_posting or txn.date_value
                 days = _days_between(txn_date, cand.date_issued)
                 if days is not None and days <= _DATE_WINDOW_DAYS:
@@ -232,10 +198,7 @@ def _phase1_deterministic_match(
             unmatched.append(txn)
             continue
 
-        # Sort by date proximity (closest first)
         amount_matches.sort(key=lambda x: x[1])
-
-        # Accept all amount-matching candidates (one txn can match multiple PDFs)
         matched_pdfs = [cand for cand, _ in amount_matches]
         closest_days = amount_matches[0][1]
 
@@ -259,7 +222,6 @@ def _phase1_deterministic_match(
             reasoning=reasoning,
         ))
 
-    # Remaining candidates not used in phase 1
     remaining = [c for c in candidates if str(c.json_path) not in used_candidates]
 
     return matches, unmatched, remaining
@@ -288,21 +250,10 @@ def _phase2_llm_match(
     client,
     model_id: str,
 ) -> list[MatchResult]:
-    """Phase 2: LLM-assisted fuzzy matching for remaining transactions.
-
-    Args:
-        transactions: Unmatched transactions from Phase 1.
-        candidates: Remaining PDF candidates.
-        client: OpenAI client.
-        model_id: Model ID for the LLM.
-
-    Returns:
-        List of MatchResult for LLM-matched transactions.
-    """
+    """LLM-assisted fuzzy matching for remaining transactions."""
     if not transactions or not candidates:
         return []
 
-    # Build transaction list
     txn_lines = []
     for i, txn in enumerate(transactions, 1):
         txn_date = txn.date_posting or txn.date_value or "unknown"
@@ -310,12 +261,10 @@ def _phase2_llm_match(
             f"[{i}] {txn_date} | {txn.amount:.2f} {txn.currency} | \"{txn.description}\""
         )
 
-    # Build candidate list
     cand_lines = []
     for i, cand in enumerate(candidates):
         cand_lines.append(_format_candidate_for_llm(i, cand))
 
-    # Build candidate label index
     cand_labels = {}
     for i in range(len(candidates)):
         label = chr(ord("A") + i) if i < 26 else f"P{i}"
@@ -403,7 +352,6 @@ Respond in JSON:
             reasoning=reasoning,
         ))
 
-    # Log unmatched
     for txn_idx in result.get("unmatched_transactions", []):
         if 1 <= txn_idx <= len(transactions):
             txn = transactions[txn_idx - 1]
@@ -419,21 +367,10 @@ def _write_results_to_excel(
     excel_path: Path,
     matches: list[MatchResult],
 ) -> int:
-    """Update the Excel file with match results.
-
-    Sets Tratado to "Sim", writes matched filenames and method.
-
-    Args:
-        excel_path: Path to the transactions.xlsx file.
-        matches: List of match results.
-
-    Returns:
-        Number of rows updated.
-    """
+    """Update the Excel file with match results. Returns number of rows updated."""
     wb = openpyxl.load_workbook(excel_path)
     ws = wb.active
 
-    # Ensure headers exist for new columns
     if ws.cell(row=_HEADER_ROW, column=_COL_FICHEIROS).value is None:
         ws.cell(row=_HEADER_ROW, column=_COL_FICHEIROS, value="Ficheiros")
     if ws.cell(row=_HEADER_ROW, column=_COL_METODO).value is None:
@@ -459,17 +396,9 @@ def task_reconcile(
     excel_path: Optional[Path] = None,
     dry_run: bool = False,
 ) -> None:
-    """Reconcile bank transactions against PDF documents.
-
-    Args:
-        export_path: Path to export folder (e.g., export/2026-01/).
-        excel_path: Explicit path to Excel file. If None, auto-detects
-                    transactions.xlsx in export_path.
-        dry_run: If True, show matches without modifying the Excel file.
-    """
+    """Reconcile bank transactions against PDF documents."""
     console = get_console()
 
-    # Resolve Excel path
     if excel_path is None:
         excel_path = export_path / "transactions.xlsx"
 
@@ -496,14 +425,12 @@ def task_reconcile(
                 console.warning("No PDF candidates found")
                 return
 
-            # Phase 1: Deterministic matching
             with console.step_progress("Phase 1: Deterministic matching") as step:
                 p1_matches, unmatched_txns, remaining_cands = (
                     _phase1_deterministic_match(transactions, candidates)
                 )
                 step.success(f"{len(p1_matches)} matched")
 
-            # Phase 2: LLM-assisted matching
             p2_matches: list[MatchResult] = []
             if unmatched_txns and remaining_cands:
                 with console.step_progress("Phase 2: LLM-assisted matching") as step:
@@ -519,7 +446,6 @@ def task_reconcile(
 
             all_matches = p1_matches + p2_matches
 
-            # Write results
             if all_matches and not dry_run:
                 with console.step_progress("Writing results to Excel") as step:
                     updated = _write_results_to_excel(excel_path, all_matches)
@@ -527,7 +453,6 @@ def task_reconcile(
             elif dry_run and all_matches:
                 console.detail(f"Dry run: would update {len(all_matches)} rows")
 
-            # Summary
             total_txns = len(transactions)
             total_matched = len(all_matches)
             total_unmatched = total_txns - total_matched
@@ -548,8 +473,6 @@ def task_reconcile(
                     f"{total_unmatched} transactions unmatched", indent=False,
                 )
 
-            # Log unmatched transactions that were never sent to LLM
-            # (when Phase 2 was skipped due to no remaining candidates)
             p2_matched_rows = {m.transaction.row_number for m in p2_matches}
             for txn in unmatched_txns:
                 if txn.row_number not in p2_matched_rows:

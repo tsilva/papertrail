@@ -13,15 +13,7 @@ from rich.logging import RichHandler
 
 
 def setup_failure_logger(log_path: Optional[Path] = None) -> logging.Logger:
-    """
-    Setup a logger for classification failures with full traceback.
-
-    Args:
-        log_path: Path to the log file. Defaults to ./classification_failures.log
-
-    Returns:
-        Configured logger instance
-    """
+    """Setup a logger for classification failures with full traceback."""
     logger = logging.getLogger("papertrail.failures")
     logger.setLevel(logging.ERROR)
 
@@ -50,14 +42,7 @@ def setup_failure_logger(log_path: Optional[Path] = None) -> logging.Logger:
 
 
 def log_failure(logger: Optional[logging.Logger], pdf_path: Path, error: Exception) -> None:
-    """
-    Log a PDF processing failure with full traceback.
-
-    Args:
-        logger: The failure logger (can be None, in which case nothing is logged)
-        pdf_path: Path to the PDF file that failed
-        error: The exception that occurred
-    """
+    """Log a PDF processing failure with full traceback."""
     if logger is None:
         return
 
@@ -70,8 +55,6 @@ def log_failure(logger: Optional[logging.Logger], pdf_path: Path, error: Excepti
         }
     )
 
-
-# ------------------- APPLICATION LOGGING -------------------
 
 class CleanFormatter(logging.Formatter):
     """Message-only output for normal CLI use."""
@@ -95,26 +78,13 @@ def setup_logging(
     log_file: Optional[Path] = None,
     use_rich: bool = True,
 ) -> logging.Logger:
-    """
-    Configure papertrail logging system.
-
-    Args:
-        verbose: If True, show DEBUG messages with timestamps.
-                 If False, show INFO messages only (message-only format).
-        log_file: Optional path to a log file for debug output.
-        use_rich: If True, use Rich for styled console output.
-
-    Returns:
-        The root 'papertrail' logger instance.
-    """
+    """Configure papertrail logging system."""
     root = logging.getLogger('papertrail')
     root.setLevel(logging.DEBUG)
     root.handlers.clear()
     root.propagate = False
 
-    # Console handler - use Rich for styled output
     if use_rich:
-        # Rich console handler with styled output
         console_obj = Console(stderr=True)
         console = RichHandler(
             console=console_obj,
@@ -129,7 +99,6 @@ def setup_logging(
         else:
             console.setLevel(logging.INFO)
     else:
-        # Plain text console handler (for non-TTY environments)
         console = logging.StreamHandler(sys.stderr)
         if verbose:
             console.setLevel(logging.DEBUG)
@@ -139,7 +108,6 @@ def setup_logging(
             console.setFormatter(CleanFormatter())
     root.addHandler(console)
 
-    # Optional file handler (always plain text for parsing)
     if log_file:
         fh = logging.FileHandler(log_file, mode='a', encoding='utf-8')
         fh.setLevel(logging.DEBUG)
@@ -153,12 +121,7 @@ def setup_logging(
 
 @contextmanager
 def suppress_console_logging():
-    """Temporarily suppress console logging output.
-
-    Raises the level of all StreamHandlers on both the root logger and
-    the 'papertrail' logger to suppress console output while allowing
-    file logging to continue.
-    """
+    """Temporarily suppress console logging output."""
     loggers = [logging.getLogger(), logging.getLogger('papertrail')]
     original_levels = []
 
@@ -176,35 +139,12 @@ def suppress_console_logging():
 
 
 def get_logger(name: str) -> logging.Logger:
-    """
-    Get a logger under the papertrail namespace.
-
-    Args:
-        name: Logger name (will be prefixed with 'papertrail.')
-
-    Returns:
-        Logger instance for papertrail.{name}
-    """
+    """Get a logger under the papertrail namespace."""
     return logging.getLogger(f'papertrail.{name}')
 
 
-# ------------------- TASK LOGGING -------------------
-
 def setup_task_logging(processed_path: Path, task_name: str, verbose: bool = False) -> Path:
-    """
-    Setup file-based logging for a task run.
-
-    Creates a timestamped log file in {processed_path}/logs/ and adds a file
-    handler to the papertrail root logger so all DEBUG output is captured.
-
-    Args:
-        processed_path: Path to the processed documents directory
-        task_name: Name of the task (used in log filename)
-        verbose: Whether verbose console output is enabled
-
-    Returns:
-        Path to the created log file
-    """
+    """Setup file-based logging for a task run."""
     logs_dir = processed_path / "logs"
     logs_dir.mkdir(parents=True, exist_ok=True)
 
@@ -223,8 +163,6 @@ def setup_task_logging(processed_path: Path, task_name: str, verbose: bool = Fal
     return log_file_path
 
 
-# ------------------- DOCUMENT LOGGER -------------------
-
 class DocumentLogger:
     """Structured per-document logging with markers for agent-reviewable auditing."""
 
@@ -234,13 +172,11 @@ class DocumentLogger:
         self._timings: dict[str, float] = {}
 
     def start_document(self, pdf_path: Path) -> None:
-        """Mark the start of processing a document."""
         self._current_doc = pdf_path.name
         self._timings = {}
         self._logger.debug(f"=== DOCUMENT START: {self._current_doc} ===")
 
     def log_extraction(self, raw_metadata_dict: dict) -> None:
-        """Log raw extracted metadata fields."""
         parts = []
         for key in ("document_type", "document_title", "issuing_party", "issue_date", "confidence",
                      "total_amount", "total_amount_currency", "reasoning"):
@@ -250,16 +186,13 @@ class DocumentLogger:
         self._logger.debug(f"[RAW] {' '.join(parts)}")
 
     def log_normalization(self, field: str, raw: str, normalized: str) -> None:
-        """Log a normalization step."""
         self._logger.debug(f"[NORM] {field}: '{raw}' -> '{normalized}'")
 
     def log_timing(self, operation: str, seconds: float) -> None:
-        """Log timing for an operation."""
         self._timings[operation] = seconds
         self._logger.debug(f"[TIMING] {operation}: {seconds:.2f}s")
 
     def log_final(self, metadata_dict: dict) -> None:
-        """Log final saved metadata values."""
         parts = []
         for key in ("document_type", "issuing_party", "date_issued",
                      "total_amount", "total_amount_currency", "document_title"):
@@ -269,11 +202,9 @@ class DocumentLogger:
         self._logger.debug(f"[FINAL] {' '.join(parts)}")
 
     def log_llm_usage(self, model: str, prompt_tokens: int, completion_tokens: int) -> None:
-        """Log LLM token usage."""
         self._logger.debug(f"[LLM-USAGE] model={model} prompt_tokens={prompt_tokens} completion_tokens={completion_tokens}")
 
     def log_qr_extraction(self, qr_type: str, extracted_fields: dict, page_number: int = 0) -> None:
-        """Log QR code extraction results."""
         field_parts = []
         for key, val in extracted_fields.items():
             if val is not None:
@@ -282,40 +213,31 @@ class DocumentLogger:
         self._logger.debug(f"[QR-EXTRACT] type={qr_type} page={page_number} {fields_str}")
 
     def log_qr_not_found(self) -> None:
-        """Log when no QR code was found."""
         self._logger.debug("[QR-EXTRACT] No QR codes found")
 
     def log_qr_merge(self, field: str, qr_value, llm_value) -> None:
-        """Log when QR value overrides LLM value."""
         self._logger.debug(f"[QR-MERGE] {field}: QR={qr_value} overrides LLM={llm_value}")
 
     def log_qr_skip(self, excluded_fields: set[str]) -> None:
-        """Log fields excluded from LLM extraction due to QR data."""
         self._logger.debug(f"[QR-SKIP] Excluding from LLM: {sorted(excluded_fields)}")
 
     def log_nif_cache_hit(self, nif: str, issuer: str) -> None:
-        """Log NIF cache hit (TIER 1)."""
         self._logger.debug(f"[NIF-CACHE-HIT] {nif} → {issuer}")
 
     def log_nif_web_lookup(self, nif: str, issuer: str) -> None:
-        """Log NIF web lookup (TIER 2)."""
         self._logger.debug(f"[NIF-WEB-LOOKUP] {nif} → {issuer} (cached)")
 
     def log_nif_not_found(self, nif: str, reason: str) -> None:
-        """Log when NIF lookup finds no results."""
         self._logger.debug(f"[NIF-NOT-FOUND] {nif} ({reason})")
 
     def log_nif_web_error(self, nif: str, error: str) -> None:
-        """Log when NIF web lookup fails with an error."""
         doc_context = f" [{self._current_doc}]" if self._current_doc else ""
         self._logger.warning(f"[NIF-WEB-ERROR]{doc_context} {nif} → {error}")
 
     def log_nif_enrichment(self, nif: str, official_issuer: str, normalized_issuer: str) -> None:
-        """Log NIF enrichment override."""
         self._logger.debug(f"[NIF-ENRICH] {nif} → {official_issuer} → {normalized_issuer}")
 
     def end_document(self, status: str = "SUCCESS") -> None:
-        """Mark the end of processing a document."""
         total = sum(self._timings.values())
         if total > 0:
             self._logger.debug(f"[TIMING] total: {total:.2f}s")

@@ -20,67 +20,31 @@ def _extract_json_from_response(content: str) -> str:
     return content
 
 
-def build_extraction_schema(exclude_fields: set[str] | None = None) -> dict:
-    """Build JSON schema for LLM extraction, excluding specified fields.
-
-    Args:
-        exclude_fields: Set of field names to exclude from the schema.
-                        These fields won't be extracted by the LLM.
-
-    Returns:
-        JSON schema dict with excluded fields removed.
-    """
+def build_extraction_tools(exclude_fields: set[str] | None = None) -> list[dict]:
+    """Build LLM tools list with extraction schema, optionally excluding fields."""
     import copy
     schema = copy.deepcopy(DocumentMetadataRaw.model_json_schema())
 
-    if not exclude_fields:
-        return schema
+    if exclude_fields:
+        for field in exclude_fields:
+            schema["properties"].pop(field, None)
+        if "required" in schema:
+            schema["required"] = [f for f in schema["required"] if f not in exclude_fields]
 
-    # Remove excluded fields from properties
-    for field in exclude_fields:
-        schema["properties"].pop(field, None)
-
-    # Remove from required list
-    if "required" in schema:
-        schema["required"] = [f for f in schema["required"] if f not in exclude_fields]
-
-    return schema
-
-
-def build_extraction_tools(exclude_fields: set[str] | None = None) -> list[dict]:
-    """Build tools list with dynamic schema.
-
-    Args:
-        exclude_fields: Set of field names to exclude from the extraction schema.
-
-    Returns:
-        List of tool definitions for the LLM.
-    """
     return [
         {
             "type": "function",
             "function": {
                 "name": "extract_document_metadata",
                 "description": "Extract metadata from a document exactly as it appears.",
-                "parameters": build_extraction_schema(exclude_fields),
+                "parameters": schema,
             },
         }
     ]
 
 
 def get_qr_exclusions(qr_metadata: QRExtractedMetadata) -> tuple[set[str], dict[str, Any]]:
-    """Get fields to exclude and pre-extracted values from QR metadata.
-
-    When QR extraction succeeds, the extracted fields should be excluded from
-    the LLM schema (to reduce tokens) but provided as context (to help the LLM
-    cross-reference other fields).
-
-    Args:
-        qr_metadata: Metadata extracted from QR code.
-
-    Returns:
-        Tuple of (set of field names to exclude, dict of field->value for prompt context)
-    """
+    """Get (fields_to_exclude, pre_extracted_values) from QR metadata for LLM."""
     exclude = set()
     pre_extracted: dict[str, Any] = {}
 
@@ -102,20 +66,7 @@ def get_qr_exclusions(qr_metadata: QRExtractedMetadata) -> tuple[set[str], dict[
 
 
 def get_system_prompt_raw_extraction(pre_extracted: dict[str, Any] | None = None) -> str:
-    """
-    Get the system prompt for raw metadata extraction.
-
-    Includes the current date and sample enum values for context.
-    When pre_extracted values are provided (from QR code extraction),
-    they are included as context for the LLM but marked as already extracted.
-
-    Args:
-        pre_extracted: Dict of field names to values already extracted from QR code.
-                       These fields are excluded from LLM schema but provided for context.
-
-    Returns:
-        System prompt string
-    """
+    """Build system prompt for raw metadata extraction."""
     prompt = (
         f"You are an expert document extraction assistant. "
         f"Today's date is {datetime.now().strftime('%Y-%m-%d')}. "
@@ -187,21 +138,7 @@ def normalize_metadata(
     model_id: Optional[str] = None,
     doc_logger: Optional[DocumentLogger] = None,
 ) -> tuple[str, str]:
-    """
-    Phase 2: Normalize raw extracted values to canonical enum values.
-
-    Always uses LLM to normalize, then validates against canonical lists.
-    Invalid values fall back to $UNKNOWN$.
-
-    Args:
-        raw_metadata: Raw metadata from phase 1 extraction
-        client: OpenAI client instance
-        model_id: Model ID to use (defaults to OPENROUTER_MODEL_ID env var)
-        doc_logger: Optional DocumentLogger for structured logging
-
-    Returns:
-        Tuple of (normalized_document_type, normalized_issuing_party)
-    """
+    """Normalize raw values to canonical enums via LLM. Returns (doc_type, issuing_party)."""
     normalization_prompt = f"""You are a metadata normalization assistant. Your job is to map extracted document values to their canonical forms.
 
 Given:
@@ -241,7 +178,6 @@ Respond in JSON format:
             messages=[{"role": "user", "content": normalization_prompt}]
         )
 
-        # Log LLM usage
         if doc_logger and response.usage:
             doc_logger.log_llm_usage(
                 model_id,
@@ -256,13 +192,11 @@ Respond in JSON format:
             logger.debug(f"Full response: {response}")
             return "$UNKNOWN$", "$UNKNOWN$"
 
-        # Extract JSON from the response (handle markdown code blocks)
         content = _extract_json_from_response(content)
         result = json.loads(content)
         doc_type = result.get("document_type", "$UNKNOWN$")
         issuing_party = result.get("issuing_party", "$UNKNOWN$")
 
-        # Validate document_type against canonical list
         if doc_type not in DOCUMENT_TYPES:
             logger.warning(f"Rejected doc_type '{doc_type}' (not in canonical list)")
             doc_type = "$UNKNOWN$"
