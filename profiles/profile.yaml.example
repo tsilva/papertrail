@@ -39,16 +39,6 @@ document_types:
     - "notice"
     - "unknown"
 
-# Issuing party configuration
-issuing_parties:
-  # Set to null for dynamic loading from processed metadata (recommended)
-  predefined: null
-  # Inline fallback list (optional)
-  fallback_list:
-    - "Amazon"
-    - "Anthropic"
-    - "Google"
-
 # Gmail integration (optional)
 gmail:
   enabled: true

@@ -1,0 +1,559 @@
+"""Bank transaction reconciliation task.
+
+Matches bank transactions from an Excel export (Millennium BCP format)
+to PDF documents with JSON sidecar metadata in an export folder.
+
+Two-phase matching:
+  Phase 1: Deterministic (amount + date proximity)
+  Phase 2: LLM-assisted (fuzzy matching on descriptions)
+"""
+
+import json
+from dataclasses import dataclass, field
+from datetime import datetime
+from pathlib import Path
+from typing import Optional
+
+import openpyxl
+
+from papertrail.config import get_current_profile, get_openai_client
+from papertrail.console import get_console
+from papertrail.llm import _extract_json_from_response
+from papertrail.logging_utils import get_logger
+from papertrail.metadata import iter_json_files
+from papertrail.tasks import task_log_context
+
+logger = get_logger("reconcile")
+
+# Excel layout constants (Millennium BCP format)
+_HEADER_ROW = 8  # Row with column headers
+_DATA_START_ROW = 9  # First data row
+_COL_DATA_LANCAMENTO = 1  # A
+_COL_DATA_VALOR = 2  # B
+_COL_DESCRICAO = 3  # C
+_COL_MONTANTE = 4  # D
+_COL_MOEDA = 5  # E
+_COL_NOTAS = 6  # F
+_COL_TRATADO = 7  # G
+_COL_FICHEIROS = 8  # H (new)
+_COL_METODO = 9  # I (new)
+
+# Matching parameters
+_AMOUNT_TOLERANCE = 0.01
+_DATE_WINDOW_DAYS = 30
+
+
+@dataclass
+class Transaction:
+    """A bank transaction row from the Excel export."""
+
+    row_number: int
+    date_posting: Optional[str]  # Data Lancamento
+    date_value: Optional[str]  # Data Valor
+    description: str
+    amount: float  # Negative in bank export
+    currency: str
+    notes: str
+    treated: str  # "Sim" or "Nao"
+
+
+@dataclass
+class PDFCandidate:
+    """A PDF document with metadata available for matching."""
+
+    json_path: Path
+    pdf_filename: str
+    date_issued: Optional[str]
+    document_type: Optional[str]
+    document_title: Optional[str]
+    issuing_party: Optional[str]
+    total_amount: Optional[float]
+    total_amount_currency: Optional[str]
+
+
+@dataclass
+class MatchResult:
+    """A match between a transaction and one or more PDFs."""
+
+    transaction: Transaction
+    pdf_candidates: list[PDFCandidate] = field(default_factory=list)
+    method: str = ""  # "exact" or "llm"
+    confidence: float = 0.0
+    reasoning: str = ""
+
+
+def _parse_date(value) -> Optional[str]:
+    """Parse a date cell value to YYYY-MM-DD string."""
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value.strftime("%Y-%m-%d")
+    s = str(value).strip()
+    if not s:
+        return None
+    # Try common formats
+    for fmt in ("%Y-%m-%d", "%d-%m-%Y", "%d/%m/%Y"):
+        try:
+            return datetime.strptime(s, fmt).strftime("%Y-%m-%d")
+        except ValueError:
+            continue
+    return s
+
+
+def _load_transactions(excel_path: Path) -> list[Transaction]:
+    """Load untreated transactions from a Millennium BCP Excel export.
+
+    Args:
+        excel_path: Path to the transactions.xlsx file.
+
+    Returns:
+        List of Transaction objects where Tratado == "Nao".
+    """
+    wb = openpyxl.load_workbook(excel_path, data_only=True)
+    ws = wb.active
+
+    transactions = []
+    for row in ws.iter_rows(min_row=_DATA_START_ROW, max_col=_COL_TRATADO):
+        # Skip empty rows
+        if row[_COL_DESCRICAO - 1].value is None:
+            continue
+
+        treated_val = str(row[_COL_TRATADO - 1].value or "").strip()
+
+        # Only process untreated rows
+        if treated_val.lower() not in ("nao", "não", ""):
+            continue
+
+        amount_raw = row[_COL_MONTANTE - 1].value
+        if amount_raw is None:
+            continue
+
+        try:
+            amount = float(amount_raw)
+        except (ValueError, TypeError):
+            continue
+
+        transactions.append(Transaction(
+            row_number=row[0].row,
+            date_posting=_parse_date(row[_COL_DATA_LANCAMENTO - 1].value),
+            date_value=_parse_date(row[_COL_DATA_VALOR - 1].value),
+            description=str(row[_COL_DESCRICAO - 1].value or "").strip(),
+            amount=amount,
+            currency=str(row[_COL_MOEDA - 1].value or "EUR").strip(),
+            notes=str(row[_COL_NOTAS - 1].value or "").strip(),
+            treated=treated_val,
+        ))
+
+    wb.close()
+    return transactions
+
+
+def _load_pdf_candidates(export_path: Path) -> list[PDFCandidate]:
+    """Load PDF candidates from JSON sidecar metadata in export folder.
+
+    Args:
+        export_path: Path to the export folder (e.g., export/2026-01/).
+
+    Returns:
+        List of PDFCandidate objects.
+    """
+    candidates = []
+    for json_path, data in iter_json_files(export_path):
+        pdf_path = json_path.with_suffix(".pdf")
+        if not pdf_path.exists():
+            continue
+
+        total_amount = data.get("total_amount")
+        if total_amount is not None:
+            try:
+                total_amount = float(total_amount)
+            except (ValueError, TypeError):
+                total_amount = None
+
+        candidates.append(PDFCandidate(
+            json_path=json_path,
+            pdf_filename=pdf_path.name,
+            date_issued=data.get("date_issued"),
+            document_type=data.get("document_type"),
+            document_title=data.get("document_title"),
+            issuing_party=data.get("issuing_party"),
+            total_amount=total_amount,
+            total_amount_currency=data.get("total_amount_currency"),
+        ))
+
+    return candidates
+
+
+def _days_between(date_str1: Optional[str], date_str2: Optional[str]) -> Optional[int]:
+    """Calculate days between two YYYY-MM-DD date strings."""
+    if not date_str1 or not date_str2:
+        return None
+    try:
+        d1 = datetime.strptime(date_str1, "%Y-%m-%d")
+        d2 = datetime.strptime(date_str2, "%Y-%m-%d")
+        return abs((d1 - d2).days)
+    except ValueError:
+        return None
+
+
+def _phase1_deterministic_match(
+    transactions: list[Transaction],
+    candidates: list[PDFCandidate],
+) -> tuple[list[MatchResult], list[Transaction], list[PDFCandidate]]:
+    """Phase 1: Match transactions to PDFs by amount + date proximity.
+
+    Args:
+        transactions: Untreated transactions.
+        candidates: Available PDF candidates.
+
+    Returns:
+        Tuple of (matches, unmatched_transactions, remaining_candidates).
+    """
+    matches: list[MatchResult] = []
+    unmatched: list[Transaction] = []
+    used_candidates: set[str] = set()  # json_path strings
+
+    for txn in transactions:
+        abs_amount = abs(txn.amount)
+
+        # Find all candidates with matching amount
+        amount_matches = []
+        for cand in candidates:
+            if cand.total_amount is None:
+                continue
+            if abs(abs_amount - cand.total_amount) <= _AMOUNT_TOLERANCE:
+                # Score by date proximity
+                txn_date = txn.date_posting or txn.date_value
+                days = _days_between(txn_date, cand.date_issued)
+                if days is not None and days <= _DATE_WINDOW_DAYS:
+                    amount_matches.append((cand, days))
+
+        if not amount_matches:
+            unmatched.append(txn)
+            continue
+
+        # Sort by date proximity (closest first)
+        amount_matches.sort(key=lambda x: x[1])
+
+        # Accept all amount-matching candidates (one txn can match multiple PDFs)
+        matched_pdfs = [cand for cand, _ in amount_matches]
+        closest_days = amount_matches[0][1]
+
+        for cand in matched_pdfs:
+            used_candidates.add(str(cand.json_path))
+
+        reasoning = (
+            f"Amount match: {abs_amount:.2f} "
+            f"({len(matched_pdfs)} PDF(s), closest date: {closest_days}d)"
+        )
+        logger.info(
+            f"[PHASE-1] Row {txn.row_number}: {txn.description[:50]} -> "
+            f"{', '.join(c.pdf_filename for c in matched_pdfs)} ({reasoning})"
+        )
+
+        matches.append(MatchResult(
+            transaction=txn,
+            pdf_candidates=matched_pdfs,
+            method="exact",
+            confidence=1.0,
+            reasoning=reasoning,
+        ))
+
+    # Remaining candidates not used in phase 1
+    remaining = [c for c in candidates if str(c.json_path) not in used_candidates]
+
+    return matches, unmatched, remaining
+
+
+def _format_candidate_for_llm(idx: int, cand: PDFCandidate) -> str:
+    """Format a PDF candidate for the LLM prompt."""
+    parts = [cand.pdf_filename]
+    if cand.issuing_party and cand.issuing_party != "$UNKNOWN$":
+        parts.append(cand.issuing_party)
+    if cand.document_title:
+        parts.append(cand.document_title)
+    if cand.total_amount is not None:
+        currency = cand.total_amount_currency or "EUR"
+        parts.append(f"{cand.total_amount:.2f} {currency}")
+    if cand.date_issued and cand.date_issued != "$UNKNOWN$":
+        parts.append(cand.date_issued)
+
+    label = chr(ord("A") + idx) if idx < 26 else f"P{idx}"
+    return f"[{label}] {' - '.join(parts)}"
+
+
+def _phase2_llm_match(
+    transactions: list[Transaction],
+    candidates: list[PDFCandidate],
+    client,
+    model_id: str,
+) -> list[MatchResult]:
+    """Phase 2: LLM-assisted fuzzy matching for remaining transactions.
+
+    Args:
+        transactions: Unmatched transactions from Phase 1.
+        candidates: Remaining PDF candidates.
+        client: OpenAI client.
+        model_id: Model ID for the LLM.
+
+    Returns:
+        List of MatchResult for LLM-matched transactions.
+    """
+    if not transactions or not candidates:
+        return []
+
+    # Build transaction list
+    txn_lines = []
+    for i, txn in enumerate(transactions, 1):
+        txn_date = txn.date_posting or txn.date_value or "unknown"
+        txn_lines.append(
+            f"[{i}] {txn_date} | {txn.amount:.2f} {txn.currency} | \"{txn.description}\""
+        )
+
+    # Build candidate list
+    cand_lines = []
+    for i, cand in enumerate(candidates):
+        cand_lines.append(_format_candidate_for_llm(i, cand))
+
+    # Build candidate label index
+    cand_labels = {}
+    for i in range(len(candidates)):
+        label = chr(ord("A") + i) if i < 26 else f"P{i}"
+        cand_labels[label] = candidates[i]
+
+    prompt = f"""You are a bank reconciliation assistant. Match bank transactions to their supporting PDF documents.
+
+UNMATCHED TRANSACTIONS:
+{chr(10).join(txn_lines)}
+
+AVAILABLE PDF DOCUMENTS:
+{chr(10).join(cand_lines)}
+
+Match transactions to PDFs. Consider:
+- Bank descriptions are abbreviated; match to issuing_party and document_title
+- Amounts may differ slightly (fees, taxes included)
+- Dates may differ by up to 30 days
+- Some transactions may have NO match — do not force matches
+- One transaction CAN match multiple PDFs (e.g., bank note + vendor invoice)
+
+Respond in JSON:
+{{
+    "matches": [
+        {{
+            "transaction_id": 1,
+            "pdf_ids": ["A", "B"],
+            "confidence": 0.9,
+            "reasoning": "Brief explanation"
+        }}
+    ],
+    "unmatched_transactions": [2, 3]
+}}"""
+
+    try:
+        response = client.chat.completions.create(
+            model=model_id,
+            max_tokens=4096,
+            temperature=0,
+            messages=[{"role": "user", "content": prompt}],
+        )
+
+        content = response.choices[0].message.content
+        if not content:
+            logger.warning("[PHASE-2] Empty LLM response")
+            return []
+
+        content = _extract_json_from_response(content)
+        result = json.loads(content)
+
+    except Exception as e:
+        logger.error(f"[PHASE-2] LLM matching failed: {e}")
+        return []
+
+    matches: list[MatchResult] = []
+    for m in result.get("matches", []):
+        txn_idx = m.get("transaction_id")
+        if txn_idx is None or txn_idx < 1 or txn_idx > len(transactions):
+            continue
+
+        txn = transactions[txn_idx - 1]
+        pdf_ids = m.get("pdf_ids", [])
+        matched_pdfs = []
+        for pid in pdf_ids:
+            cand = cand_labels.get(str(pid).upper())
+            if cand:
+                matched_pdfs.append(cand)
+
+        if not matched_pdfs:
+            continue
+
+        confidence = m.get("confidence", 0.5)
+        reasoning = m.get("reasoning", "")
+
+        logger.info(
+            f"[PHASE-2] Row {txn.row_number}: {txn.description[:50]} -> "
+            f"{', '.join(c.pdf_filename for c in matched_pdfs)} "
+            f"(confidence={confidence:.1f}, {reasoning})"
+        )
+
+        matches.append(MatchResult(
+            transaction=txn,
+            pdf_candidates=matched_pdfs,
+            method="llm",
+            confidence=confidence,
+            reasoning=reasoning,
+        ))
+
+    # Log unmatched
+    for txn_idx in result.get("unmatched_transactions", []):
+        if 1 <= txn_idx <= len(transactions):
+            txn = transactions[txn_idx - 1]
+            logger.info(
+                f"[NO-MATCH] Row {txn.row_number}: {txn.description[:50]} "
+                f"({txn.amount:.2f} {txn.currency})"
+            )
+
+    return matches
+
+
+def _write_results_to_excel(
+    excel_path: Path,
+    matches: list[MatchResult],
+) -> int:
+    """Update the Excel file with match results.
+
+    Sets Tratado to "Sim", writes matched filenames and method.
+
+    Args:
+        excel_path: Path to the transactions.xlsx file.
+        matches: List of match results.
+
+    Returns:
+        Number of rows updated.
+    """
+    wb = openpyxl.load_workbook(excel_path)
+    ws = wb.active
+
+    # Ensure headers exist for new columns
+    if ws.cell(row=_HEADER_ROW, column=_COL_FICHEIROS).value is None:
+        ws.cell(row=_HEADER_ROW, column=_COL_FICHEIROS, value="Ficheiros")
+    if ws.cell(row=_HEADER_ROW, column=_COL_METODO).value is None:
+        ws.cell(row=_HEADER_ROW, column=_COL_METODO, value="Metodo")
+
+    updated = 0
+    for match in matches:
+        row = match.transaction.row_number
+        filenames = "; ".join(c.pdf_filename for c in match.pdf_candidates)
+
+        ws.cell(row=row, column=_COL_TRATADO, value="Sim")
+        ws.cell(row=row, column=_COL_FICHEIROS, value=filenames)
+        ws.cell(row=row, column=_COL_METODO, value=match.method)
+        updated += 1
+
+    wb.save(excel_path)
+    wb.close()
+    return updated
+
+
+def task_reconcile(
+    export_path: Path,
+    excel_path: Optional[Path] = None,
+    dry_run: bool = False,
+) -> None:
+    """Reconcile bank transactions against PDF documents.
+
+    Args:
+        export_path: Path to export folder (e.g., export/2026-01/).
+        excel_path: Explicit path to Excel file. If None, auto-detects
+                    transactions.xlsx in export_path.
+        dry_run: If True, show matches without modifying the Excel file.
+    """
+    console = get_console()
+
+    # Resolve Excel path
+    if excel_path is None:
+        excel_path = export_path / "transactions.xlsx"
+
+    if not excel_path.exists():
+        console.error(f"Excel file not found: {excel_path}", indent=False)
+        return
+
+    with task_log_context(export_path, "reconcile") as log_file:
+        with console.task("Reconcile bank transactions"):
+            # Load data
+            with console.step_progress("Loading transactions") as step:
+                transactions = _load_transactions(excel_path)
+                step.success(f"{len(transactions)} untreated rows")
+
+            if not transactions:
+                console.warning("No untreated transactions found")
+                return
+
+            with console.step_progress("Loading PDF candidates") as step:
+                candidates = _load_pdf_candidates(export_path)
+                step.success(f"{len(candidates)} PDFs with metadata")
+
+            if not candidates:
+                console.warning("No PDF candidates found")
+                return
+
+            # Phase 1: Deterministic matching
+            with console.step_progress("Phase 1: Deterministic matching") as step:
+                p1_matches, unmatched_txns, remaining_cands = (
+                    _phase1_deterministic_match(transactions, candidates)
+                )
+                step.success(f"{len(p1_matches)} matched")
+
+            # Phase 2: LLM-assisted matching
+            p2_matches: list[MatchResult] = []
+            if unmatched_txns and remaining_cands:
+                with console.step_progress("Phase 2: LLM-assisted matching") as step:
+                    profile = get_current_profile()
+                    model_id = profile.openrouter.model_id
+                    client = get_openai_client()
+                    p2_matches = _phase2_llm_match(
+                        unmatched_txns, remaining_cands, client, model_id,
+                    )
+                    step.success(f"{len(p2_matches)} matched")
+            else:
+                console.detail("Phase 2: Skipped (no unmatched transactions or no remaining PDFs)")
+
+            all_matches = p1_matches + p2_matches
+
+            # Write results
+            if all_matches and not dry_run:
+                with console.step_progress("Writing results to Excel") as step:
+                    updated = _write_results_to_excel(excel_path, all_matches)
+                    step.success(f"Updated {updated} rows")
+            elif dry_run and all_matches:
+                console.detail(f"Dry run: would update {len(all_matches)} rows")
+
+            # Summary
+            total_txns = len(transactions)
+            total_matched = len(all_matches)
+            total_unmatched = total_txns - total_matched
+            pct = (total_matched / total_txns * 100) if total_txns > 0 else 0
+
+            logger.info(
+                f"[SUMMARY] {total_matched}/{total_txns} matched ({pct:.1f}%), "
+                f"{total_unmatched} unmatched"
+            )
+
+            console.info("")
+            console.success(
+                f"{total_matched}/{total_txns} transactions matched ({pct:.1f}%)",
+                indent=False,
+            )
+            if total_unmatched > 0:
+                console.warning(
+                    f"{total_unmatched} transactions unmatched", indent=False,
+                )
+
+            # Log unmatched transactions that were never sent to LLM
+            # (when Phase 2 was skipped due to no remaining candidates)
+            p2_matched_rows = {m.transaction.row_number for m in p2_matches}
+            for txn in unmatched_txns:
+                if txn.row_number not in p2_matched_rows:
+                    logger.info(
+                        f"[NO-MATCH] Row {txn.row_number}: {txn.description[:50]} "
+                        f"({txn.amount:.2f} {txn.currency})"
+                    )

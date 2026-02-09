@@ -53,7 +53,6 @@ def export_metadata_to_excel(processed_path: Path, excel_output_path: str, quiet
             metadata_dict["month"] = None
 
         normalize_enum_field_in_dict(metadata_dict, "document_type", "DocumentType")
-        normalize_enum_field_in_dict(metadata_dict, "issuing_party", "IssuingParty")
 
         metadata_list.append(metadata_dict)
 

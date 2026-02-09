@@ -1,14 +1,12 @@
 """Pipeline task."""
 
 import json
-import logging
 import os
 import re
 import shutil
 import sys
 import tempfile
 import time
-from contextlib import contextmanager
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -16,33 +14,11 @@ from archive_extractor import extract_archives
 
 from papertrail.config import get_current_profile
 from papertrail.console import get_console
-from papertrail.logging_utils import get_logger, setup_task_logging
+from papertrail.logging_utils import get_logger, setup_task_logging, suppress_console_logging
 from papertrail.mbox import extract_mbox_attachments
 from papertrail.tasks.validation import validate_merged_pdf
 
 logger = get_logger('cli')
-
-
-@contextmanager
-def suppress_console_logging():
-    """Temporarily suppress console logging output.
-
-    Raises the level of all StreamHandlers on the root logger to suppress
-    console output while allowing file logging to continue.
-    """
-    root = logging.getLogger()
-    original_levels = []
-
-    for handler in root.handlers:
-        if isinstance(handler, logging.StreamHandler) and not isinstance(handler, logging.FileHandler):
-            original_levels.append((handler, handler.level))
-            handler.setLevel(logging.CRITICAL + 1)
-
-    try:
-        yield
-    finally:
-        for handler, level in original_levels:
-            handler.setLevel(level)
 
 
 def pipeline(export_date_arg=None, processed_path_override=None):
@@ -82,18 +58,17 @@ def pipeline(export_date_arg=None, processed_path_override=None):
     console.pipeline_header(profile.profile.name, str(log_file_path))
 
     if export_date_arg:
-        export_date = export_date_arg
+        export_dates = [export_date_arg]
     else:
         today = datetime.now()
         first_of_this_month = today.replace(day=1)
         last_month = first_of_this_month - timedelta(days=1)
-        export_date = last_month.strftime("%Y-%m")
+        export_dates = [last_month.strftime("%Y-%m"), today.strftime("%Y-%m")]
 
-    if not re.match(r"^\d{4}-\d{2}$", export_date):
-        console.error("The export_date must be in YYYY-MM format.", indent=False)
-        sys.exit(1)
-
-    export_date_dir = os.path.join(EXPORT_FILES_DIR, export_date)
+    for ed in export_dates:
+        if not re.match(r"^\d{4}-\d{2}$", ed):
+            console.error(f"The export_date must be in YYYY-MM format: {ed}", indent=False)
+            sys.exit(1)
 
     passwords, _ = get_passwords()
     if not passwords:
@@ -138,6 +113,7 @@ def pipeline(export_date_arg=None, processed_path_override=None):
                     output_dir=raw_path,
                     start_date=gmail_start,
                     end_date=end_date,
+                    quiet=True,
                 )
                 if stats['attachments_downloaded'] > 0:
                     step.success(
@@ -236,76 +212,79 @@ def pipeline(export_date_arg=None, processed_path_override=None):
             step.error(str(e))
             sys.exit(1)
 
-    # ── Stage 6: Build monthly export ──────────────────────────────────
-
-    # Purge export date folder before copying
-    if os.path.exists(export_date_dir):
-        shutil.rmtree(export_date_dir)
-
     from papertrail.tasks.organization import copy_matching_files
+    from papertrail.tasks.validation import check_files_exist
 
     export_file_config = None
     if profile.export.file_mappings.enabled:
         export_file_config = profile.export.file_mappings
 
-    with console.step_progress(f"Copy matching documents ({export_date})") as step:
-        try:
-            copy_stats = copy_matching_files(
-                Path(PROCESSED_FILES_DIR),
-                export_date,
-                Path(export_date_dir),
-                export_config=export_file_config,
-            )
-            copied = copy_stats.get('copied', 0)
-            if copied:
-                step.success(f"Copied {copied} files to {Path(export_date_dir).name}")
-            else:
-                step.success("Completed")
-        except Exception as e:
-            step.error(str(e))
-            sys.exit(1)
+    all_validation_missing_items = []
 
-    with console.step_progress("Merge PDFs") as step:
-        logger.debug("### Merge PDFs...")
-        try:
-            from pdf_gluer import merge_all_pdfs
-            with suppress_console_logging():
-                merge_all_pdfs(export_date_dir)
-            step.success("Completed")
-            logger.debug("### Merge PDFs... Finished.")
-        except Exception as e:
-            step.error(f"PDF merge failed: {e}")
-            logger.error(f"Merge PDFs failed: {e}")
-            sys.exit(1)
+    for export_date in export_dates:
+        export_date_dir = os.path.join(EXPORT_FILES_DIR, export_date)
 
-    with suppress_console_logging():
-        validate_merged_pdf(Path(export_date_dir))
+        # ── Stage 6: Build monthly export ──────────────────────────────────
 
-    # ── Stage 7: Validate exported files ───────────────────────────────
+        # Purge export date folder before copying
+        if os.path.exists(export_date_dir):
+            shutil.rmtree(export_date_dir)
 
-    from papertrail.tasks.validation import check_files_exist
-
-    with console.step_progress("Validate exported files") as step:
-        if validations_file_path:
+        with console.step_progress(f"Copy matching documents ({export_date})") as step:
             try:
-                stats = check_files_exist(
-                    Path(export_date_dir), Path(validations_file_path), quiet=True
+                copy_stats = copy_matching_files(
+                    Path(PROCESSED_FILES_DIR),
+                    export_date,
+                    Path(export_date_dir),
+                    export_config=export_file_config,
                 )
-                if stats['all_passed']:
-                    step.success(f"{stats['passed']} checks passed")
+                copied = copy_stats.get('copied', 0)
+                if copied:
+                    step.success(f"Copied {copied} files to {Path(export_date_dir).name}")
                 else:
-                    step.warning(f"{stats['passed']} checks passed, {stats['missing']} missing")
-
-                # Show which validations are missing
-                if stats['missing_items']:
-                    for item in stats['missing_items']:
-                        console.warning(item)
+                    step.success("Completed")
             except Exception as e:
                 step.error(str(e))
                 sys.exit(1)
-        else:
-            step.warning("Skipped (no validation rules configured)")
-            logger.debug("Skipping file validation (no validation rules configured in profile)")
+
+        with console.step_progress(f"Merge PDFs ({export_date})") as step:
+            logger.debug("### Merge PDFs...")
+            try:
+                from pdf_gluer import merge_all_pdfs
+                with suppress_console_logging():
+                    merge_all_pdfs(export_date_dir)
+                step.success("Completed")
+                logger.debug("### Merge PDFs... Finished.")
+            except Exception as e:
+                step.error(f"PDF merge failed: {e}")
+                logger.error(f"Merge PDFs failed: {e}")
+                sys.exit(1)
+
+        with suppress_console_logging():
+            validate_merged_pdf(Path(export_date_dir))
+
+        # ── Stage 7: Validate exported files ───────────────────────────────
+
+        with console.step_progress(f"Validate exported files ({export_date})") as step:
+            if validations_file_path:
+                try:
+                    stats = check_files_exist(
+                        Path(export_date_dir), Path(validations_file_path), quiet=True
+                    )
+                    if stats['all_passed']:
+                        step.success(f"{stats['passed']} checks passed")
+                    else:
+                        step.warning(f"{stats['passed']} checks passed, {stats['missing']} missing")
+                        all_validation_missing_items.extend(stats['missing_items'])
+                except Exception as e:
+                    step.error(str(e))
+                    sys.exit(1)
+            else:
+                step.warning("Skipped (no validation rules configured)")
+                logger.debug("Skipping file validation (no validation rules configured in profile)")
+
+    for item in all_validation_missing_items:
+        console.warning(item)
 
     if temp_validations_file:
         try:

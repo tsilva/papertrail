@@ -78,13 +78,6 @@ class DocumentTypesConfig:
 
 
 @dataclass
-class IssuingPartiesConfig:
-    """Issuing parties configuration."""
-    predefined: Optional[List[str]] = None
-    fallback_list: Optional[List[str]] = None
-
-
-@dataclass
 class GmailConfig:
     """Gmail integration configuration."""
     enabled: bool = False
@@ -153,7 +146,6 @@ class Profile:
     paths: PathsConfig = field(default_factory=PathsConfig)
     openrouter: OpenRouterConfig = field(default_factory=OpenRouterConfig)
     document_types: DocumentTypesConfig = field(default_factory=DocumentTypesConfig)
-    issuing_parties: IssuingPartiesConfig = field(default_factory=IssuingPartiesConfig)
     gmail: GmailConfig = field(default_factory=GmailConfig)
     passwords: PasswordsConfig = field(default_factory=PasswordsConfig)
     validations: ValidationsConfig = field(default_factory=ValidationsConfig)
@@ -307,12 +299,6 @@ def _parse_profile_dict(data: Dict[str, Any], profile_path: Path) -> Profile:
         fallback_list=doc_types_data.get("fallback_list")
     )
 
-    issuing_data = data.get("issuing_parties", {})
-    issuing_parties = IssuingPartiesConfig(
-        predefined=issuing_data.get("predefined") or issuing_data.get("canonical"),
-        fallback_list=issuing_data.get("fallback_list")
-    )
-
     gmail_data = data.get("gmail", {})
     gmail_settings = gmail_data.get("settings", {})
     gmail = GmailConfig(
@@ -370,7 +356,6 @@ def _parse_profile_dict(data: Dict[str, Any], profile_path: Path) -> Profile:
         paths=paths,
         openrouter=openrouter,
         document_types=document_types,
-        issuing_parties=issuing_parties,
         gmail=gmail,
         passwords=passwords,
         validations=validations,
