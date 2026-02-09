@@ -11,9 +11,8 @@ from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
-from tqdm import tqdm
-
 from papertrail.config import get_gmail_config_paths, get_current_profile
+from papertrail.console import get_console
 from papertrail.logging_utils import setup_failure_logger, get_logger
 
 logger = get_logger('gmail')
@@ -377,7 +376,8 @@ class GmailDownloader:
                 logger.info(f"Already processed: {len(processed_ids)} messages")
 
         # Process messages
-        for msg_meta in tqdm(messages, desc="Downloading attachments", disable=quiet):
+        iterator = get_console().track(messages, "Downloading attachments") if not quiet else messages
+        for msg_meta in iterator:
             msg_id = msg_meta["id"]
 
             if msg_id in processed_ids:

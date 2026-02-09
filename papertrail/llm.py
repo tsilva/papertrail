@@ -1,7 +1,6 @@
 """LLM prompts, tools, and classification utilities."""
 
 import json
-import os
 from datetime import datetime
 from typing import Any, Optional
 
@@ -19,18 +18,6 @@ def _extract_json_from_response(content: str) -> str:
     if "```" in content:
         return content.split("```")[1].split("```")[0].strip()
     return content
-
-
-TOOLS_RAW_EXTRACTION = [
-    {
-        "type": "function",
-        "function": {
-            "name": "extract_document_metadata",
-            "description": "Extract metadata from a document exactly as it appears.",
-            "parameters": DocumentMetadataRaw.model_json_schema(),
-        },
-    }
-]
 
 
 def build_extraction_schema(exclude_fields: set[str] | None = None) -> dict:
@@ -215,9 +202,6 @@ def normalize_metadata(
     Returns:
         Tuple of (normalized_document_type, normalized_issuing_party)
     """
-    if model_id is None:
-        model_id = os.getenv("OPENROUTER_MODEL_ID")
-
     normalization_prompt = f"""You are a metadata normalization assistant. Your job is to map extracted document values to their canonical forms.
 
 Given:
