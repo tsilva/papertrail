@@ -19,7 +19,6 @@ from papertrail.logging_utils import (
 from papertrail.models import DocumentMetadata, DocumentMetadataRaw
 from papertrail.llm import (
     get_system_prompt_raw_extraction,
-    TOOLS_RAW_EXTRACTION,
     normalize_metadata,
     build_extraction_tools,
     get_qr_exclusions,
@@ -38,84 +37,33 @@ from papertrail.nif_lookup import NIFLookupCache
 logger = get_logger('cli')
 
 
+_QR_MERGE_FIELDS = (
+    "issue_date", "document_type", "total_amount",
+    "total_amount_currency", "issuer_tax_number", "locale",
+)
+
+
 def _merge_qr_metadata(
     qr_metadata: QRExtractedMetadata,
-    issue_date: str,
-    document_type: str,
-    total_amount: float | None,
-    total_amount_currency: str | None,
-    issuer_tax_number: str | None,
-    locale: str | None,
+    llm_values: dict,
     doc_logger: DocumentLogger | None,
-) -> tuple[str, str, float | None, str | None, str | None, str | None]:
-    """
-    Merge QR-extracted metadata with LLM-extracted values.
+) -> dict:
+    """Merge QR-extracted metadata with LLM-extracted values.
 
     QR values override LLM values when present (100% confidence).
-
-    Returns:
-        Tuple of (issue_date, document_type, total_amount, total_amount_currency, issuer_tax_number, locale)
+    Mutates and returns llm_values dict.
     """
-    final_date = issue_date
-    final_doc_type = document_type
-    final_amount = total_amount
-    final_currency = total_amount_currency
-    final_tax_number = issuer_tax_number
-    final_locale = locale
-
-    if qr_metadata.issue_date:
-        if doc_logger and final_date != qr_metadata.issue_date:
-            doc_logger.log_qr_merge("issue_date", qr_metadata.issue_date, final_date)
-        final_date = qr_metadata.issue_date
-
-    if qr_metadata.document_type:
-        if doc_logger and final_doc_type != qr_metadata.document_type:
-            doc_logger.log_qr_merge("document_type", qr_metadata.document_type, final_doc_type)
-        final_doc_type = qr_metadata.document_type
-
-    if qr_metadata.total_amount is not None:
-        if doc_logger and final_amount != qr_metadata.total_amount:
-            doc_logger.log_qr_merge("total_amount", qr_metadata.total_amount, final_amount)
-        final_amount = qr_metadata.total_amount
-
-    if qr_metadata.total_amount_currency:
-        if doc_logger and final_currency != qr_metadata.total_amount_currency:
-            doc_logger.log_qr_merge("total_amount_currency", qr_metadata.total_amount_currency, final_currency)
-        final_currency = qr_metadata.total_amount_currency
-
-    if qr_metadata.issuer_tax_number:
-        if doc_logger and final_tax_number != qr_metadata.issuer_tax_number:
-            doc_logger.log_qr_merge("issuer_tax_number", qr_metadata.issuer_tax_number, final_tax_number)
-        final_tax_number = qr_metadata.issuer_tax_number
-
-    if qr_metadata.locale:
-        if doc_logger and final_locale != qr_metadata.locale:
-            doc_logger.log_qr_merge("locale", qr_metadata.locale, final_locale)
-        final_locale = qr_metadata.locale
-
-    return final_date, final_doc_type, final_amount, final_currency, final_tax_number, final_locale
+    for field in _QR_MERGE_FIELDS:
+        qr_val = getattr(qr_metadata, field)
+        if qr_val is not None:
+            if doc_logger and llm_values[field] != qr_val:
+                doc_logger.log_qr_merge(field, qr_val, llm_values[field])
+            llm_values[field] = qr_val
+    return llm_values
 
 
-def classify_pdf_document(pdf_path: Path, file_hash: str, failure_logger=None,
-                          doc_logger: DocumentLogger = None) -> DocumentMetadata:
-    """
-    Classify a PDF document using QR extraction and LLM.
-
-    Pipeline:
-    1. Phase 0: QR extraction (fast, 100% accurate when found)
-    2. Phase 1: LLM raw extraction (vision model)
-    3. Phase 2: Normalization (map raw values to canonicals)
-    4. Merge: QR values override LLM values
-    """
-    import main
-    ctx = main.get_ctx()
-
-    if doc_logger:
-        doc_logger.start_document(pdf_path)
-
-    # Phase 0: QR extraction (fast)
-    qr_metadata = None
-    qr_raw_data = None
+def _phase0_qr_extract(pdf_path, doc_logger):
+    """Phase 0: Extract metadata from QR codes (fast, 100% accurate)."""
     try:
         t0 = _time.monotonic()
         qr_metadata, qr_raw_data = extract_metadata_from_qr(pdf_path)
@@ -124,186 +72,185 @@ def classify_pdf_document(pdf_path: Path, file_hash: str, failure_logger=None,
             if qr_metadata:
                 doc_logger.log_qr_extraction(
                     qr_metadata.extraction_source,
-                    {
-                        "issue_date": qr_metadata.issue_date,
-                        "document_type": qr_metadata.document_type,
-                        "total_amount": qr_metadata.total_amount,
-                        "issuer_nif": qr_metadata.issuer_nif,
-                        "issuer_tax_number": qr_metadata.issuer_tax_number,
-                        "atcud": qr_metadata.atcud,
-                        "locale": qr_metadata.locale,
-                    },
+                    {k: getattr(qr_metadata, k) for k in (
+                        "issue_date", "document_type", "total_amount",
+                        "issuer_nif", "issuer_tax_number", "atcud", "locale",
+                    )},
                 )
             else:
                 doc_logger.log_qr_not_found()
+        return qr_metadata, qr_raw_data
     except Exception as e:
         logger.debug(f"QR extraction failed (continuing with LLM): {e}")
         if doc_logger:
             doc_logger.log_qr_not_found()
+        return None, None
 
-    # Determine fields to exclude based on QR results
-    exclude_fields: set[str] = set()
-    pre_extracted: dict = {}
+
+def _phase1_llm_extract(pdf_path, exclude_fields, pre_extracted, ctx, doc_logger):
+    """Phase 1: Render PDF and extract metadata via LLM vision model."""
+    t0 = _time.monotonic()
+    images_b64 = render_pdf_to_images(pdf_path)
+    if doc_logger:
+        doc_logger.log_timing("pdf_render", _time.monotonic() - t0)
+
+    user_content = [
+        {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{img_b64}"}}
+        for img_b64 in images_b64
+    ]
+    messages = [
+        {"role": "system", "content": get_system_prompt_raw_extraction(pre_extracted or None)},
+        {"role": "user", "content": user_content},
+    ]
+
+    t0 = _time.monotonic()
+    response = ctx.openai_client.chat.completions.create(
+        model=ctx.model_id,
+        max_tokens=4096,
+        temperature=0,
+        messages=messages,
+        tools=build_extraction_tools(exclude_fields),
+        tool_choice={"type": "function", "function": {"name": "extract_document_metadata"}},
+    )
+    if doc_logger:
+        doc_logger.log_timing("llm_extraction", _time.monotonic() - t0)
+        if response.usage:
+            doc_logger.log_llm_usage(ctx.model_id, response.usage.prompt_tokens, response.usage.completion_tokens)
+
+    tool_calls = response.choices[0].message.tool_calls
+    if not tool_calls:
+        raise ValueError("OpenRouter did not return structured classification.")
+
+    args = tool_calls[0].function.arguments
+
+    # Inject QR-extracted values before Pydantic parsing
+    if pre_extracted:
+        args_dict = json.loads(args)
+        for field, value in pre_extracted.items():
+            if field not in args_dict:
+                args_dict[field] = value
+        args = json.dumps(args_dict)
+
+    raw_metadata = DocumentMetadataRaw.model_validate_json(args)
+    if doc_logger:
+        doc_logger.log_extraction(raw_metadata.model_dump())
+    return raw_metadata
+
+
+def _phase4_nif_enrich(merged, raw_metadata, normalized_issuing_party, ctx, doc_logger):
+    """Phase 4: Enrich issuing party using NIF tax number lookup."""
+    tax_number = merged["issuer_tax_number"]
+    if not (tax_number and ctx.nif_cache and merged["locale"] == "pt-PT"
+            and NIFLookupCache.is_portuguese_nif(tax_number)):
+        return normalized_issuing_party
+
+    t0 = _time.monotonic()
+    official_issuer, lookup_source, lookup_error = ctx.nif_cache.lookup(tax_number)
+
+    if official_issuer:
+        if doc_logger:
+            if lookup_source == "cache":
+                doc_logger.log_nif_cache_hit(tax_number, official_issuer)
+            elif lookup_source == "web":
+                doc_logger.log_nif_web_lookup(tax_number, official_issuer)
+
+        # Re-normalize the official name to canonical form
+        nif_raw = DocumentMetadataRaw(
+            issue_date=merged["issue_date"],
+            document_type=raw_metadata.document_type,
+            issuing_party=official_issuer,
+            total_amount=merged["total_amount"],
+            total_amount_currency=merged["total_amount_currency"],
+            confidence=1.0,
+            reasoning="NIF lookup override",
+        )
+        _, nif_normalized_issuer = normalize_metadata(
+            nif_raw, ctx.openai_client, ctx.model_id,
+        )
+
+        if nif_normalized_issuer != "$UNKNOWN$":
+            if doc_logger:
+                doc_logger.log_nif_enrichment(tax_number, official_issuer, nif_normalized_issuer)
+            normalized_issuing_party = nif_normalized_issuer
+        else:
+            logger.debug(f"[NIF-ENRICH] Keeping original issuer (NIF name didn't normalize): {official_issuer}")
+    elif doc_logger:
+        if lookup_source == "web_error" and lookup_error:
+            doc_logger.log_nif_web_error(tax_number, lookup_error)
+        else:
+            doc_logger.log_nif_not_found(tax_number, lookup_source)
+
+    if doc_logger:
+        doc_logger.log_timing("nif_enrichment", _time.monotonic() - t0)
+
+    ctx.nif_cache.save()
+    return normalized_issuing_party
+
+
+def classify_pdf_document(pdf_path: Path, file_hash: str, failure_logger=None,
+                          doc_logger: DocumentLogger = None) -> DocumentMetadata:
+    """Classify a PDF document using QR extraction and LLM.
+
+    Pipeline: QR extract -> LLM extract -> Normalize -> Merge -> NIF enrich
+    """
+    from papertrail.config import get_ctx
+    ctx = get_ctx()
+
+    if doc_logger:
+        doc_logger.start_document(pdf_path)
+
+    # Phase 0: QR extraction
+    qr_metadata, qr_raw_data = _phase0_qr_extract(pdf_path, doc_logger)
+
+    exclude_fields, pre_extracted = set(), {}
     if qr_metadata:
         exclude_fields, pre_extracted = get_qr_exclusions(qr_metadata)
         if doc_logger and exclude_fields:
             doc_logger.log_qr_skip(exclude_fields)
 
-    # Phase 1: Render PDF for LLM
     try:
-        t0 = _time.monotonic()
-        images_b64 = render_pdf_to_images(pdf_path)
-        if doc_logger:
-            doc_logger.log_timing("pdf_render", _time.monotonic() - t0)
-    except Exception as e:
-        log_failure(failure_logger, pdf_path, e)
-        if doc_logger:
-            doc_logger.end_document("FAILED")
-        raise RuntimeError(f"Failed to render PDF image: {pdf_path}") from e
-
-    try:
-        user_content = [
-            {
-                "type": "image_url",
-                "image_url": {"url": f"data:image/jpeg;base64,{img_b64}"}
-            }
-            for img_b64 in images_b64
-        ]
-
-        messages = [
-            {"role": "system", "content": get_system_prompt_raw_extraction(pre_extracted if pre_extracted else None)},
-            {"role": "user", "content": user_content},
-        ]
-
-        # Use dynamic tools - exclude QR-extracted fields to reduce tokens
-        tools = build_extraction_tools(exclude_fields) if exclude_fields else TOOLS_RAW_EXTRACTION
-
-        t0 = _time.monotonic()
-        response = ctx.openai_client.chat.completions.create(
-            model=ctx.model_id,
-            max_tokens=4096,
-            temperature=0,
-            messages=messages,
-            tools=tools,
-            tool_choice={"type": "function", "function": {"name": "extract_document_metadata"}},
-        )
-        if doc_logger:
-            doc_logger.log_timing("llm_extraction", _time.monotonic() - t0)
-            if response.usage:
-                doc_logger.log_llm_usage(ctx.model_id, response.usage.prompt_tokens, response.usage.completion_tokens)
-
-        tool_calls = response.choices[0].message.tool_calls
-        if not tool_calls:
-            raise ValueError("OpenRouter did not return structured classification.")
-
-        args = tool_calls[0].function.arguments
-
-        # Inject QR-extracted values into JSON before Pydantic parsing
-        # These fields were excluded from LLM schema to save tokens, but are
-        # required by DocumentMetadataRaw - must be present before validation
-        if pre_extracted:
-            args_dict = json.loads(args)
-            for field, value in pre_extracted.items():
-                if field not in args_dict:
-                    args_dict[field] = value
-            args = json.dumps(args_dict)
-
-        raw_metadata = DocumentMetadataRaw.model_validate_json(args)
-
-        if doc_logger:
-            doc_logger.log_extraction(raw_metadata.model_dump())
+        # Phase 1: LLM extraction
+        raw_metadata = _phase1_llm_extract(pdf_path, exclude_fields, pre_extracted, ctx, doc_logger)
 
         # Phase 2: Normalization
         t0 = _time.monotonic()
         normalized_doc_type, normalized_issuing_party = normalize_metadata(
-            raw_metadata, ctx.openai_client, ctx.model_id,
-            doc_logger=doc_logger,
+            raw_metadata, ctx.openai_client, ctx.model_id, doc_logger=doc_logger,
         )
         if doc_logger:
             doc_logger.log_timing("normalization", _time.monotonic() - t0)
 
-        # Start with LLM values
-        final_issue_date = raw_metadata.issue_date
-        final_doc_type = normalized_doc_type
-        final_amount = raw_metadata.total_amount
-        final_currency = raw_metadata.total_amount_currency
-        final_tax_number = raw_metadata.issuer_tax_number
-        final_locale = raw_metadata.locale
-
-        # Merge: QR values override LLM values
+        # Phase 3: Merge QR overrides
+        merged = {
+            "issue_date": raw_metadata.issue_date,
+            "document_type": normalized_doc_type,
+            "total_amount": raw_metadata.total_amount,
+            "total_amount_currency": raw_metadata.total_amount_currency,
+            "issuer_tax_number": raw_metadata.issuer_tax_number,
+            "locale": raw_metadata.locale,
+        }
         if qr_metadata:
-            final_issue_date, final_doc_type, final_amount, final_currency, final_tax_number, final_locale = _merge_qr_metadata(
-                qr_metadata,
-                final_issue_date,
-                final_doc_type,
-                final_amount,
-                final_currency,
-                final_tax_number,
-                final_locale,
-                doc_logger,
-            )
+            _merge_qr_metadata(qr_metadata, merged, doc_logger)
 
-        # Phase 4: NIF Enrichment (only for valid Portuguese tax numbers with Portuguese locale)
-        if final_tax_number and ctx.nif_cache and final_locale == "pt-PT" and NIFLookupCache.is_portuguese_nif(final_tax_number):
-            t0 = _time.monotonic()
-            official_issuer, lookup_source, lookup_error = ctx.nif_cache.lookup(final_tax_number)
-
-            if official_issuer:
-                # Log the lookup result
-                if doc_logger:
-                    if lookup_source == "cache":
-                        doc_logger.log_nif_cache_hit(final_tax_number, official_issuer)
-                    elif lookup_source == "web":
-                        doc_logger.log_nif_web_lookup(final_tax_number, official_issuer)
-
-                # Re-normalize the official name to canonical form
-                # Create a minimal raw metadata object for normalization
-                nif_raw = DocumentMetadataRaw(
-                    issue_date=final_issue_date,
-                    document_type=raw_metadata.document_type,
-                    issuing_party=official_issuer,
-                    total_amount=final_amount,
-                    total_amount_currency=final_currency,
-                    confidence=1.0,
-                    reasoning="NIF lookup override",
-                )
-                _, nif_normalized_issuer = normalize_metadata(
-                    nif_raw, ctx.openai_client, ctx.model_id,
-                )
-
-                # Only use the NIF-derived issuer if normalization succeeded
-                if nif_normalized_issuer != "$UNKNOWN$":
-                    if doc_logger:
-                        doc_logger.log_nif_enrichment(final_tax_number, official_issuer, nif_normalized_issuer)
-                    normalized_issuing_party = nif_normalized_issuer
-                else:
-                    logger.debug(f"[NIF-ENRICH] Keeping original issuer (NIF name didn't normalize): {official_issuer}")
-            elif doc_logger:
-                if lookup_source == "web_error" and lookup_error:
-                    doc_logger.log_nif_web_error(final_tax_number, lookup_error)
-                else:
-                    doc_logger.log_nif_not_found(final_tax_number, lookup_source)
-
-            if doc_logger:
-                doc_logger.log_timing("nif_enrichment", _time.monotonic() - t0)
-
-            # Save cache after enrichment
-            ctx.nif_cache.save()
+        # Phase 4: NIF enrichment
+        normalized_issuing_party = _phase4_nif_enrich(
+            merged, raw_metadata, normalized_issuing_party, ctx, doc_logger,
+        )
 
         metadata = DocumentMetadata(
-            date_issued=final_issue_date,
-            document_type=final_doc_type,
+            date_issued=merged["issue_date"],
+            document_type=merged["document_type"],
             issuing_party=normalized_issuing_party,
-            total_amount=final_amount,
-            total_amount_currency=final_currency,
+            total_amount=merged["total_amount"],
+            total_amount_currency=merged["total_amount_currency"],
             class_confidence=1.0 if qr_metadata else raw_metadata.confidence,
             class_reasoning=raw_metadata.reasoning,
             hash_content=file_hash,
             document_type_raw=raw_metadata.document_type,
             document_title=raw_metadata.document_title,
             issuing_party_raw=raw_metadata.issuing_party,
-            issuer_tax_number=final_tax_number,
-            locale=final_locale,
+            issuer_tax_number=merged["issuer_tax_number"],
+            locale=merged["locale"],
             qrcode=qr_raw_data,
         )
 
@@ -372,11 +319,8 @@ def _task_extract_new_locked(processed_path: Path, raw_paths: list[Path]):
 
         # Stage 1: Fast hashing with Rich progress
         fast_hash_map = {}
-        with console.progress("Fast hashing", total=len(pdf_paths)) as progress:
-            task = progress.add_task("Fast hashing", total=len(pdf_paths))
-            for pdf in pdf_paths:
-                fast_hash_map[pdf] = hash_file_fast(pdf)
-                progress.update(task, advance=1)
+        for pdf in console.track(pdf_paths, "Fast hashing"):
+            fast_hash_map[pdf] = hash_file_fast(pdf)
 
         potentially_new = [pdf for pdf in pdf_paths if fast_hash_map[pdf] not in known_file_hashes]
 
@@ -393,15 +337,12 @@ def _task_extract_new_locked(processed_path: Path, raw_paths: list[Path]):
         content_hash_map = {}
 
         # Stage 2: Content hashing with Rich progress
-        with console.progress("Content hashing", total=len(potentially_new)) as progress:
-            task = progress.add_task("Content hashing", total=len(potentially_new))
-            for pdf in potentially_new:
-                try:
-                    content_hash = hash_file_content(pdf)
-                    content_hash_map[pdf] = content_hash
-                except Exception as e:
-                    logger.error(f"Error hashing {pdf.name}: {e}")
-                progress.update(task, advance=1)
+        for pdf in console.track(potentially_new, "Content hashing"):
+            try:
+                content_hash = hash_file_content(pdf)
+                content_hash_map[pdf] = content_hash
+            except Exception as e:
+                logger.error(f"Error hashing {pdf.name}: {e}")
 
         files_to_process = [pdf for pdf in potentially_new if content_hash_map.get(pdf) not in known_content_hashes]
         logger.debug(f"Found {len(files_to_process)} truly new PDFs to process.")
@@ -474,63 +415,52 @@ def _collect_sync_targets(processed_path: Path, all_unknown: bool = False,
         else:
             # Pattern matching (glob or regex)
             matcher = make_matcher(pattern)
-            with console.progress("Matching pattern", total=len(pdf_files)) as progress:
-                task = progress.add_task("Matching pattern", total=len(pdf_files))
-                for pdf_path in pdf_files:
-                    if not matcher(pdf_path.name):
-                        progress.update(task, advance=1)
-                        continue
-                    metadata_path = pdf_path.with_suffix(".json")
-                    has_metadata = metadata_path.exists()
+            for pdf_path in console.track(pdf_files, "Matching pattern"):
+                if not matcher(pdf_path.name):
+                    continue
+                metadata_path = pdf_path.with_suffix(".json")
+                has_metadata = metadata_path.exists()
 
-                    # Skip if orphans_only and has metadata
-                    if orphans_only and has_metadata:
-                        progress.update(task, advance=1)
-                        continue
+                # Skip if orphans_only and has metadata
+                if orphans_only and has_metadata:
+                    continue
 
-                    data = None
-                    if has_metadata:
-                        try:
-                            with open(metadata_path, "r", encoding="utf-8") as f:
-                                data = json.load(f)
-                        except Exception as e:
-                            logger.warning(f"Failed to load {metadata_path.name}: {e}")
-                    targets.append((metadata_path, pdf_path, data))
-                    progress.update(task, advance=1)
+                data = None
+                if has_metadata:
+                    try:
+                        with open(metadata_path, "r", encoding="utf-8") as f:
+                            data = json.load(f)
+                    except Exception as e:
+                        logger.warning(f"Failed to load {metadata_path.name}: {e}")
+                targets.append((metadata_path, pdf_path, data))
 
     elif orphans_only:
         # Collect only orphans (no pattern, no all_unknown)
-        with console.progress("Scanning for orphans", total=len(pdf_files)) as progress:
-            task = progress.add_task("Scanning for orphans", total=len(pdf_files))
-            for pdf_path in pdf_files:
-                metadata_path = pdf_path.with_suffix(".json")
-                if not metadata_path.exists():
-                    targets.append((metadata_path, pdf_path, None))
-                progress.update(task, advance=1)
+        for pdf_path in console.track(pdf_files, "Scanning for orphans"):
+            metadata_path = pdf_path.with_suffix(".json")
+            if not metadata_path.exists():
+                targets.append((metadata_path, pdf_path, None))
 
     if all_unknown:
         # all_unknown requires existing JSON files to check for $UNKNOWN$ values
         json_files = list(processed_path.rglob("*.json"))
-        with console.progress("Scanning for $UNKNOWN$", total=len(json_files)) as progress:
-            task = progress.add_task("Scanning for $UNKNOWN$", total=len(json_files))
-            for metadata_path in json_files:
-                try:
-                    with open(metadata_path, "r", encoding="utf-8") as f:
-                        data = json.load(f)
-                    has_unknown = (
-                        data.get("document_type") == "$UNKNOWN$"
-                        or data.get("issuing_party") == "$UNKNOWN$"
-                        or data.get("date_issued") == "$UNKNOWN$"
-                    )
-                    if has_unknown:
-                        pdf_path = metadata_path.with_suffix(".pdf")
-                        if pdf_path.exists():
-                            targets.append((metadata_path, pdf_path, data))
-                        else:
-                            logger.warning(f"PDF not found for {metadata_path.name}")
-                except Exception as e:
-                    logger.warning(f"Skipping {metadata_path.name}: {e}")
-                progress.update(task, advance=1)
+        for metadata_path in console.track(json_files, "Scanning for $UNKNOWN$"):
+            try:
+                with open(metadata_path, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                has_unknown = (
+                    data.get("document_type") == "$UNKNOWN$"
+                    or data.get("issuing_party") == "$UNKNOWN$"
+                    or data.get("date_issued") == "$UNKNOWN$"
+                )
+                if has_unknown:
+                    pdf_path = metadata_path.with_suffix(".pdf")
+                    if pdf_path.exists():
+                        targets.append((metadata_path, pdf_path, data))
+                    else:
+                        logger.warning(f"PDF not found for {metadata_path.name}")
+            except Exception as e:
+                logger.warning(f"Skipping {metadata_path.name}: {e}")
 
     # Sort by PDF filename descending (newest first, since filenames start with YYYY-MM-DD)
     targets.sort(key=lambda t: t[1].name, reverse=True)
@@ -735,48 +665,42 @@ def task_validate_extraction(processed_path: Path, pattern: str = None):
         issues_count = 0
         files_checked = 0
 
-        with console.progress("Validating extractions", total=len(json_files)) as progress:
-            task = progress.add_task("Validating extractions", total=len(json_files))
-            for metadata_path in json_files:
-                pdf_path = metadata_path.with_suffix(".pdf")
+        for metadata_path in console.track(json_files, "Validating extractions"):
+            pdf_path = metadata_path.with_suffix(".pdf")
 
-                if matcher and not matcher(pdf_path.name):
-                    progress.update(task, advance=1)
-                    continue
+            if matcher and not matcher(pdf_path.name):
+                continue
 
-                files_checked += 1
-                try:
-                    with open(metadata_path, "r", encoding="utf-8") as f:
-                        data = json.load(f)
-                except Exception as e:
-                    logger.warning(f"Failed to read {metadata_path.name}: {e}")
-                    issues_count += 1
-                    progress.update(task, advance=1)
-                    continue
+            files_checked += 1
+            try:
+                with open(metadata_path, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+            except Exception as e:
+                logger.warning(f"Failed to read {metadata_path.name}: {e}")
+                issues_count += 1
+                continue
 
-                file_issues = []
+            file_issues = []
 
-                for field in ("document_type", "issuing_party", "date_issued"):
-                    if data.get(field) == "$UNKNOWN$":
-                        file_issues.append(f"{field}=$UNKNOWN$")
+            for field in ("document_type", "issuing_party", "date_issued"):
+                if data.get(field) == "$UNKNOWN$":
+                    file_issues.append(f"{field}=$UNKNOWN$")
 
-                confidence = data.get("class_confidence")
-                if confidence is not None and confidence < 0.7:
-                    file_issues.append(f"low_confidence={confidence}")
+            confidence = data.get("class_confidence")
+            if confidence is not None and confidence < 0.7:
+                file_issues.append(f"low_confidence={confidence}")
 
-                for field in ("hash_content", "hash_file", "date_issued", "document_type", "issuing_party"):
-                    if not data.get(field):
-                        file_issues.append(f"missing_{field}")
+            for field in ("hash_content", "hash_file", "date_issued", "document_type", "issuing_party"):
+                if not data.get(field):
+                    file_issues.append(f"missing_{field}")
 
-                if file_issues:
-                    issues_count += 1
-                    logger.warning(f"[ISSUE] {pdf_path.name}: {', '.join(file_issues)}")
+            if file_issues:
+                issues_count += 1
+                logger.warning(f"[ISSUE] {pdf_path.name}: {', '.join(file_issues)}")
 
-                logger.debug(f"[METADATA] {pdf_path.name}: " + " ".join(
-                    f"{k}={v}" for k, v in data.items() if k != "class_reasoning"
-                ))
-
-                progress.update(task, advance=1)
+            logger.debug(f"[METADATA] {pdf_path.name}: " + " ".join(
+                f"{k}={v}" for k, v in data.items() if k != "class_reasoning"
+            ))
 
         # Summary output
         if issues_count > 0:

@@ -10,7 +10,6 @@ authors = [
     { name = "Employee Two", email = "eng.employee-two.silva@gmail.com" }
 ]
 dependencies = [
-    "tqdm",
     "openai",
     "PyMuPDF",
     "pandas",
