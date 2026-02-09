@@ -3,6 +3,7 @@
 import logging
 import sys
 import traceback
+from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
@@ -148,6 +149,30 @@ def setup_logging(
         root.addHandler(fh)
 
     return root
+
+
+@contextmanager
+def suppress_console_logging():
+    """Temporarily suppress console logging output.
+
+    Raises the level of all StreamHandlers on both the root logger and
+    the 'papertrail' logger to suppress console output while allowing
+    file logging to continue.
+    """
+    loggers = [logging.getLogger(), logging.getLogger('papertrail')]
+    original_levels = []
+
+    for lgr in loggers:
+        for handler in lgr.handlers:
+            if isinstance(handler, logging.StreamHandler) and not isinstance(handler, logging.FileHandler):
+                original_levels.append((handler, handler.level))
+                handler.setLevel(logging.CRITICAL + 1)
+
+    try:
+        yield
+    finally:
+        for handler, level in original_levels:
+            handler.setLevel(level)
 
 
 def get_logger(name: str) -> logging.Logger:

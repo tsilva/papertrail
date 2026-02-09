@@ -14,14 +14,12 @@ from papertrail.config import get_current_profile
 # ============================================================================
 
 _DOCUMENT_TYPES_LIST: list[str] | None = None
-_ISSUING_PARTIES_LIST: list[str] | None = None
 
 
 def reset_enum_cache() -> None:
     """Reset the enum cache, forcing re-evaluation on next access."""
-    global _DOCUMENT_TYPES_LIST, _ISSUING_PARTIES_LIST
+    global _DOCUMENT_TYPES_LIST
     _DOCUMENT_TYPES_LIST = None
-    _ISSUING_PARTIES_LIST = None
 
 
 # ============================================================================
@@ -65,32 +63,6 @@ FALLBACK_DOCUMENT_TYPES = [
     "tax-declaration", "tax-irs", "tax-vat"
 ]
 
-FALLBACK_ISSUING_PARTIES = [
-    "$UNKNOWN$", "ActivoBank", "Allianz", "Amazon", "Anthropic", "Antonio Martins & Filhos",
-    "Apple", "Armando", "Ascendi", "AT", "Auchan", "Banco BEST", "Banco Invest",
-    "Bandicam", "BIG", "Bitwarden", "BlackRock", "BP", "BPI", "Caetano Formula",
-    "Carrefour", "CEPSA", "Cleverbridge", "Codota", "Cohere", "Coinbase",
-    "Consensus", "Continente", "CTT", "Dacia", "DEGIRO", "Digital River",
-    "DigitalOcean", "DOKKER", "E.Leclerc", "EUROPA", "ExpressVPN", "FGCT",
-    "Fidelidade", "Fluxe", "Fundo de Compensacao do Trabalho", "Galp", "GESPOST",
-    "GitHub", "GONCALTEAM", "Google", "Google Commerce Limited", "Government",
-    "GRUPO", "HONG KONG USGREEN LIMITED", "INE", "Intermarche", "International",
-    "IRN", "IRS", "iServices", "iShares", "justETF", "Justica",
-    "La Maison", "Leroy", "LuLuComfort", "LusoAloja", "M2030",
-    "MANUEL ALVES DIAS, LDA", "MB WAY", "Melo, Nadais & Associados", "Microsoft",
-    "MillenniumBCP", "Mini Soninha", "Ministerio das Financas", "Mobatek",
-    "MONTEPIO", "Multibanco", "Multicare", "MyCommerce", "MyFactoryHub", "NordVPN",
-    "NOS", "Notario", "NTI", "OCC", "OpenAI", "OpenRouter", "OUYINEN", "Paddle",
-    "Parallels", "PayPal", "PCDIGA", "Pinecone", "PLIMAT", "Pluxee", "PRIO",
-    "PRISMXR", "Puzzle Message, Unipessoal Lda.", "Quindi", "Redunicre",
-    "RegistoLEI", "Renault", "Republica Portuguesa", "RescueTime", "Restaurant",
-    "Securitas", "Seguranca Social", "Shenzhen", "Sierra",
-    "Sodexo", "Solred", "SONAE", "SRS Acquiom", "Swappie", "Sweatcoin",
-    "Tesouraria", "TIAGO", "Tilda", "Together.ai", "TopazLabs", "Universal",
-    "Universo", "Vanguard", "Via Verde", "VIDRIO PAIS PORTUGAL",
-    "VITALOPE", "Vodafone", "WisdomTree", "Worten", "xAI"
-]
-
 
 # ============================================================================
 # Main Loaders
@@ -104,11 +76,11 @@ def _load_enum_values(
     json_field: str,
     enum_prefix: str,
 ) -> list[str]:
-    """Shared loader for document types and issuing parties.
+    """Shared loader for enum values (e.g. document types).
 
     Args:
         processed_files_dir: Path to processed files directory.
-        profile_predefined_attr: Attribute name on profile (e.g. 'document_types' or 'issuing_parties').
+        profile_predefined_attr: Attribute name on profile (e.g. 'document_types').
         fallback_list: Hardcoded fallback values.
         json_field: Key to read from metadata JSON files.
         enum_prefix: Prefix for clean_enum_string (e.g. 'DocumentType').
@@ -164,14 +136,6 @@ def load_document_types(processed_files_dir: Optional[str] = None) -> list[str]:
     )
 
 
-def load_issuing_parties(processed_files_dir: Optional[str] = None) -> list[str]:
-    """Load issuing parties from profile predefined, processed files, or fallback."""
-    return _load_enum_values(
-        processed_files_dir, "issuing_parties", FALLBACK_ISSUING_PARTIES,
-        "issuing_party", "IssuingParty",
-    )
-
-
 # Convenience functions with caching for fast repeated access
 def get_document_types() -> list[str]:
     """Get document types list (cached after first call)."""
@@ -181,9 +145,3 @@ def get_document_types() -> list[str]:
     return _DOCUMENT_TYPES_LIST
 
 
-def get_issuing_parties() -> list[str]:
-    """Get issuing parties list (cached after first call)."""
-    global _ISSUING_PARTIES_LIST
-    if _ISSUING_PARTIES_LIST is None:
-        _ISSUING_PARTIES_LIST = load_issuing_parties()
-    return _ISSUING_PARTIES_LIST

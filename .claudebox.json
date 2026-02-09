@@ -1,0 +1,10 @@
+{
+  "default": {
+    "mounts": [
+      {
+        "path": "/Users/tsilva/Google Drive/My Drive/papertrail-puzzle",
+        "readonly": true
+      }
+    ]
+  }
+}

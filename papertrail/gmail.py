@@ -333,6 +333,7 @@ class GmailDownloader:
         self,
         start_date: datetime,
         end_date: datetime,
+        quiet: bool = False,
     ) -> dict:
         """
         Download all attachments from emails in date range.
@@ -376,7 +377,7 @@ class GmailDownloader:
                 logger.info(f"Already processed: {len(processed_ids)} messages")
 
         # Process messages
-        for msg_meta in tqdm(messages, desc="Downloading attachments"):
+        for msg_meta in tqdm(messages, desc="Downloading attachments", disable=quiet):
             msg_id = msg_meta["id"]
 
             if msg_id in processed_ids:
@@ -416,6 +417,7 @@ def download_gmail_attachments(
     output_dir: Path,
     start_date: datetime,
     end_date: datetime,
+    quiet: bool = False,
 ) -> dict:
     """
     Download Gmail attachments for the specified date range.
@@ -424,6 +426,7 @@ def download_gmail_attachments(
         output_dir: Directory to save downloaded files
         start_date: Start of date range
         end_date: End of date range
+        quiet: If True, suppress tqdm progress bars
 
     Returns:
         Download statistics dict
@@ -441,4 +444,4 @@ def download_gmail_attachments(
     downloader.authenticate()
     logger.info("Authentication successful!")
 
-    return downloader.download_attachments_in_range(start_date, end_date)
+    return downloader.download_attachments_in_range(start_date, end_date, quiet=quiet)
