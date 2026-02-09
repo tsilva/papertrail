@@ -56,16 +56,13 @@ def validate_metadata(output_path: Path):
     hash_results = {}
     uncached = []
 
-    with console.progress("Fast hashing", total=len(pdf_info)) as progress:
-        task = progress.add_task("Fast hashing", total=len(pdf_info))
-        for _, pdf_path, _, _ in pdf_info:
-            file_hash = hash_file_fast(pdf_path)
-            cached_content_hash = cache.get(file_hash)
-            if cached_content_hash:
-                hash_results[pdf_path] = cached_content_hash
-            else:
-                uncached.append((pdf_path, file_hash))
-            progress.update(task, advance=1)
+    for _, pdf_path, _, _ in console.track(pdf_info, "Fast hashing"):
+        file_hash = hash_file_fast(pdf_path)
+        cached_content_hash = cache.get(file_hash)
+        if cached_content_hash:
+            hash_results[pdf_path] = cached_content_hash
+        else:
+            uncached.append((pdf_path, file_hash))
 
     cache_hits = len(pdf_info) - len(uncached)
     logger.debug(f"Cache hits: {cache_hits}, Cache misses: {len(uncached)}")
@@ -215,26 +212,43 @@ def check_files_exist(target_folder: Path, validation_schema_path: Path, quiet: 
     return {'passed': passed_count, 'missing': missing_count, 'missing_items': missing_items, 'all_passed': all_passed}
 
 
-def task_backfill_page_count(processed_path: Path):
-    """Backfill page_count for existing metadata files that don't have it."""
+def _batch_update_metadata(
+    processed_path: Path,
+    task_name: str,
+    progress_desc: str,
+    require_pdf: bool,
+    should_skip,
+    update_fn,
+    skip_label: str,
+):
+    """Generic batch metadata updater.
+
+    Args:
+        processed_path: Path to processed documents directory.
+        task_name: Task name for logging.
+        progress_desc: Description for progress bar.
+        require_pdf: Whether to require corresponding PDF files.
+        should_skip: Callable(metadata_path, pdf_path, data) -> bool. Return True to skip.
+        update_fn: Callable(metadata_path, pdf_path, data) -> None. Mutates data in place.
+        skip_label: Human label for skipped items (e.g., "already had page_count").
+    """
     console = get_console()
-    setup_task_logging(processed_path, "backfill_page_count")
+    setup_task_logging(processed_path, task_name)
 
     updated = 0
     skipped = 0
     errors = 0
 
     for metadata_path, pdf_path, data in load_validated_metadata(
-        processed_path, require_pdf=True, validate=False, show_progress=True, progress_desc="Backfilling page_count"
+        processed_path, require_pdf=require_pdf, validate=False,
+        show_progress=True, progress_desc=progress_desc,
     ):
         try:
-            if data.get("page_count") is not None:
+            if should_skip(metadata_path, pdf_path, data):
                 skipped += 1
                 continue
 
-            page_count = get_page_count(pdf_path)
-            data["page_count"] = page_count
-            data["date_updated"] = datetime.now().strftime("%Y-%m-%d")
+            update_fn(metadata_path, pdf_path, data)
 
             with open(metadata_path, "w", encoding="utf-8") as f:
                 json.dump(data, f, indent=4, ensure_ascii=False, sort_keys=True)
@@ -252,48 +266,40 @@ def task_backfill_page_count(processed_path: Path):
     if errors > 0:
         console.warning(f"{updated} updated, {skipped} skipped, {errors} errors", indent=False)
     else:
-        console.success(f"{updated} updated, {skipped} skipped (already had page_count)", indent=False)
+        console.success(f"{updated} updated, {skipped} skipped ({skip_label})", indent=False)
 
-    logger.debug(f"Backfill complete: {updated} updated, {skipped} skipped, {errors} errors")
+    logger.debug(f"{task_name} complete: {updated} updated, {skipped} skipped, {errors} errors")
+
+
+def task_backfill_page_count(processed_path: Path):
+    """Backfill page_count for existing metadata files that don't have it."""
+    def _update(metadata_path, pdf_path, data):
+        data["page_count"] = get_page_count(pdf_path)
+        data["date_updated"] = datetime.now().strftime("%Y-%m-%d")
+
+    _batch_update_metadata(
+        processed_path,
+        task_name="backfill_page_count",
+        progress_desc="Backfilling page_count",
+        require_pdf=True,
+        should_skip=lambda _mp, _pp, data: data.get("page_count") is not None,
+        update_fn=_update,
+        skip_label="already had page_count",
+    )
 
 
 def task_fix_unicode(processed_path: Path):
-    """Fix Unicode escape sequences in metadata JSON files.
+    """Fix Unicode escape sequences in metadata JSON files."""
+    def _should_skip(metadata_path, _pdf_path, _data):
+        raw_content = metadata_path.read_text(encoding="utf-8")
+        return "\\u00" not in raw_content
 
-    Re-saves JSON files that contain \\uXXXX escape sequences with literal UTF-8 characters.
-    """
-    console = get_console()
-    setup_task_logging(processed_path, "fix_unicode")
-
-    fixed = 0
-    skipped = 0
-    errors = 0
-
-    for metadata_path, pdf_path, data in load_validated_metadata(
-        processed_path, require_pdf=False, validate=False, show_progress=True, progress_desc="Fixing Unicode escapes"
-    ):
-        try:
-            raw_content = metadata_path.read_text(encoding="utf-8")
-            if "\\u00" not in raw_content:
-                skipped += 1
-                continue
-
-            with open(metadata_path, "w", encoding="utf-8") as f:
-                json.dump(data, f, indent=4, ensure_ascii=False, sort_keys=True)
-
-            fixed += 1
-
-        except Exception as e:
-            logger.error(f"Failed to process {metadata_path.name}: {e}")
-            errors += 1
-
-    if fixed == 0 and skipped == 0 and errors == 0:
-        console.warning("No metadata files found", indent=False)
-        return
-
-    if errors > 0:
-        console.warning(f"{fixed} fixed, {skipped} skipped, {errors} errors", indent=False)
-    else:
-        console.success(f"{fixed} fixed, {skipped} skipped (already UTF-8)", indent=False)
-
-    logger.debug(f"Fix unicode complete: {fixed} fixed, {skipped} skipped, {errors} errors")
+    _batch_update_metadata(
+        processed_path,
+        task_name="fix_unicode",
+        progress_desc="Fixing Unicode escapes",
+        require_pdf=False,
+        should_skip=_should_skip,
+        update_fn=lambda _mp, _pp, _data: None,  # re-saving with ensure_ascii=False is the fix
+        skip_label="already UTF-8",
+    )

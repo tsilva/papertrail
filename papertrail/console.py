@@ -312,6 +312,29 @@ class PapertrailConsole:
                 transient=transient,
             )
 
+    def track(
+        self,
+        items,
+        description: str = "Processing",
+        transient: bool = True,
+    ) -> Generator[Any, None, None]:
+        """Iterate over items with automatic progress bar tracking.
+
+        Args:
+            items: Iterable of items to process.
+            description: Description shown next to the progress bar.
+            transient: Whether to remove the progress bar when done.
+
+        Yields:
+            Each item from the input iterable.
+        """
+        items = list(items)
+        with self.progress(description, total=len(items), transient=transient) as progress:
+            task_id = progress.add_task(description, total=len(items))
+            for item in items:
+                yield item
+                progress.update(task_id, advance=1)
+
     def validation_table(
         self,
         title: str,

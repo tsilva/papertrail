@@ -6,6 +6,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Iterator
 
+from papertrail.console import get_console
 from papertrail.models import DocumentMetadata
 
 # Use orjson for faster JSON parsing (3-10x faster than stdlib json)
@@ -60,11 +61,9 @@ def iter_json_files(
     """
     json_files = list(directory.rglob("*.json"))
 
-    if show_progress:
-        from tqdm import tqdm
-        json_files = tqdm(json_files, desc=progress_desc)
+    iterator = get_console().track(json_files, progress_desc) if show_progress else json_files
 
-    for json_path in json_files:
+    for json_path in iterator:
         try:
             data = load_json_data(json_path)
             if validate:
@@ -131,10 +130,7 @@ def load_json_files_parallel(
 
     # Phase 2: Validate sequentially (CPU bound - GIL prevents thread parallelism)
     results = []
-    iterator = loaded
-    if show_progress:
-        from tqdm import tqdm
-        iterator = tqdm(loaded, desc=progress_desc)
+    iterator = get_console().track(loaded, progress_desc) if show_progress else loaded
 
     for json_path, data in iterator:
         try:
@@ -237,11 +233,9 @@ def load_validated_metadata(
     if not json_files:
         return
 
-    if show_progress:
-        from tqdm import tqdm
-        json_files = tqdm(json_files, desc=progress_desc)
+    iterator = get_console().track(json_files, progress_desc) if show_progress else json_files
 
-    for json_path in json_files:
+    for json_path in iterator:
         pdf_path = json_path.with_suffix(".pdf")
 
         if require_pdf and not pdf_path.exists():

@@ -50,9 +50,11 @@ def require_path(
     return p
 
 from papertrail.config import (
+    AppContext,
     get_cache_dir,
     get_openai_client,
     set_current_profile,
+    set_ctx,
 )
 from papertrail.profiles import (
     load_profile,
@@ -92,31 +94,9 @@ logger = get_logger('cli')
 
 # ------------------- CONFIG -------------------
 
-from dataclasses import dataclass
-
-
-@dataclass
-class AppContext:
-    """Runtime application context holding all initialized resources."""
-    model_id: str
-    openai_client: any
-    nif_cache: any  # NIFLookupCache or None
-
-
-_ctx: AppContext | None = None
-
-
-def get_ctx() -> AppContext:
-    """Get the application context. Raises if not initialized."""
-    if _ctx is None:
-        raise RuntimeError("Application context not initialized. Call initialize_config() first.")
-    return _ctx
-
 
 def initialize_config(profile_name: Optional[str] = None) -> None:
     """Initialize configuration from profile."""
-    global _ctx
-
     profiles_dir = get_profiles_dir()
     if os.environ.get("PAPERTRAIL_PROFILES_DIR"):
         logger.info(f"Using external profiles directory: {profiles_dir}")
@@ -166,17 +146,11 @@ def initialize_config(profile_name: Optional[str] = None) -> None:
         nif_cache = NIFLookupCache(nif_cache_path)
         logger.info(f"NIF lookup enabled with {len(nif_cache)} cached entries")
 
-    _ctx = AppContext(
+    set_ctx(AppContext(
         model_id=profile.openrouter.model_id,
         openai_client=get_openai_client(),
         nif_cache=nif_cache,
-    )
-
-    # When running as __main__, also register ourselves as 'main' module
-    # so that `import main; main.get_ctx()` works from other modules
-    if __name__ == "__main__":
-        # Register __main__ as 'main' so imports find us
-        sys.modules["main"] = sys.modules["__main__"]
+    ))
 
 
 def get_profile_path(path_name: str) -> Optional[str]:

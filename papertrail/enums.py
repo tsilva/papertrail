@@ -1,7 +1,6 @@
 """Dynamic enum loading and utilities."""
 
 import json
-import os
 from enum import Enum
 from pathlib import Path
 from typing import Optional
@@ -103,8 +102,6 @@ def _load_enum_values(
     if processed_files_dir is None:
         if profile and profile.paths.processed:
             processed_files_dir = profile.paths.processed
-        else:
-            processed_files_dir = os.getenv("PROCESSED_FILES_DIR")
 
     # Start with fallback values
     values_set = set(fallback_list)

@@ -1,5 +1,6 @@
 """Configuration loading and environment management."""
 
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
@@ -14,6 +15,35 @@ from papertrail.profiles import Profile
 
 # Module-level variable to store the current active profile
 _current_profile: Optional[Profile] = None
+
+
+# ============================================================================
+# Application Context
+# ============================================================================
+
+
+@dataclass
+class AppContext:
+    """Runtime application context holding all initialized resources."""
+    model_id: str
+    openai_client: any
+    nif_cache: any  # NIFLookupCache or None
+
+
+_ctx: AppContext | None = None
+
+
+def get_ctx() -> AppContext:
+    """Get the application context. Raises if not initialized."""
+    if _ctx is None:
+        raise RuntimeError("Application context not initialized. Call initialize_config() first.")
+    return _ctx
+
+
+def set_ctx(ctx: AppContext) -> None:
+    """Set the application context."""
+    global _ctx
+    _ctx = ctx
 
 
 def set_current_profile(profile: Optional[Profile]) -> None:

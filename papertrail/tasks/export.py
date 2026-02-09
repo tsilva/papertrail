@@ -163,32 +163,28 @@ def task_export_all_dates(
     total_skipped = 0
     changed_directories = []
 
-    with console.progress("Exporting dates", total=len(all_dates)) as progress:
-        task = progress.add_task("Exporting dates", total=len(all_dates))
-        for date in all_dates:
-            export_date_dir = export_base_dir / date
-            logger.debug(f"[{date}] Processing...")
+    for date in console.track(all_dates, "Exporting dates"):
+        export_date_dir = export_base_dir / date
+        logger.debug(f"[{date}] Processing...")
 
-            # Purge before export to avoid stale content
-            if export_date_dir.exists():
-                shutil.rmtree(export_date_dir)
+        # Purge before export to avoid stale content
+        if export_date_dir.exists():
+            shutil.rmtree(export_date_dir)
 
-            stats = copy_matching_files(processed_path, date, export_date_dir, incremental=False)
-            total_copied += stats['copied']
-            total_skipped += stats['skipped']
+        stats = copy_matching_files(processed_path, date, export_date_dir, incremental=False)
+        total_copied += stats['copied']
+        total_skipped += stats['skipped']
 
-            if stats['total'] == 0:
-                logger.debug(f"No files match date pattern '{date}'")
-            else:
-                logger.debug(f"Copied: {stats['copied']}, Skipped: {stats['skipped']}, Total: {stats['total']}")
+        if stats['total'] == 0:
+            logger.debug(f"No files match date pattern '{date}'")
+        else:
+            logger.debug(f"Copied: {stats['copied']}, Skipped: {stats['skipped']}, Total: {stats['total']}")
 
-            if stats['copied'] > 0:
+        if stats['copied'] > 0:
+            changed_directories.append(export_date_dir)
+        elif stats['total'] > 0:
+            if export_date_dir.exists() and directory_has_changed(export_date_dir):
                 changed_directories.append(export_date_dir)
-            elif stats['total'] > 0:
-                if export_date_dir.exists() and directory_has_changed(export_date_dir):
-                    changed_directories.append(export_date_dir)
-
-            progress.update(task, advance=1)
 
     # Summary
     console.success(f"{len(all_dates)} dates exported, {total_copied} files copied", indent=False)
@@ -198,17 +194,14 @@ def task_export_all_dates(
         logger.debug("=== Running PDF Merge ===")
         from pdf_gluer import merge_all_pdfs
 
-        with console.progress("Merging PDFs", total=len(changed_directories)) as progress:
-            task = progress.add_task("Merging PDFs", total=len(changed_directories))
-            for export_dir in changed_directories:
-                logger.debug(f"Merging PDFs in {export_dir}...")
-                try:
-                    merge_all_pdfs(str(export_dir))
-                    logger.debug("Merge completed successfully")
-                    validate_merged_pdf(export_dir)
-                except Exception as e:
-                    logger.error(f"Merge failed: {e}")
-                progress.update(task, advance=1)
+        for export_dir in console.track(changed_directories, "Merging PDFs"):
+            logger.debug(f"Merging PDFs in {export_dir}...")
+            try:
+                merge_all_pdfs(str(export_dir))
+                logger.debug("Merge completed successfully")
+                validate_merged_pdf(export_dir)
+            except Exception as e:
+                logger.error(f"Merge failed: {e}")
 
         console.success(f"Merged {len(changed_directories)} directories", indent=False)
 
