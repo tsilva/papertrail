@@ -73,3 +73,27 @@ def find_pdf_files(folder_paths) -> list[Path]:
                 ):
                     pdfs.append(Path(root) / file)
     return pdfs
+
+
+def find_document_files(folder_paths, extensions=('.pdf', '.xlsx')) -> list[Path]:
+    """Return all document files with given extensions within one or multiple folders."""
+    if isinstance(folder_paths, (str, Path)):
+        folder_paths = [folder_paths]
+
+    ext_set = {e.lower() for e in extensions}
+    docs = []
+    for folder_path in folder_paths:
+        folder_path = Path(folder_path)
+        if not folder_path.exists():
+            continue
+        for root, _, files in os.walk(folder_path):
+            for file in files:
+                if (
+                    file.startswith('.')
+                    or not any(file.lower().endswith(e) for e in ext_set)
+                ):
+                    continue
+                fp = Path(root) / file
+                if fp.stat().st_size > 0:
+                    docs.append(fp)
+    return docs

@@ -12,7 +12,7 @@ from papertrail.config import get_current_profile, get_openai_client
 from papertrail.console import get_console
 from papertrail.llm import _extract_json_from_response
 from papertrail.logging_utils import get_logger
-from papertrail.metadata import iter_json_files
+from papertrail.metadata import iter_json_files, find_companion_file
 from papertrail.tasks import task_log_context
 
 logger = get_logger("reconcile")
@@ -27,8 +27,6 @@ _COL_MONTANTE = 4  # D
 _COL_MOEDA = 5  # E
 _COL_NOTAS = 6  # F
 _COL_TRATADO = 7  # G
-_COL_FICHEIROS = 8  # H (new)
-_COL_METODO = 9  # I (new)
 
 # Matching parameters
 _AMOUNT_TOLERANCE = 0.01
@@ -131,12 +129,30 @@ def _load_transactions(excel_path: Path) -> list[Transaction]:
     return transactions
 
 
+def _discover_bank_statements(export_path: Path) -> list[Path]:
+    """Find XLSX files in export_path where sidecar JSON has document_type == 'bank-statement'."""
+    statements = []
+    for json_path, data in iter_json_files(export_path):
+        if data.get("document_type") != "bank-statement":
+            continue
+        doc_path = find_companion_file(json_path, data)
+        if doc_path and doc_path.suffix.lower() == ".xlsx":
+            statements.append(doc_path)
+    return statements
+
+
 def _load_pdf_candidates(export_path: Path) -> list[PDFCandidate]:
-    """Load PDF candidates from JSON sidecar metadata in export folder."""
+    """Load document candidates from JSON sidecar metadata in export folder.
+
+    Excludes bank-statement entries (they are the source, not candidates).
+    """
     candidates = []
     for json_path, data in iter_json_files(export_path):
-        pdf_path = json_path.with_suffix(".pdf")
-        if not pdf_path.exists():
+        if data.get("document_type") == "bank-statement":
+            continue
+
+        doc_path = find_companion_file(json_path, data)
+        if doc_path is None:
             continue
 
         total_amount = data.get("total_amount")
@@ -148,7 +164,7 @@ def _load_pdf_candidates(export_path: Path) -> list[PDFCandidate]:
 
         candidates.append(PDFCandidate(
             json_path=json_path,
-            pdf_filename=pdf_path.name,
+            pdf_filename=doc_path.name,
             date_issued=data.get("date_issued"),
             document_type=data.get("document_type"),
             document_title=data.get("document_title"),
@@ -363,32 +379,143 @@ Respond in JSON:
     return matches
 
 
-def _write_results_to_excel(
+def _write_reconciliation_file(
     excel_path: Path,
     matches: list[MatchResult],
-) -> int:
-    """Update the Excel file with match results. Returns number of rows updated."""
-    wb = openpyxl.load_workbook(excel_path)
-    ws = wb.active
+    unmatched_transactions: list[Transaction],
+    total_transactions: int,
+) -> Path:
+    """Write a .reconciliation JSON sidecar alongside the XLSX. Returns the output path."""
+    output_path = excel_path.with_suffix(".reconciliation")
 
-    if ws.cell(row=_HEADER_ROW, column=_COL_FICHEIROS).value is None:
-        ws.cell(row=_HEADER_ROW, column=_COL_FICHEIROS, value="Ficheiros")
-    if ws.cell(row=_HEADER_ROW, column=_COL_METODO).value is None:
-        ws.cell(row=_HEADER_ROW, column=_COL_METODO, value="Metodo")
+    total_matched = len(matches)
+    total_unmatched = total_transactions - total_matched
+    match_rate = (total_matched / total_transactions * 100) if total_transactions > 0 else 0
 
-    updated = 0
-    for match in matches:
-        row = match.transaction.row_number
-        filenames = "; ".join(c.pdf_filename for c in match.pdf_candidates)
+    match_entries = []
+    for m in matches:
+        txn = m.transaction
+        match_entries.append({
+            "row": txn.row_number,
+            "date": txn.date_posting or txn.date_value,
+            "description": txn.description,
+            "amount": txn.amount,
+            "currency": txn.currency,
+            "method": m.method,
+            "confidence": m.confidence,
+            "reasoning": m.reasoning,
+            "files": [c.pdf_filename for c in m.pdf_candidates],
+        })
 
-        ws.cell(row=row, column=_COL_TRATADO, value="Sim")
-        ws.cell(row=row, column=_COL_FICHEIROS, value=filenames)
-        ws.cell(row=row, column=_COL_METODO, value=match.method)
-        updated += 1
+    unmatched_entries = []
+    for txn in unmatched_transactions:
+        unmatched_entries.append({
+            "row": txn.row_number,
+            "date": txn.date_posting or txn.date_value,
+            "description": txn.description,
+            "amount": txn.amount,
+            "currency": txn.currency,
+        })
 
-    wb.save(excel_path)
-    wb.close()
-    return updated
+    data = {
+        "source": excel_path.name,
+        "generated": datetime.now().isoformat(timespec="seconds"),
+        "summary": {
+            "total": total_transactions,
+            "matched": total_matched,
+            "unmatched": total_unmatched,
+            "match_rate": round(match_rate, 1),
+        },
+        "matches": match_entries,
+        "unmatched": unmatched_entries,
+    }
+
+    output_path.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n")
+    return output_path
+
+
+def _reconcile_single(
+    export_path: Path,
+    excel_path: Path,
+    dry_run: bool,
+    console,
+) -> None:
+    """Reconcile a single bank statement against PDF documents in export_path."""
+    with console.step_progress("Loading transactions") as step:
+        transactions = _load_transactions(excel_path)
+        step.success(f"{len(transactions)} untreated rows")
+
+    if not transactions:
+        console.warning("No untreated transactions found")
+        return
+
+    with console.step_progress("Loading document candidates") as step:
+        candidates = _load_pdf_candidates(export_path)
+        step.success(f"{len(candidates)} documents with metadata")
+
+    if not candidates:
+        console.warning("No document candidates found")
+        return
+
+    with console.step_progress("Phase 1: Deterministic matching") as step:
+        p1_matches, unmatched_txns, remaining_cands = (
+            _phase1_deterministic_match(transactions, candidates)
+        )
+        step.success(f"{len(p1_matches)} matched")
+
+    p2_matches: list[MatchResult] = []
+    if unmatched_txns and remaining_cands:
+        with console.step_progress("Phase 2: LLM-assisted matching") as step:
+            profile = get_current_profile()
+            model_id = profile.openrouter.model_id
+            client = get_openai_client()
+            p2_matches = _phase2_llm_match(
+                unmatched_txns, remaining_cands, client, model_id,
+            )
+            step.success(f"{len(p2_matches)} matched")
+    else:
+        console.detail("Phase 2: Skipped (no unmatched transactions or no remaining PDFs)")
+
+    all_matches = p1_matches + p2_matches
+
+    # Build final unmatched list (phase-1 unmatched minus phase-2 matched)
+    p2_matched_rows = {m.transaction.row_number for m in p2_matches}
+    final_unmatched = [txn for txn in unmatched_txns if txn.row_number not in p2_matched_rows]
+
+    if all_matches and not dry_run:
+        with console.step_progress("Writing reconciliation file") as step:
+            out_path = _write_reconciliation_file(
+                excel_path, all_matches, final_unmatched, len(transactions),
+            )
+            step.success(f"{out_path.name}")
+    elif dry_run and all_matches:
+        console.detail(f"Dry run: would write {len(all_matches)} matches to .reconciliation file")
+
+    total_txns = len(transactions)
+    total_matched = len(all_matches)
+    total_unmatched = len(final_unmatched)
+    pct = (total_matched / total_txns * 100) if total_txns > 0 else 0
+
+    logger.info(
+        f"[SUMMARY] {total_matched}/{total_txns} matched ({pct:.1f}%), "
+        f"{total_unmatched} unmatched"
+    )
+
+    console.info("")
+    console.success(
+        f"{total_matched}/{total_txns} transactions matched ({pct:.1f}%)",
+        indent=False,
+    )
+    if total_unmatched > 0:
+        console.warning(
+            f"{total_unmatched} transactions unmatched", indent=False,
+        )
+
+    for txn in final_unmatched:
+        logger.info(
+            f"[NO-MATCH] Row {txn.row_number}: {txn.description[:50]} "
+            f"({txn.amount:.2f} {txn.currency})"
+        )
 
 
 def task_reconcile(
@@ -396,87 +523,34 @@ def task_reconcile(
     excel_path: Optional[Path] = None,
     dry_run: bool = False,
 ) -> None:
-    """Reconcile bank transactions against PDF documents."""
+    """Reconcile bank transactions against PDF documents.
+
+    If excel_path is given, reconcile that specific file.
+    Otherwise, auto-discover bank statements in export_path by document_type.
+    Falls back to export_path/transactions.xlsx for backward compat.
+    """
     console = get_console()
 
-    if excel_path is None:
-        excel_path = export_path / "transactions.xlsx"
-
-    if not excel_path.exists():
-        console.error(f"Excel file not found: {excel_path}", indent=False)
-        return
-
     with task_log_context(export_path, "reconcile") as log_file:
-        with console.task("Reconcile bank transactions"):
-            # Load data
-            with console.step_progress("Loading transactions") as step:
-                transactions = _load_transactions(excel_path)
-                step.success(f"{len(transactions)} untreated rows")
+        # Determine which XLSX files to reconcile
+        if excel_path is not None:
+            excel_paths = [excel_path]
+        else:
+            excel_paths = _discover_bank_statements(export_path)
+            if not excel_paths:
+                # Backward compat fallback
+                fallback = export_path / "transactions.xlsx"
+                if fallback.exists():
+                    excel_paths = [fallback]
 
-            if not transactions:
-                console.warning("No untreated transactions found")
-                return
+        if not excel_paths:
+            console.warning("No bank statements found to reconcile", indent=False)
+            return
 
-            with console.step_progress("Loading PDF candidates") as step:
-                candidates = _load_pdf_candidates(export_path)
-                step.success(f"{len(candidates)} PDFs with metadata")
+        for ep in excel_paths:
+            if not ep.exists():
+                console.error(f"Excel file not found: {ep}", indent=False)
+                continue
 
-            if not candidates:
-                console.warning("No PDF candidates found")
-                return
-
-            with console.step_progress("Phase 1: Deterministic matching") as step:
-                p1_matches, unmatched_txns, remaining_cands = (
-                    _phase1_deterministic_match(transactions, candidates)
-                )
-                step.success(f"{len(p1_matches)} matched")
-
-            p2_matches: list[MatchResult] = []
-            if unmatched_txns and remaining_cands:
-                with console.step_progress("Phase 2: LLM-assisted matching") as step:
-                    profile = get_current_profile()
-                    model_id = profile.openrouter.model_id
-                    client = get_openai_client()
-                    p2_matches = _phase2_llm_match(
-                        unmatched_txns, remaining_cands, client, model_id,
-                    )
-                    step.success(f"{len(p2_matches)} matched")
-            else:
-                console.detail("Phase 2: Skipped (no unmatched transactions or no remaining PDFs)")
-
-            all_matches = p1_matches + p2_matches
-
-            if all_matches and not dry_run:
-                with console.step_progress("Writing results to Excel") as step:
-                    updated = _write_results_to_excel(excel_path, all_matches)
-                    step.success(f"Updated {updated} rows")
-            elif dry_run and all_matches:
-                console.detail(f"Dry run: would update {len(all_matches)} rows")
-
-            total_txns = len(transactions)
-            total_matched = len(all_matches)
-            total_unmatched = total_txns - total_matched
-            pct = (total_matched / total_txns * 100) if total_txns > 0 else 0
-
-            logger.info(
-                f"[SUMMARY] {total_matched}/{total_txns} matched ({pct:.1f}%), "
-                f"{total_unmatched} unmatched"
-            )
-
-            console.info("")
-            console.success(
-                f"{total_matched}/{total_txns} transactions matched ({pct:.1f}%)",
-                indent=False,
-            )
-            if total_unmatched > 0:
-                console.warning(
-                    f"{total_unmatched} transactions unmatched", indent=False,
-                )
-
-            p2_matched_rows = {m.transaction.row_number for m in p2_matches}
-            for txn in unmatched_txns:
-                if txn.row_number not in p2_matched_rows:
-                    logger.info(
-                        f"[NO-MATCH] Row {txn.row_number}: {txn.description[:50]} "
-                        f"({txn.amount:.2f} {txn.currency})"
-                    )
+            with console.task(f"Reconcile: {ep.name}"):
+                _reconcile_single(export_path, ep, dry_run, console)

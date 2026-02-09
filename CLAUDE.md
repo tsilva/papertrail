@@ -1,6 +1,6 @@
 # papertrail - Claude Code Context
 
-AI-powered PDF document classification and organization tool using vision LLMs via OpenRouter.
+AI-powered document classification and organization tool using vision LLMs via OpenRouter. Supports PDF documents (LLM-classified) and XLSX bank statements (deterministically classified).
 
 ## Quick Reference
 
@@ -15,7 +15,7 @@ These are core constraints that must be preserved in all changes:
 
 1. **Raw value preservation**: Original extracted text MUST be stored in `*_raw` fields (`document_type_raw`, `issuing_party_raw`). This enables re-normalization when needed.
 
-2. **Content hash is truth**: Duplicate detection uses `hash_content` (rendered pixels), not `hash_file` (raw bytes). Two PDFs with identical visual content are duplicates even if their bytes differ.
+2. **Content hash is truth**: Duplicate detection uses `hash_content` (rendered pixels), not `hash_file` (raw bytes). Two PDFs with identical visual content are duplicates even if their bytes differ. Exception: XLSX files use `hash_file_fast` for both hashes (no pixel rendering possible).
 
 3. **`$UNKNOWN$` is the only fallback**: Unrecognized values become `$UNKNOWN$`, never empty string, `null`, or made-up values. This sentinel is used for filtering and re-processing.
 
@@ -94,6 +94,43 @@ brew install zbar
 apt install libzbar0
 ```
 
+### Bank Statement Classification (`papertrail/bank_statement/`)
+Deterministic classification of XLSX bank statements (no LLM needed, confidence=1.0).
+
+**Supported formats:**
+- **Millennium BCP**: Portuguese bank export with header rows 1-6 (account, dates), column headers in row 8 ("Data Lancamento", "Descricao", "Montante")
+
+**How it works:**
+```
+XLSX → openpyxl open → detect format (check row 8 headers) → parse metadata → DocumentMetadata
+```
+
+**Key components:**
+- `classify_bank_statement(xlsx_path, file_hash)` - Main entry point, returns `DocumentMetadata` or `None`
+- `detect_bank_format(xlsx_path)` - Returns `BankFormat` enum or `None`
+- `is_bank_statement(xlsx_path)` - Quick check if file is a recognized format
+
+**Classification output:**
+- `document_type` = `"bank-statement"`, `issuing_party` = `"millennium-bcp"`
+- `document_title` = account number (e.g., `"TEST-ACCOUNT-ALPHA"`)
+- `date_issued` = `period_start` (first date of statement range)
+- `source_extension` = `".xlsx"` (enables extension-aware file naming)
+- `bank_statement` dict with format-specific data (account, period, transaction count)
+
+**Hashing:** Uses `hash_file_fast` for both `hash_file` and `hash_content` (no pixel rendering for XLSX).
+
+**Adding a new bank format:** Create a parser module in `papertrail/bank_statement/` with `can_parse(ws)` and `parse(xlsx_path)` functions, add it to `_PARSERS` registry in `extractor.py`.
+
+### Reconciliation Output
+Reconciliation writes a `.reconciliation` JSON sidecar alongside each bank statement XLSX (non-destructive — original XLSX is never modified):
+```
+2026-01-01 - bank-statement - millennium-bcp - TEST-ACCOUNT-ALPHA - a1b2c3d4.xlsx
+2026-01-01 - bank-statement - millennium-bcp - TEST-ACCOUNT-ALPHA - a1b2c3d4.reconciliation
+```
+The `.reconciliation` file contains: `source` (XLSX filename), `generated` (ISO timestamp), `summary` (total/matched/unmatched/match_rate), `matches` (array with row, date, description, amount, currency, method, confidence, reasoning, files), `unmatched` (array with row, date, description, amount, currency).
+
+In the pipeline, reconciliation runs as the **last step** (Stage 8) — after all validation is complete.
+
 ### NIF Lookup (`papertrail/nif_lookup.py`)
 Enriches issuer information using Portuguese tax numbers (NIFs) extracted from QR codes.
 
@@ -140,7 +177,9 @@ Document types and issuing parties are loaded dynamically from existing metadata
 | `papertrail/gmail.py` | Gmail API client | `GmailDownloader`, `download_gmail_attachments` |
 | `papertrail/mbox.py` | Mbox extraction | `extract_mbox_attachments` |
 | `papertrail/qr/` | QR code extraction | `extract_metadata_from_qr`, `parse_portuguese_invoice_qr` |
+| `papertrail/bank_statement/` | XLSX bank statement classification | `classify_bank_statement`, `detect_bank_format` |
 | `papertrail/tasks/qr_inventory.py` | QR inventory task | `task_qr_inventory` |
+| `papertrail/tasks/reconciliation.py` | Bank reconciliation | `task_reconcile`, `_discover_bank_statements` |
 
 ## Data Models (Pydantic)
 
@@ -150,7 +189,7 @@ DocumentMetadataInput  # With enum validation
 DocumentMetadata       # Full: hashes, timestamps, raw values
 ```
 
-Fields: `class_confidence`, `class_reasoning`, `date_created`, `date_issued`, `date_updated`, `document_type`, `document_type_raw`, `document_title`, `hash_content`, `hash_file`, `issuer_tax_number`, `issuing_party`, `issuing_party_raw`, `locale`, `page_count`, `qrcode`, `total_amount`, `total_amount_currency`
+Fields: `bank_statement`, `class_confidence`, `class_reasoning`, `date_created`, `date_issued`, `date_updated`, `document_type`, `document_type_raw`, `document_title`, `hash_content`, `hash_file`, `issuer_tax_number`, `issuing_party`, `issuing_party_raw`, `locale`, `page_count`, `qrcode`, `source_extension`, `total_amount`, `total_amount_currency`
 
 The `document_title` field stores the specific subject, product, service, or transaction described in the document (e.g., "YouTube Premium", "Claude API"). It is null when no specific subject beyond the document type is identifiable. The `document_type` / `document_type_raw` fields contain only the cleaned core type label (e.g., "Fatura").
 
@@ -166,10 +205,28 @@ The `qrcode` field stores raw QR code data when extracted:
 ```
 Documents without QR codes have `"qrcode": null`.
 
+The `bank_statement` field stores format-specific data for bank statements:
+```json
+{
+    "bank_statement": {
+        "bank_format": "millennium_bcp",
+        "account_number": "TEST-ACCOUNT-ALPHA",
+        "currency": "EUR",
+        "period_start": "2026-01-01",
+        "period_end": "2026-01-31",
+        "transaction_count": 42
+    }
+}
+```
+Non-bank-statement documents have `"bank_statement": null`.
+
+The `source_extension` field stores the original file extension when it's not `.pdf` (e.g., `".xlsx"` for bank statements). When `null`, defaults to `.pdf`. Used by `file_name_from_metadata()` and `find_companion_file()` to resolve the correct document file.
+
 ## File Naming Convention
 
-Pattern: `YYYY-MM-DD - document-type - issuing-party - [title] - [amount currency] - hash.pdf`
-Example: `2025-01-02 - invoice - anthropic - claude api - 120 eur - a1b2c3d4.pdf`
+Pattern: `YYYY-MM-DD - document-type - issuing-party - [title] - [amount currency] - hash.{ext}`
+Example (PDF): `2025-01-02 - invoice - anthropic - claude api - 120 eur - a1b2c3d4.pdf`
+Example (XLSX): `2026-01-01 - bank-statement - millennium-bcp - TEST-ACCOUNT-ALPHA - a1b2c3d4.xlsx`
 
 Generated by `file_name_from_metadata()` (line 447). All components lowercase, sanitized.
 
@@ -177,7 +234,7 @@ Generated by `file_name_from_metadata()` (line 447). All components lowercase, s
 
 | Task | Purpose | Required Options |
 |------|---------|------------------|
-| `extract_new` | Process new PDFs from raw folder | `--raw_path` |
+| `extract_new` | Process new PDFs and XLSX from raw folder | `--raw_path` |
 | `rename_files` | Rename based on metadata | - |
 | `validate_metadata` | Check consistency | - |
 | `export_excel` | Export to Excel | `--excel_output_path` |
@@ -191,6 +248,7 @@ Generated by `file_name_from_metadata()` (line 447). All components lowercase, s
 | `sync` | Sync metadata (default: orphans only) | `--all`, `--pattern`, `--all_unknown`, `--dry_run` |
 | `validate_extraction` | Validate extraction quality, flag issues | `--pattern` (optional) |
 | `qr_inventory` | Scan PDFs for QR codes, create inventory | `--export_path` (optional, uses profile) |
+| `reconcile` | Reconcile bank transactions against documents | `--export_path`, `--excel_path` (optional: auto-discovers). Outputs `.reconciliation` JSON sidecar |
 
 ## Configuration
 
@@ -264,6 +322,7 @@ Task runs create timestamped log files in `{processed_path}/logs/`:
 **Add new issuing party**: Same - dynamically loaded from processed metadata
 **Verify duplicate detection**: `check-hash <pdf>` shows both fast and content hashes
 **Add new QR format**: Add detection function and parser in `papertrail/qr/extractor.py`, add model in `papertrail/qr/models.py`
+**Add new bank format**: Create parser module in `papertrail/bank_statement/`, implement `can_parse(ws)` and `parse(xlsx_path)`, add to `_PARSERS` in `extractor.py`
 
 ## Testing
 

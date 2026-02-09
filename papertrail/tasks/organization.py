@@ -8,7 +8,7 @@ from pathlib import Path
 from papertrail.console import get_console
 from papertrail.hashing import hash_file_fast
 from papertrail.logging_utils import get_logger, log_failure, DocumentLogger
-from papertrail.metadata import save_metadata_json, save_json_data, load_json_data
+from papertrail.metadata import save_metadata_json, save_json_data, load_json_data, find_companion_file
 from papertrail.models import DocumentMetadata
 from papertrail.tasks import task_log_context
 
@@ -41,7 +41,8 @@ def file_name_from_metadata(metadata: DocumentMetadata, file_hash: str) -> str:
         currency = metadata.total_amount_currency or ""
         parts.append(sanitize_filename_component(f"{amount} {currency}".strip()))
 
-    parts.append(f"{file_hash}.pdf")
+    ext = getattr(metadata, 'source_extension', None) or '.pdf'
+    parts.append(f"{file_hash}{ext}")
     return " - ".join(parts).lower()
 
 
@@ -103,12 +104,12 @@ def task_rename_files(processed_path: Path, quiet: bool = False) -> dict:
         valid_entries = []
 
         for metadata_path, metadata in load_json_files_parallel(processed_path, validate=True, show_progress=not quiet, progress_desc="Validating metadata"):
-            pdf_path = metadata_path.with_suffix(".pdf")
-            if not pdf_path.exists():
-                logger.warning(f"Skipping {metadata_path.name}: PDF file not found")
+            doc_path = find_companion_file(metadata_path, metadata.model_dump())
+            if doc_path is None:
+                logger.warning(f"Skipping {metadata_path.name}: companion file not found")
                 continue
 
-            valid_entries.append((pdf_path, metadata))
+            valid_entries.append((doc_path, metadata))
 
         logger.debug(f"Found {len(valid_entries)} files to validate")
 
@@ -177,7 +178,8 @@ def _build_filename_from_fields(metadata: dict, fields: list, file_hash: str) ->
             if len(component) > 80:
                 component = component[:80].rsplit(" ", 1)[0]
             parts.append(component)
-    parts.append(f"{file_hash}.pdf")
+    ext = metadata.get("source_extension") or ".pdf"
+    parts.append(f"{file_hash}{ext}")
     return " - ".join(parts).lower()
 
 
@@ -211,7 +213,7 @@ def copy_matching_files(
         for file in processed_path.iterdir():
             if not file.is_file():
                 continue
-            if file.suffix.lower() != ".pdf":
+            if file.suffix.lower() not in (".pdf", ".xlsx"):
                 continue
             if not matcher(file.name):
                 continue
@@ -257,7 +259,7 @@ def copy_matching_files(
         for file in processed_path.iterdir():
             if not file.is_file():
                 continue
-            if file.suffix.lower() not in [".pdf", ".json"]:
+            if file.suffix.lower() not in [".pdf", ".xlsx", ".json"]:
                 continue
             if not matcher(file.name):
                 continue
@@ -273,7 +275,8 @@ def copy_matching_files(
 
             if file.suffix.lower() == '.json':
                 data = load_json_data(file)
-                data['source_filename'] = file.with_suffix('.pdf').name
+                src_ext = data.get("source_extension") or ".pdf"
+                data['source_filename'] = file.with_suffix(src_ext).name
                 save_json_data(dest_file, data)
             else:
                 shutil.copy2(file, dest_file)
