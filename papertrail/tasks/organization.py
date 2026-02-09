@@ -27,7 +27,7 @@ def file_name_from_metadata(metadata: DocumentMetadata, file_hash: str) -> str:
     parts = [
         sanitize_filename_component(metadata.date_issued),
         sanitize_filename_component(metadata.document_type.value),
-        sanitize_filename_component(metadata.issuing_party.value)
+        sanitize_filename_component(metadata.issuing_party)
     ]
 
     if metadata.document_title:
