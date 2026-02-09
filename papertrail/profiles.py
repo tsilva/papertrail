@@ -1,9 +1,4 @@
-"""
-Profile-based configuration system for papertrail.
-
-Provides YAML-based configuration profiles for managing multiple environments
-(personal, work, testing) with a single file per environment.
-"""
+"""Profile-based configuration system for papertrail."""
 
 import os
 from dataclasses import dataclass, field
@@ -15,10 +10,6 @@ try:
 except ImportError:
     yaml = None  # type: ignore
 
-
-# ============================================================================
-# Exceptions
-# ============================================================================
 
 
 class ProfileError(Exception):
@@ -40,10 +31,6 @@ class ProfileValidationError(ProfileError):
     """Raised when a profile is missing required fields."""
     pass
 
-
-# ============================================================================
-# Data Models
-# ============================================================================
 
 
 @dataclass
@@ -73,8 +60,6 @@ class OpenRouterConfig:
 class DocumentTypesConfig:
     """Document types configuration."""
     predefined: Optional[List[str]] = None
-    fallback_file: Optional[str] = None
-    fallback_list: Optional[List[str]] = None
 
 
 @dataclass
@@ -163,10 +148,6 @@ class Profile:
         return None
 
 
-# ============================================================================
-# Path Resolution
-# ============================================================================
-
 
 def resolve_path(path_str: Optional[str], profile_path: Path) -> Optional[str]:
     """Resolve a path string relative to the profile file location."""
@@ -192,7 +173,6 @@ def resolve_paths_in_profile(profile: Profile) -> None:
     # Resolve single paths
     profile.paths.processed = resolve_path(profile.paths.processed, pp)
     profile.paths.export = resolve_path(profile.paths.export, pp)
-    profile.document_types.fallback_file = resolve_path(profile.document_types.fallback_file, pp)
     profile.passwords.passwords_file = resolve_path(profile.passwords.passwords_file, pp)
     profile.validations.validations_file = resolve_path(profile.validations.validations_file, pp)
 
@@ -204,16 +184,9 @@ def resolve_paths_in_profile(profile: Profile) -> None:
         profile.gmail.token_file = resolve_path(profile.gmail.token_file, pp)
 
 
-# ============================================================================
-# Profile Loading
-# ============================================================================
-
 
 def get_profiles_dir() -> Path:
-    """Get the profiles directory path.
-
-    Checks PAPERTRAIL_PROFILES_DIR env var first, falls back to repo profiles/.
-    """
+    """Get profiles directory (PAPERTRAIL_PROFILES_DIR env var or repo profiles/)."""
     env_dir = os.environ.get("PAPERTRAIL_PROFILES_DIR")
     if env_dir:
         path = Path(env_dir).expanduser()
@@ -295,8 +268,6 @@ def _parse_profile_dict(data: Dict[str, Any], profile_path: Path) -> Profile:
     doc_types_data = data.get("document_types", {})
     document_types = DocumentTypesConfig(
         predefined=doc_types_data.get("predefined") or doc_types_data.get("canonical"),
-        fallback_file=doc_types_data.get("fallback_file"),
-        fallback_list=doc_types_data.get("fallback_list")
     )
 
     gmail_data = data.get("gmail", {})
@@ -366,10 +337,6 @@ def _parse_profile_dict(data: Dict[str, Any], profile_path: Path) -> Profile:
         _profile_path=profile_path
     )
 
-
-# ============================================================================
-# Helper Functions
-# ============================================================================
 
 
 def get_passwords_from_profile(profile: Profile) -> tuple[list[str], str | None]:

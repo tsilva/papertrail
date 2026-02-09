@@ -19,16 +19,7 @@ logger = get_logger('cli')
 
 
 def export_metadata_to_excel(processed_path: Path, excel_output_path: str, quiet: bool = False) -> dict:
-    """Export metadata to an Excel file.
-
-    Args:
-        processed_path: Path to processed documents directory.
-        excel_output_path: Path to output Excel file.
-        quiet: If True, suppress progress bars and console output.
-
-    Returns:
-        Dict with 'exported' count.
-    """
+    """Export metadata to an Excel file."""
     from papertrail.metadata import load_json_files_parallel
 
     console = get_console()

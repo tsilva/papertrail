@@ -9,32 +9,21 @@ from typing import Iterator
 from papertrail.console import get_console
 from papertrail.models import DocumentMetadata
 
-# Use orjson for faster JSON parsing (3-10x faster than stdlib json)
 try:
     import orjson
 
     def _load_json_fast(path: Path) -> dict:
-        """Load JSON using orjson (fast, releases GIL)."""
         with open(path, "rb") as f:
             return orjson.loads(f.read())
 
 except ImportError:
     def _load_json_fast(path: Path) -> dict:
-        """Fallback to stdlib json if orjson not available."""
         with open(path, "r", encoding="utf-8") as f:
             return json.load(f)
 
 
 def load_json_data(json_path: Path) -> dict:
-    """
-    Load raw JSON data from a file.
-
-    Args:
-        json_path: Path to the JSON file
-
-    Returns:
-        Dictionary with the JSON data
-    """
+    """Load raw JSON data from a file."""
     return _load_json_fast(json_path)
 
 
@@ -44,21 +33,7 @@ def iter_json_files(
     progress_desc: str = "Processing files",
     validate: bool = False
 ) -> Iterator[tuple[Path, DocumentMetadata | dict]]:
-    """
-    Iterate over all JSON files in a directory.
-
-    Yields tuples of (path, data) for each valid JSON file.
-    Invalid files are silently skipped.
-
-    Args:
-        directory: Directory to scan for JSON files
-        show_progress: Whether to show a progress bar
-        progress_desc: Description for the progress bar
-        validate: If True, yield (path, DocumentMetadata). If False, yield (path, dict).
-
-    Yields:
-        Tuples of (json_path, DocumentMetadata | dict)
-    """
+    """Iterate over JSON files in a directory, yielding (path, data). Invalid files are skipped."""
     json_files = list(directory.rglob("*.json"))
 
     iterator = get_console().track(json_files, progress_desc) if show_progress else json_files
@@ -75,11 +50,7 @@ def iter_json_files(
 
 
 def _load_one_json_only(json_path: Path) -> tuple[Path, dict] | None:
-    """Load a single JSON file without validation, returning None on error.
-
-    Uses orjson for fast parsing. Safe for ThreadPoolExecutor since orjson
-    releases the GIL during parsing.
-    """
+    """Load a single JSON file, returning None on error. Safe for ThreadPoolExecutor."""
     try:
         data = _load_json_fast(json_path)
         return json_path, data
@@ -94,41 +65,19 @@ def load_json_files_parallel(
     show_progress: bool = False,
     progress_desc: str = "Loading metadata"
 ) -> list[tuple[Path, DocumentMetadata | dict]]:
-    """
-    Load all JSON files in parallel using ThreadPoolExecutor + orjson.
-
-    Uses a two-phase approach when validation is needed:
-    1. Phase 1: Load all JSON files in parallel (I/O bound, threads work well)
-    2. Phase 2: Validate sequentially (CPU bound, GIL prevents thread parallelism)
-
-    This is faster than validating in threads because Pydantic validation
-    is CPU-bound and can't be parallelized with threads.
-
-    Args:
-        directory: Directory to scan for JSON files
-        validate: If True, return (path, DocumentMetadata). If False, return (path, dict).
-        max_workers: Maximum number of parallel threads (default: 16)
-        show_progress: Whether to show a progress bar
-        progress_desc: Description for the progress bar
-
-    Returns:
-        List of tuples (json_path, DocumentMetadata | dict)
-    """
+    """Load all JSON files in parallel (I/O phase) then validate sequentially (CPU phase)."""
     json_files = list(directory.rglob("*.json"))
     if not json_files:
         return []
 
-    # Phase 1: Load all JSON files in parallel (I/O bound - threads work well)
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         raw_results = list(executor.map(_load_one_json_only, json_files))
 
-    # Filter out failures
     loaded = [r for r in raw_results if r is not None]
 
     if not validate:
         return loaded
 
-    # Phase 2: Validate sequentially (CPU bound - GIL prevents thread parallelism)
     results = []
     iterator = get_console().track(loaded, progress_desc) if show_progress else loaded
 
@@ -143,15 +92,7 @@ def load_json_files_parallel(
 
 
 def build_hash_index(directory: Path) -> tuple[dict[str, Path], dict[str, Path]]:
-    """
-    Build separate indexes of content hashes and file hashes from metadata files.
-
-    Args:
-        directory: Directory containing metadata JSON files
-
-    Returns:
-        Tuple of (content_hash_index, file_hash_index) each mapping hash -> PDF path
-    """
+    """Build (content_hash_index, file_hash_index) from metadata files."""
     content_hash_index = {}
     file_hash_index = {}
 
@@ -168,40 +109,28 @@ def build_hash_index(directory: Path) -> tuple[dict[str, Path], dict[str, Path]]
 
 
 def get_unique_dates(directory: Path) -> list[str]:
-    """
-    Scan all JSON metadata files and extract unique YYYY-MM dates.
-
-    Args:
-        directory: Directory containing metadata JSON files
-
-    Returns:
-        Sorted list of dates (most recent first)
-    """
+    """Extract unique YYYY-MM dates from metadata files, sorted most recent first."""
     dates_set = set()
 
     for _, data in iter_json_files(directory):
         issue_date = data.get("date_issued", "")
         if issue_date and issue_date != "$UNKNOWN$":
-            # Extract YYYY-MM portion
             match = re.match(r"^(\d{4}-\d{2})", issue_date)
             if match:
                 dates_set.add(match.group(1))
 
-    # Sort dates in descending order (most recent first)
     return sorted(dates_set, reverse=True)
 
 
-def save_metadata_json(pdf_path: Path, metadata: DocumentMetadata) -> None:
-    """
-    Save metadata JSON alongside a PDF file.
-
-    Args:
-        pdf_path: Path to the PDF file
-        metadata: DocumentMetadata instance to save
-    """
-    json_path = pdf_path.with_suffix('.json')
+def save_json_data(json_path: Path, data: dict) -> None:
+    """Save dict to JSON with consistent formatting."""
     with open(json_path, "w", encoding="utf-8") as f:
-        json.dump(metadata.model_dump(), f, indent=4, ensure_ascii=False, sort_keys=True)
+        json.dump(data, f, indent=4, ensure_ascii=False, sort_keys=True)
+
+
+def save_metadata_json(pdf_path: Path, metadata: DocumentMetadata) -> None:
+    """Save metadata JSON alongside a PDF file."""
+    save_json_data(pdf_path.with_suffix('.json'), metadata.model_dump())
 
 
 def load_validated_metadata(
@@ -211,24 +140,7 @@ def load_validated_metadata(
     show_progress: bool = False,
     progress_desc: str = "Loading metadata"
 ) -> Iterator[tuple[Path, Path, DocumentMetadata | dict]]:
-    """
-    Load metadata files with optional PDF validation.
-
-    A common pattern across task files is to iterate metadata files,
-    check that corresponding PDFs exist, and skip orphaned metadata.
-    This helper consolidates that pattern.
-
-    Args:
-        directory: Directory to scan for JSON files
-        require_pdf: If True, skip metadata files without corresponding PDFs
-        validate: If True, yield DocumentMetadata. If False, yield dict.
-        show_progress: Whether to show a progress bar
-        progress_desc: Description for the progress bar
-
-    Yields:
-        Tuples of (json_path, pdf_path, metadata)
-        Note: pdf_path is always provided but may not exist if require_pdf=False
-    """
+    """Iterate metadata files, yielding (json_path, pdf_path, data). Skips orphans if require_pdf."""
     json_files = list(directory.rglob("*.json"))
     if not json_files:
         return

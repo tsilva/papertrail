@@ -1,11 +1,9 @@
 """Pipeline task."""
 
-import json
 import os
 import re
 import shutil
 import sys
-import tempfile
 import time
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -23,7 +21,7 @@ logger = get_logger('cli')
 
 def pipeline(export_date_arg=None, processed_path_override=None):
     """Run the full document processing pipeline."""
-    from papertrail.config import get_passwords, get_validations
+    from papertrail.config import get_passwords, resolve_validations_file
 
     console = get_console()
     start_time = time.time()
@@ -47,8 +45,6 @@ def pipeline(export_date_arg=None, processed_path_override=None):
     if missing:
         console.error(f"Missing required profile settings: {', '.join(missing)}", indent=False)
         sys.exit(1)
-
-    # Note: API accessibility is checked in initialize_config() before any task runs
 
     log_file_path = setup_task_logging(Path(PROCESSED_FILES_DIR), "pipeline")
     logger.debug("=== PIPELINE STARTED ===")
@@ -74,29 +70,13 @@ def pipeline(export_date_arg=None, processed_path_override=None):
     if not passwords:
         logger.debug("No passwords configured. Password-protected archives will be skipped.")
 
-    temp_validations_file = None
-
-    validations, validations_file = get_validations()
-
-    if validations and validations.get('rules'):
-        if validations_file:
-            validations_file_path = validations_file
-            logger.debug(f"Using validations file from profile: {validations_file_path}")
-        else:
-            temp_validations = tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.json')
-            json.dump(validations['rules'], temp_validations, indent=2)
-            temp_validations.close()
-            validations_file_path = temp_validations.name
-            temp_validations_file = temp_validations.name
-            logger.debug(f"Created temporary validations file: {validations_file_path}")
-    else:
-        validations_file_path = None
+    validations_file_path, temp_validations_file = resolve_validations_file()
+    if validations_file_path:
+        logger.debug(f"Using validations file: {validations_file_path}")
 
     processed_files_excel_path = Path(PROCESSED_FILES_DIR) / "processed_files.xlsx"
 
-    # ── Stage 1: Ingest raw files ──────────────────────────────────────
-
-    # Gmail download (skip if disabled, non-fatal on failure)
+    # Stage 1: Ingest raw files
     if profile.gmail.enabled:
         with console.step_progress("Download Gmail attachments") as step:
             try:
@@ -165,8 +145,7 @@ def pipeline(export_date_arg=None, processed_path_override=None):
                 step.warning("No archives found")
             logger.debug("### Google Takeout archive extraction... Finished.")
 
-    # ── Stage 2: Extract new documents ─────────────────────────────────
-
+    # Stage 2: Extract new documents
     from papertrail.tasks.extraction import task_extract_new
     try:
         task_extract_new(Path(PROCESSED_FILES_DIR), [Path(d) for d in raw_dirs])
@@ -174,8 +153,7 @@ def pipeline(export_date_arg=None, processed_path_override=None):
         console.error(str(e))
         sys.exit(1)
 
-    # ── Stage 3: Sync orphans ──────────────────────────────────────────
-
+    # Stage 3: Sync orphans
     from papertrail.tasks.extraction import task_sync
     try:
         task_sync(Path(PROCESSED_FILES_DIR))
@@ -183,8 +161,7 @@ def pipeline(export_date_arg=None, processed_path_override=None):
         console.error(str(e))
         sys.exit(1)
 
-    # ── Stage 4: Rename files ──────────────────────────────────────────
-
+    # Stage 4: Rename files
     from papertrail.tasks.organization import task_rename_files
 
     with console.step_progress("Rename files") as step:
@@ -195,8 +172,7 @@ def pipeline(export_date_arg=None, processed_path_override=None):
             step.error(str(e))
             sys.exit(1)
 
-    # ── Stage 5: Export to Excel ───────────────────────────────────────
-
+    # Stage 5: Export to Excel
     from papertrail.tasks.export import export_metadata_to_excel
 
     with console.step_progress("Export to Excel") as step:
@@ -224,9 +200,7 @@ def pipeline(export_date_arg=None, processed_path_override=None):
     for export_date in export_dates:
         export_date_dir = os.path.join(EXPORT_FILES_DIR, export_date)
 
-        # ── Stage 6: Build monthly export ──────────────────────────────────
-
-        # Purge export date folder before copying
+        # Stage 6: Build monthly export
         if os.path.exists(export_date_dir):
             shutil.rmtree(export_date_dir)
 
@@ -263,8 +237,7 @@ def pipeline(export_date_arg=None, processed_path_override=None):
         with suppress_console_logging():
             validate_merged_pdf(Path(export_date_dir))
 
-        # ── Stage 7: Validate exported files ───────────────────────────────
-
+        # Stage 7: Validate exported files
         with console.step_progress(f"Validate exported files ({export_date})") as step:
             if validations_file_path:
                 try:

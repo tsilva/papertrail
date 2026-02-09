@@ -9,26 +9,8 @@ from papertrail.logging_utils import get_logger
 logger = get_logger('cli')
 
 
-def find_mbox_files(directory: Path) -> list[Path]:
-    """Find all .mbox files recursively in directory."""
-    return list(directory.rglob("*.mbox"))
-
-
 def extract_mbox_attachments(directory: str | Path) -> dict:
-    """Extract attachments from all mbox files in a directory.
-
-    Mimics the CLI behavior of mbox-extractor: extracts attachments to the
-    same directory as each mbox file.
-
-    Args:
-        directory: Directory to search for mbox files.
-
-    Returns:
-        Dictionary with extraction stats:
-        - mbox_files: Number of mbox files processed
-        - attachments_extracted: Total attachments extracted
-        - errors: List of error messages (if any)
-    """
+    """Extract attachments from all mbox files in a directory."""
     directory = Path(directory)
     stats = {
         'mbox_files': 0,
@@ -36,7 +18,7 @@ def extract_mbox_attachments(directory: str | Path) -> dict:
         'errors': [],
     }
 
-    mbox_files = find_mbox_files(directory)
+    mbox_files = list(directory.rglob("*.mbox"))
     if not mbox_files:
         logger.info(f"No mbox files found in {directory}")
         return stats

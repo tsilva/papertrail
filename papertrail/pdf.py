@@ -20,18 +20,7 @@ def render_pdf_to_images(
     enhance_contrast: bool = True,
     contrast_factor: float = 2.0
 ) -> list[str]:
-    """
-    Render PDF pages to base64 encoded JPEG images.
-
-    Args:
-        pdf_path: Path to the PDF file
-        max_pages: Maximum number of pages to render (default: 2)
-        enhance_contrast: Whether to apply contrast enhancement (default: True)
-        contrast_factor: Contrast enhancement factor (default: 2.0)
-
-    Returns:
-        List of base64-encoded JPEG images
-    """
+    """Render PDF pages to base64-encoded JPEG images."""
     t0 = time.monotonic()
     images_b64 = []
 
@@ -66,15 +55,7 @@ def get_page_count(pdf_path: Path) -> int:
 
 
 def find_pdf_files(folder_paths) -> list[Path]:
-    """
-    Return all PDF files within one or multiple folders.
-
-    Args:
-        folder_paths: Single path or list of paths to search
-
-    Returns:
-        List of paths to PDF files
-    """
+    """Return all PDF files within one or multiple folders."""
     if isinstance(folder_paths, (str, Path)):
         folder_paths = [folder_paths]
 

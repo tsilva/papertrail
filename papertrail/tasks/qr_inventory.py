@@ -1,4 +1,4 @@
-"""QR code inventory task - scan PDFs to inventory QR codes."""
+"""QR code inventory task."""
 
 import json
 import re
@@ -24,14 +24,13 @@ MAX_SAMPLES_PER_TYPE = 20
 
 @dataclass
 class QRSample:
-    """Sample QR code for inventory."""
+    """A QR code sample."""
     content: str
     file: str
     page: int
-    # Type-specific fields
-    domain: Optional[str] = None  # For URL types
-    fields_extracted: list[str] = field(default_factory=list)  # For structured types
-    pattern_guess: Optional[str] = None  # For unknown types
+    domain: Optional[str] = None
+    fields_extracted: list[str] = field(default_factory=list)
+    pattern_guess: Optional[str] = None
 
 
 @dataclass
@@ -53,7 +52,6 @@ class InventoryResult:
 
 def _extract_issuer_from_filename(filename: str) -> Optional[str]:
     """Extract issuing party from filename pattern: YYYY-MM-DD - type - issuer - ..."""
-    # Pattern: date - type - issuer - rest
     match = re.match(r'\d{4}-\d{2}-\d{2}\s*-\s*[^-]+\s*-\s*([^-]+)', filename)
     if match:
         return match.group(1).strip().lower()
@@ -64,7 +62,6 @@ def _guess_pattern(content: str) -> str:
     """Guess the pattern type of unknown QR content."""
     content = content.strip()
 
-    # Check for key-value patterns
     if '*' in content and ':' in content:
         return "key-value (asterisk-separated)"
     if '&' in content and '=' in content:
@@ -102,7 +99,6 @@ def _scan_pdf_for_qr(pdf_path: Path) -> InventoryResult:
                 'page': qr.page_number,
             }
 
-            # Add type-specific info
             if qr.qr_type == QRCodeType.URL:
                 try:
                     parsed = urlparse(qr.raw_content.strip())
@@ -112,7 +108,6 @@ def _scan_pdf_for_qr(pdf_path: Path) -> InventoryResult:
             elif qr.qr_type == QRCodeType.UNKNOWN:
                 qr_info['pattern_guess'] = _guess_pattern(qr.raw_content)
             elif qr.qr_type == QRCodeType.PORTUGUESE_INVOICE:
-                # Extract field names present
                 fields = []
                 for part in qr.raw_content.split('*'):
                     if ':' in part:
@@ -164,19 +159,9 @@ def task_qr_inventory(
     max_workers: int = 8,
     checkpoint_interval: int = 100,
 ):
-    """
-    Scan all PDFs in export folder and create QR code inventory.
-
-    Args:
-        export_path: Path to folder containing PDFs to scan
-        output_path: Path to output YAML file (default: config/qr_inventory.yaml)
-        resume: Whether to resume from checkpoint if exists
-        max_workers: Number of parallel workers for scanning
-        checkpoint_interval: Save checkpoint every N files
-    """
+    """Scan all PDFs in export folder and create QR code inventory."""
     console = get_console()
 
-    # Pre-flight check: verify pyzbar is available before starting
     pyzbar_ok, error_msg = check_pyzbar_available()
     if not pyzbar_ok:
         console.error(f"Cannot run qr_inventory: {error_msg}", indent=False)
@@ -194,14 +179,10 @@ def task_qr_inventory(
 
     checkpoint_path = output_path.with_suffix('.checkpoint.yaml')
 
-    # Find all PDFs
-    all_pdfs = list(export_path.rglob("*.pdf"))
-    # Filter out merged files
-    all_pdfs = [p for p in all_pdfs if not p.name.startswith('merged_')]
+    all_pdfs = [p for p in export_path.rglob("*.pdf") if not p.name.startswith('merged_')]
 
     logger.debug(f"Found {len(all_pdfs)} PDFs to scan in {export_path}")
 
-    # Load checkpoint if resuming
     scanned_files: set[str] = set()
     results: list[InventoryResult] = []
 
@@ -210,7 +191,6 @@ def task_qr_inventory(
         if scanned_files:
             logger.debug(f"Resuming from checkpoint: {len(scanned_files)} already scanned")
 
-    # Filter to unscanned PDFs
     pdfs_to_scan = [p for p in all_pdfs if str(p) not in scanned_files]
 
     scan_duration = 0.0
@@ -238,7 +218,6 @@ def task_qr_inventory(
                         scanned_files.add(str(pdf_path))
                         checkpoint_counter += 1
 
-                        # Save checkpoint periodically
                         if checkpoint_counter >= checkpoint_interval:
                             _save_checkpoint(checkpoint_path, scanned_files, results)
                             checkpoint_counter = 0
@@ -258,7 +237,6 @@ def task_qr_inventory(
         scan_duration = (datetime.now() - start_time).total_seconds()
         logger.debug(f"Scan completed in {scan_duration:.1f} seconds")
 
-    # Build summary
     logger.debug("Building inventory summary...")
 
     summary = {
@@ -268,14 +246,12 @@ def task_qr_inventory(
         'scan_errors': sum(1 for r in results if r.error),
     }
 
-    # Count by type
     by_type: dict[str, int] = {}
     for result in results:
         for qr in result.qr_codes:
             qr_type = qr['type']
             by_type[qr_type] = by_type.get(qr_type, 0) + 1
 
-    # Count by issuer
     by_issuer: dict[str, dict[str, int]] = {}
     for result in results:
         issuer = result.issuer or 'unknown'
@@ -286,16 +262,14 @@ def task_qr_inventory(
         else:
             by_issuer[issuer]['without_qr'] += 1
 
-    # Sort by total documents
     by_issuer = dict(sorted(
         by_issuer.items(),
         key=lambda x: x[1]['with_qr'] + x[1]['without_qr'],
         reverse=True
     ))
 
-    # Collect samples
     samples: dict[str, list[dict]] = {}
-    seen_contents: dict[str, set[str]] = {}  # Track unique content per type
+    seen_contents: dict[str, set[str]] = {}
 
     for result in results:
         for qr in result.qr_codes:
@@ -306,13 +280,12 @@ def task_qr_inventory(
                 samples[qr_type] = []
                 seen_contents[qr_type] = set()
 
-            # Only add unique samples
-            content_key = content[:100]  # Use first 100 chars as key
+            content_key = content[:100]
             if content_key not in seen_contents[qr_type] and len(samples[qr_type]) < MAX_SAMPLES_PER_TYPE:
                 seen_contents[qr_type].add(content_key)
 
                 sample = {
-                    'content': content[:500],  # Truncate long content
+                    'content': content[:500],
                     'file': Path(result.pdf_path).name,
                     'page': qr['page'],
                 }
@@ -322,13 +295,11 @@ def task_qr_inventory(
                 elif qr_type == 'unknown' and 'pattern_guess' in qr:
                     sample['pattern_guess'] = qr['pattern_guess']
                 elif qr_type == 'portuguese_invoice' and 'fields' in qr:
-                    # Show which fields are extracted
                     sample['fields_present'] = qr['fields']
                     sample['fields_extracted'] = ['date_issued', 'document_type', 'total_amount', 'issuer_tax_number', 'atcud']
 
                 samples[qr_type].append(sample)
 
-    # Collect URL domain statistics
     url_domains: dict[str, int] = {}
     for result in results:
         for qr in result.qr_codes:
@@ -338,7 +309,6 @@ def task_qr_inventory(
 
     url_domains = dict(sorted(url_domains.items(), key=lambda x: x[1], reverse=True))
 
-    # Build final output
     inventory = {
         'scan_date': datetime.now().isoformat(),
         'scan_duration_seconds': scan_duration if 'scan_duration' in dir() else None,
@@ -350,19 +320,16 @@ def task_qr_inventory(
         'samples': samples,
     }
 
-    # Write output
     output_path.parent.mkdir(parents=True, exist_ok=True)
     with open(output_path, 'w', encoding='utf-8') as f:
         yaml.dump(inventory, f, default_flow_style=False, allow_unicode=True, width=120)
 
     logger.debug(f"Inventory written to {output_path}")
 
-    # Clean up checkpoint
     if checkpoint_path.exists():
         checkpoint_path.unlink()
         logger.debug("Checkpoint file removed")
 
-    # Console summary
     qr_pct = 100 * summary['pdfs_with_qr'] / max(1, summary['total_pdfs'])
     console.success(
         f"{summary['total_pdfs']} PDFs scanned, "
@@ -373,7 +340,6 @@ def task_qr_inventory(
     if summary['scan_errors']:
         console.warning(f"{summary['scan_errors']} scan errors", indent=False)
 
-    # Log detailed info to file
     logger.debug("=" * 60)
     logger.debug("QR INVENTORY SUMMARY")
     logger.debug("=" * 60)
