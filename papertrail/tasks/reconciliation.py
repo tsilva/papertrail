@@ -386,7 +386,7 @@ def _write_reconciliation_file(
     total_transactions: int,
 ) -> Path:
     """Write a .reconciliation JSON sidecar alongside the XLSX. Returns the output path."""
-    output_path = excel_path.with_suffix(".reconciliation")
+    output_path = excel_path.with_suffix(".reconciliation.json")
 
     total_matched = len(matches)
     total_unmatched = total_transactions - total_matched
@@ -441,40 +441,30 @@ def _reconcile_single(
     console,
 ) -> None:
     """Reconcile a single bank statement against PDF documents in export_path."""
-    with console.step_progress("Loading transactions") as step:
-        transactions = _load_transactions(excel_path)
-        step.success(f"{len(transactions)} untreated rows")
+    transactions = _load_transactions(excel_path)
 
     if not transactions:
         console.warning("No untreated transactions found")
         return
 
-    with console.step_progress("Loading document candidates") as step:
-        candidates = _load_pdf_candidates(export_path)
-        step.success(f"{len(candidates)} documents with metadata")
+    candidates = _load_pdf_candidates(export_path)
 
     if not candidates:
         console.warning("No document candidates found")
         return
 
-    with console.step_progress("Phase 1: Deterministic matching") as step:
-        p1_matches, unmatched_txns, remaining_cands = (
-            _phase1_deterministic_match(transactions, candidates)
-        )
-        step.success(f"{len(p1_matches)} matched")
+    p1_matches, unmatched_txns, remaining_cands = (
+        _phase1_deterministic_match(transactions, candidates)
+    )
 
     p2_matches: list[MatchResult] = []
     if unmatched_txns and remaining_cands:
-        with console.step_progress("Phase 2: LLM-assisted matching") as step:
-            profile = get_current_profile()
-            model_id = profile.openrouter.model_id
-            client = get_openai_client()
-            p2_matches = _phase2_llm_match(
-                unmatched_txns, remaining_cands, client, model_id,
-            )
-            step.success(f"{len(p2_matches)} matched")
-    else:
-        console.detail("Phase 2: Skipped (no unmatched transactions or no remaining PDFs)")
+        profile = get_current_profile()
+        model_id = profile.openrouter.model_id
+        client = get_openai_client()
+        p2_matches = _phase2_llm_match(
+            unmatched_txns, remaining_cands, client, model_id,
+        )
 
     all_matches = p1_matches + p2_matches
 
@@ -483,11 +473,9 @@ def _reconcile_single(
     final_unmatched = [txn for txn in unmatched_txns if txn.row_number not in p2_matched_rows]
 
     if all_matches and not dry_run:
-        with console.step_progress("Writing reconciliation file") as step:
-            out_path = _write_reconciliation_file(
-                excel_path, all_matches, final_unmatched, len(transactions),
-            )
-            step.success(f"{out_path.name}")
+        _write_reconciliation_file(
+            excel_path, all_matches, final_unmatched, len(transactions),
+        )
     elif dry_run and all_matches:
         console.detail(f"Dry run: would write {len(all_matches)} matches to .reconciliation file")
 
@@ -510,6 +498,11 @@ def _reconcile_single(
         console.warning(
             f"{total_unmatched} transactions unmatched", indent=False,
         )
+        for txn in final_unmatched:
+            console.detail(
+                f"Row {txn.row_number}: {txn.description[:50]} "
+                f"({txn.amount:.2f} {txn.currency})"
+            )
 
     for txn in final_unmatched:
         logger.info(
