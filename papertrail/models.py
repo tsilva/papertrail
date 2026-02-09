@@ -42,12 +42,7 @@ def _validate_enum_field(value, enum_name: str, getter, field_label: str):
 
 
 class DocumentMetadataRaw(BaseModel):
-    """
-    Raw extracted metadata without enum constraints - first phase extraction.
-
-    Used for the initial LLM extraction where we want exact text as it appears
-    on the document, before normalization to canonical values.
-    """
+    """Phase 1 raw extraction: exact text as it appears on the document."""
     issue_date: str = Field(description="Date issued, format: YYYY-MM-DD.")
     document_type: str = Field(description="Core document type label only, stripped of dates/periods/numbers (e.g., 'Fatura' not 'Fatura de Agosto 2021').")
     document_title: Optional[str] = Field(default=None, description="Specific subject, product, service, or transaction described in the document. Null if no specific subject beyond the document type is identifiable.")
@@ -67,43 +62,25 @@ class DocumentMetadataRaw(BaseModel):
 
 
 class DocumentMetadata(BaseModel):
-    """
-    Full document metadata with hashes, timestamps, and validated enum fields.
-
-    Used after normalization when document_type and issuing_party
-    have been mapped to canonical values.
-    """
-    # Classification fields
+    """Full document metadata with hashes, timestamps, and validated enum fields."""
     class_confidence: float = Field(description="Confidence score between 0 and 1.")
     class_reasoning: str = Field(description="Why this classification was chosen.")
-
-    # Date fields
-    date_created: Optional[str] = Field(default=None, description="Date this metadata was created.")
+    date_created: Optional[str] = Field(default=None)
     date_issued: str = Field(description="Date issued, format: YYYY-MM-DD.")
-    date_updated: Optional[str] = Field(default=None, description="Date this metadata was last updated.")
-
-    # Document fields
+    date_updated: Optional[str] = Field(default=None)
     document_type: DocumentType = Field(description="Type of document.")
     issuing_party: str = Field(description="Issuer name.")
-    total_amount: Optional[float] = Field(default=None, description="Total currency amount.")
-    total_amount_currency: Optional[str] = Field(default=None, description="Currency of the total amount.")
-
-    # Hash fields
-    hash_content: str = Field(description="Content-based SHA256 hash (first 8 chars).")
-    hash_file: Optional[str] = Field(default=None, description="File-based SHA256 hash for quick filtering.")
-
-    # Raw extracted values before normalization
-    document_type_raw: Optional[str] = Field(default=None, description="Core document type label as extracted by LLM, before normalization. Unlike document_title, this is already cleaned of dates/periods.")
-    document_title: Optional[str] = Field(default=None, description="Specific subject, product, service, or transaction described in the document. Null if no specific subject beyond the document type is identifiable.")
-    issuing_party_raw: Optional[str] = Field(default=None, description="Original issuing party as extracted.")
-
-    # Document properties
-    page_count: Optional[int] = Field(default=None, description="Number of pages in the PDF document.")
-    issuer_tax_number: Optional[str] = Field(default=None, description="Issuer tax identification number.")
-    locale: Optional[str] = Field(default=None, description="Document locale in BCP-47 format.")
-
-    # QR code data
-    qrcode: Optional[dict] = Field(default=None, description="Raw QR code data if extracted.")
+    total_amount: Optional[float] = Field(default=None)
+    total_amount_currency: Optional[str] = Field(default=None)
+    hash_content: str = Field(description="Content-based hash (first 8 hex chars).")
+    hash_file: Optional[str] = Field(default=None)
+    document_type_raw: Optional[str] = Field(default=None)
+    document_title: Optional[str] = Field(default=None, description="Specific subject/product/service described in the document.")
+    issuing_party_raw: Optional[str] = Field(default=None)
+    page_count: Optional[int] = Field(default=None)
+    issuer_tax_number: Optional[str] = Field(default=None)
+    locale: Optional[str] = Field(default=None)
+    qrcode: Optional[dict] = Field(default=None)
 
     @field_validator('date_issued', mode='before')
     @classmethod

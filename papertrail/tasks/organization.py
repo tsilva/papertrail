@@ -1,6 +1,5 @@
 """File renaming and organization tasks."""
 
-import json
 import re
 import shutil
 import unicodedata
@@ -9,7 +8,7 @@ from pathlib import Path
 from papertrail.console import get_console
 from papertrail.hashing import hash_file_fast
 from papertrail.logging_utils import get_logger, log_failure, DocumentLogger
-from papertrail.metadata import save_metadata_json
+from papertrail.metadata import save_metadata_json, save_json_data, load_json_data
 from papertrail.models import DocumentMetadata
 from papertrail.tasks import task_log_context
 
@@ -93,15 +92,7 @@ def rename_pdf_files(pdf_paths, file_hash_map, known_content_hashes, known_file_
 
 
 def task_rename_files(processed_path: Path, quiet: bool = False) -> dict:
-    """Rename existing PDF files based on metadata.
-
-    Args:
-        processed_path: Path to processed documents directory.
-        quiet: If True, suppress progress bars and console output.
-
-    Returns:
-        Dict with 'validated' and 'renamed' counts.
-    """
+    """Rename existing PDF files based on metadata."""
     from papertrail.metadata import load_json_files_parallel
 
     console = get_console()
@@ -159,10 +150,7 @@ def _get_nested_value(metadata: dict, key: str):
 
 
 def _match_value(actual, pattern: str) -> bool:
-    """Match a metadata value against a pattern.
-
-    Supports exact match, prefix wildcard ("bank-*"), and numeric match.
-    """
+    """Match a metadata value against a pattern (supports trailing wildcard)."""
     if actual is None:
         return False
     actual_str = str(actual)
@@ -207,20 +195,7 @@ def copy_matching_files(
     incremental: bool = False,
     export_config=None,
 ) -> dict:
-    """Copy files matching pattern to destination.
-
-    Args:
-        processed_path: Source directory containing files.
-        pattern: Unified pattern (glob or regex, auto-detected).
-                 Uses partial match (search) by default.
-        dest_folder: Destination directory.
-        incremental: If True, skip files that already exist with same hash.
-        export_config: Optional ExportFileMappingsConfig. When provided and enabled,
-                       applies prefix rules and optional filename rebuilding.
-
-    Returns:
-        Dict with 'copied', 'skipped', 'total' counts.
-    """
+    """Copy files matching pattern to destination."""
     from papertrail.pattern_utils import make_matcher
 
     console = get_console()
@@ -232,7 +207,6 @@ def copy_matching_files(
     use_prefixes = export_config is not None and export_config.enabled
 
     if use_prefixes:
-        # Prefix mode: process PDF+JSON pairs, apply prefixes
         matching_pdfs = []
         for file in processed_path.iterdir():
             if not file.is_file():
@@ -247,15 +221,12 @@ def copy_matching_files(
             stats['total'] += 1
             json_file = pdf_file.with_suffix(".json")
 
-            # Read metadata for prefix evaluation
             metadata = {}
             if json_file.exists():
-                with open(json_file, 'r', encoding='utf-8') as f_in:
-                    metadata = json.load(f_in)
+                metadata = load_json_data(json_file)
 
             prefix = _evaluate_export_prefix(metadata, export_config)
 
-            # Build destination filename
             if export_config.filename_fields and metadata:
                 file_hash = metadata.get("hash_content", pdf_file.stem.split(" - ")[-1])
                 base_name = _build_filename_from_fields(
@@ -277,13 +248,11 @@ def copy_matching_files(
             shutil.copy2(pdf_file, dest_pdf)
             if json_file.exists():
                 metadata['source_filename'] = pdf_file.name
-                with open(dest_json, 'w', encoding='utf-8') as f_out:
-                    json.dump(metadata, f_out, indent=4, ensure_ascii=False, sort_keys=True)
+                save_json_data(dest_json, metadata)
             stats['copied'] += 1
 
         console.success(f"Copied {stats['copied']} files to {dest_folder.name}", indent=False)
     else:
-        # Original behavior: copy both PDF and JSON files directly
         matching_files = []
         for file in processed_path.iterdir():
             if not file.is_file():
@@ -303,16 +272,13 @@ def copy_matching_files(
                 continue
 
             if file.suffix.lower() == '.json':
-                with open(file, 'r', encoding='utf-8') as f_in:
-                    data = json.load(f_in)
+                data = load_json_data(file)
                 data['source_filename'] = file.with_suffix('.pdf').name
-                with open(dest_file, 'w', encoding='utf-8') as f_out:
-                    json.dump(data, f_out, indent=4, ensure_ascii=False, sort_keys=True)
+                save_json_data(dest_file, data)
             else:
                 shutil.copy2(file, dest_file)
             stats['copied'] += 1
 
-        # Count only PDF files for the summary (JSON files are copied alongside)
         pdf_copied = stats['copied'] // 2 if stats['copied'] > 0 else 0
         console.success(f"Copied {pdf_copied} files to {dest_folder.name}", indent=False)
 

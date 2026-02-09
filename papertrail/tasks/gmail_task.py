@@ -43,7 +43,6 @@ def task_gmail_download():
 
     end_date = datetime.now()
 
-    # Default: current month + previous month
     start_date = (end_date.replace(day=1) - timedelta(days=1)).replace(day=1)
     logger.debug(f"Date range: {start_date.date()} to {end_date.date()}")
 
@@ -63,7 +62,6 @@ def task_gmail_download():
         console.error(f"Gmail download failed ({error_type}): {e}", indent=False)
         raise RuntimeError(f"Gmail download failed ({error_type}): {e}") from e
 
-    # Log details to file
     logger.debug(f"Messages found: {stats['messages_found']}")
     logger.debug(f"Messages processed: {stats['messages_processed']}")
     logger.debug(f"Messages skipped: {stats['messages_skipped']}")
@@ -71,7 +69,6 @@ def task_gmail_download():
     logger.debug(f"Attachments failed: {stats['attachments_failed']}")
     logger.debug(f"Bytes downloaded: {stats['bytes_downloaded']:,}")
 
-    # Console output - compact summary
     if stats['attachments_downloaded'] > 0:
         console.success(
             f"{stats['messages_processed']} messages processed, "

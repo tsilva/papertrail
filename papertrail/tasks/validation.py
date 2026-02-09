@@ -7,7 +7,7 @@ from pathlib import Path
 from papertrail.console import get_console
 from papertrail.hashing import hash_file_fast, hash_file_content, HashCache
 from papertrail.logging_utils import get_logger, setup_task_logging
-from papertrail.metadata import load_validated_metadata
+from papertrail.metadata import load_validated_metadata, save_json_data
 from papertrail.models import DocumentMetadata
 from papertrail.pdf import get_page_count
 
@@ -25,7 +25,6 @@ def validate_metadata(output_path: Path):
     cache = HashCache()
     logger.debug(f"Hash cache loaded with {len(cache)} entries")
 
-    # Phase 1: Collect all PDF paths and their expected hashes using the helper
     pdf_info = []
     for metadata_path, pdf_path, metadata in load_validated_metadata(
         output_path, require_pdf=False, validate=True
@@ -51,7 +50,6 @@ def validate_metadata(output_path: Path):
                 logger.warning(f"Validation error: {meta_path}: {err}")
         return valid_entries
 
-    # Phase 2: Compute fast hashes and check cache
     logger.debug(f"Computing fast hashes for {len(pdf_info)} PDFs...")
     hash_results = {}
     uncached = []
@@ -67,7 +65,6 @@ def validate_metadata(output_path: Path):
     cache_hits = len(pdf_info) - len(uncached)
     logger.debug(f"Cache hits: {cache_hits}, Cache misses: {len(uncached)}")
 
-    # Phase 3: Parallel content hashing for uncached PDFs
     if uncached:
         logger.debug(f"Computing content hashes for {len(uncached)} uncached PDFs...")
         with ProcessPoolExecutor() as executor:
@@ -92,7 +89,6 @@ def validate_metadata(output_path: Path):
         cache.save()
         logger.debug(f"Hash cache saved with {len(cache)} entries")
 
-    # Phase 4: Validate using precomputed hashes
     for metadata_path, pdf_path, expected_hash, metadata in pdf_info:
         actual_hash = hash_results.get(pdf_path)
         if actual_hash is None:
@@ -142,16 +138,7 @@ def validate_merged_pdf(folder_path: Path) -> bool:
 
 
 def check_files_exist(target_folder: Path, validation_schema_path: Path, quiet: bool = False) -> dict:
-    """Validate files exist based on a schema.
-
-    Args:
-        target_folder: Directory to check for files.
-        validation_schema_path: Path to JSON schema file.
-        quiet: If True, suppress console output (table, summary, missing lines).
-
-    Returns:
-        Dict with 'passed', 'missing', 'missing_items', and 'all_passed'.
-    """
+    """Validate files exist based on a JSON schema."""
     console = get_console()
 
     with open(validation_schema_path, "r", encoding="utf-8") as f:
@@ -221,17 +208,7 @@ def _batch_update_metadata(
     update_fn,
     skip_label: str,
 ):
-    """Generic batch metadata updater.
-
-    Args:
-        processed_path: Path to processed documents directory.
-        task_name: Task name for logging.
-        progress_desc: Description for progress bar.
-        require_pdf: Whether to require corresponding PDF files.
-        should_skip: Callable(metadata_path, pdf_path, data) -> bool. Return True to skip.
-        update_fn: Callable(metadata_path, pdf_path, data) -> None. Mutates data in place.
-        skip_label: Human label for skipped items (e.g., "already had page_count").
-    """
+    """Generic batch metadata updater with skip/update callbacks."""
     console = get_console()
     setup_task_logging(processed_path, task_name)
 
@@ -249,9 +226,7 @@ def _batch_update_metadata(
                 continue
 
             update_fn(metadata_path, pdf_path, data)
-
-            with open(metadata_path, "w", encoding="utf-8") as f:
-                json.dump(data, f, indent=4, ensure_ascii=False, sort_keys=True)
+            save_json_data(metadata_path, data)
 
             updated += 1
 

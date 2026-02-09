@@ -1,6 +1,4 @@
-"""
-papertrail.tasks - Task modules for the papertrail CLI.
-"""
+"""papertrail.tasks - Task modules for the papertrail CLI."""
 
 from contextlib import contextmanager
 from pathlib import Path
@@ -18,38 +16,19 @@ def task_log_context(
     task_name: str,
     show_header: bool = True,
 ) -> Generator[Path, None, None]:
-    """Context manager for task logging boilerplate.
-
-    Args:
-        processed_path: Path to the processed documents directory.
-        task_name: Name of the task (used in log filename).
-        show_header: If True, display task header in console.
-
-    Yields:
-        Path to the created log file.
-    """
+    """Context manager for task logging setup. Yields the log file path."""
     log_file_path = setup_task_logging(processed_path, task_name)
     console = get_console()
 
-    # Log to file (always)
     logger.debug(f"=== {task_name.upper()} STARTED ===")
     logger.debug(f"Log: {log_file_path}")
 
-    # Console output (only if show_header is True)
     if show_header:
         console.detail(f"Log: {log_file_path}", indent=False)
 
     yield log_file_path
 
 
-def require_initialized(manager, name: str):
-    """Raise if a manager is None (not initialized)."""
-    if manager is None:
-        logger.error(f"{name} not initialized.")
-        raise RuntimeError(f"{name} not initialized.")
-
-
-# Re-export all task functions
 from papertrail.tasks.extraction import (
     classify_pdf_document,
     task_extract_new,

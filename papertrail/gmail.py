@@ -17,11 +17,9 @@ from papertrail.logging_utils import setup_failure_logger, get_logger
 
 logger = get_logger('gmail')
 
-# Gmail API scope - read-only access to messages
 SCOPES = ["https://www.googleapis.com/auth/gmail.readonly"]
 
-# Default settings if config file doesn't exist
-DEFAULT_SETTINGS = {
+_DEFAULT_SETTINGS = {
     "attachment_mime_types": ["application/pdf"],
     "label_filter": None,
     "max_results_per_query": 500,
@@ -39,15 +37,6 @@ class GmailDownloader:
         settings_path: Path,
         output_dir: Path,
     ):
-        """
-        Initialize Gmail downloader.
-
-        Args:
-            credentials_path: Path to OAuth2 client credentials JSON
-            token_path: Path to store/load refresh token
-            settings_path: Path to Gmail settings JSON
-            output_dir: Directory to save downloaded attachments
-        """
         self.credentials_path = Path(credentials_path)
         self.token_path = Path(token_path)
         self.settings_path = Path(settings_path)
@@ -57,20 +46,8 @@ class GmailDownloader:
         self.failure_logger = None
 
     def _load_settings(self) -> dict:
-        """
-        Load Gmail settings from profile or config file.
-
-        If a profile is active and has Gmail settings, uses those.
-        Otherwise, falls back to settings file or defaults.
-
-        Returns:
-            Dictionary with Gmail settings
-        """
         profile = get_current_profile()
-
-        # Check profile first
         if profile and profile.gmail.enabled:
-            # Build settings dict from profile (settings are flattened on GmailConfig)
             return {
                 "attachment_mime_types": profile.gmail.attachment_mime_types,
                 "label_filter": profile.gmail.label_filter,
@@ -78,40 +55,22 @@ class GmailDownloader:
                 "skip_already_downloaded": profile.gmail.skip_already_downloaded,
             }
 
-        # Fall back to settings file
         if self.settings_path.exists():
             with open(self.settings_path, "r") as f:
                 return json.load(f)
 
-        # Final fallback to defaults
-        return DEFAULT_SETTINGS.copy()
+        return _DEFAULT_SETTINGS.copy()
 
     def authenticate(self) -> bool:
-        """
-        Authenticate with Gmail API using OAuth2.
-
-        On first run, opens browser for user authorization.
-        On subsequent runs, uses stored refresh token.
-
-        Returns:
-            True if authentication successful
-
-        Raises:
-            FileNotFoundError: If credentials file doesn't exist
-        """
+        """Authenticate with Gmail API using OAuth2."""
         creds = None
-
-        # Load existing token if available
         if self.token_path.exists():
             creds = Credentials.from_authorized_user_file(str(self.token_path), SCOPES)
 
-        # If no valid credentials, authenticate
         if not creds or not creds.valid:
             if creds and creds.expired and creds.refresh_token:
-                # Refresh expired token
                 creds.refresh(Request())
             else:
-                # Interactive OAuth2 flow
                 if not self.credentials_path.exists():
                     raise FileNotFoundError(
                         f"Gmail credentials not found at {self.credentials_path}. "
@@ -123,30 +82,14 @@ class GmailDownloader:
                 )
                 creds = flow.run_local_server(port=0)
 
-            # Save token for future use
             with open(self.token_path, "w") as token_file:
                 token_file.write(creds.to_json())
 
         self.service = build("gmail", "v1", credentials=creds)
         return True
 
-    def build_search_query(
-        self,
-        start_date: datetime,
-        end_date: datetime,
-    ) -> str:
-        """
-        Build Gmail search query for date range with attachments.
-
-        Args:
-            start_date: Start of date range (inclusive)
-            end_date: End of date range (inclusive)
-
-        Returns:
-            Gmail search query string
-        """
-        # Gmail date format: YYYY/MM/DD
-        # Use after: for start (inclusive) and before: for end (day after for inclusive)
+    def build_search_query(self, start_date: datetime, end_date: datetime) -> str:
+        """Build Gmail search query for date range with attachments."""
         start_str = start_date.strftime("%Y/%m/%d")
         end_plus_one = end_date + timedelta(days=1)
         end_str = end_plus_one.strftime("%Y/%m/%d")
@@ -159,15 +102,7 @@ class GmailDownloader:
         return query
 
     def list_messages(self, query: str) -> list[dict]:
-        """
-        List messages matching the search query.
-
-        Args:
-            query: Gmail search query
-
-        Returns:
-            List of message metadata dicts with 'id' field
-        """
+        """List messages matching the search query."""
         messages = []
         page_token = None
         max_results = self.settings.get("max_results_per_query", 500)
@@ -203,10 +138,7 @@ class GmailDownloader:
             .execute()
         )
 
-    def _extract_attachments_from_parts(
-        self, parts: list[dict], allowed_types: set[str]
-    ) -> list[dict]:
-        """Recursively extract attachments from message parts."""
+    def _extract_attachments_from_parts(self, parts: list[dict], allowed_types: set[str]) -> list[dict]:
         attachments = []
 
         for part in parts:
@@ -215,13 +147,11 @@ class GmailDownloader:
             body = part.get("body", {})
             attachment_id = body.get("attachmentId")
 
-            # Check for nested parts (multipart messages)
             if "parts" in part:
                 attachments.extend(
                     self._extract_attachments_from_parts(part["parts"], allowed_types)
                 )
 
-            # Check if this part is a matching attachment
             if attachment_id and mime_type in allowed_types and filename:
                 attachments.append(
                     {
@@ -235,15 +165,7 @@ class GmailDownloader:
         return attachments
 
     def extract_attachments(self, message: dict) -> list[dict]:
-        """
-        Extract attachment metadata from a message.
-
-        Returns list of dicts with:
-        - filename: Original filename
-        - mime_type: MIME type
-        - attachment_id: Gmail attachment ID
-        - size: Attachment size in bytes
-        """
+        """Extract attachment metadata from a message."""
         allowed_types = set(
             self.settings.get("attachment_mime_types", ["application/pdf"])
         )
@@ -252,23 +174,8 @@ class GmailDownloader:
 
         return self._extract_attachments_from_parts(parts, allowed_types)
 
-    def download_attachment(
-        self,
-        message_id: str,
-        attachment_id: str,
-        filename: str,
-    ) -> Optional[Path]:
-        """
-        Download a single attachment and save to output directory.
-
-        Args:
-            message_id: Gmail message ID
-            attachment_id: Gmail attachment ID
-            filename: Original filename
-
-        Returns:
-            Path to saved file, or None if failed
-        """
+    def download_attachment(self, message_id: str, attachment_id: str, filename: str) -> Optional[Path]:
+        """Download a single attachment. Returns path or None on failure."""
         try:
             result = (
                 self.service.users()
@@ -281,7 +188,6 @@ class GmailDownloader:
             data = result.get("data", "")
             file_data = base64.urlsafe_b64decode(data)
 
-            # Generate unique filename to avoid collisions
             output_path = self._generate_unique_path(filename)
 
             with open(output_path, "wb") as f:
@@ -295,13 +201,11 @@ class GmailDownloader:
             return None
 
     def _generate_unique_path(self, filename: str) -> Path:
-        """Generate unique output path, handling filename collisions."""
         base_path = self.output_dir / filename
 
         if not base_path.exists():
             return base_path
 
-        # Add timestamp to make unique
         stem = base_path.stem
         suffix = base_path.suffix
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
@@ -309,11 +213,9 @@ class GmailDownloader:
         return self.output_dir / f"{stem}_{timestamp}{suffix}"
 
     def _get_processed_messages_path(self) -> Path:
-        """Get path to processed messages tracking file."""
         return self.output_dir / "gmail_processed_messages.json"
 
     def load_processed_messages(self) -> set[str]:
-        """Load set of already-processed message IDs."""
         processed_file = self._get_processed_messages_path()
 
         if processed_file.exists():
@@ -322,28 +224,13 @@ class GmailDownloader:
         return set()
 
     def save_processed_messages(self, message_ids: set[str]) -> None:
-        """Save set of processed message IDs."""
         processed_file = self._get_processed_messages_path()
 
         with open(processed_file, "w") as f:
             json.dump(sorted(message_ids), f, indent=2)
 
-    def download_attachments_in_range(
-        self,
-        start_date: datetime,
-        end_date: datetime,
-        quiet: bool = False,
-    ) -> dict:
-        """
-        Download all attachments from emails in date range.
-
-        Args:
-            start_date: Start of date range
-            end_date: End of date range
-
-        Returns:
-            Stats dict with counts
-        """
+    def download_attachments_in_range(self, start_date: datetime, end_date: datetime, quiet: bool = False) -> dict:
+        """Download all attachments from emails in date range."""
         stats = {
             "messages_found": 0,
             "messages_processed": 0,
@@ -353,11 +240,9 @@ class GmailDownloader:
             "bytes_downloaded": 0,
         }
 
-        # Setup failure logging
         log_path = self.output_dir / "gmail_download_failures.log"
         self.failure_logger = setup_failure_logger(log_path)
 
-        # Build query and list messages
         query = self.build_search_query(start_date, end_date)
         logger.debug(f"Gmail search query: {query}")
 
@@ -368,14 +253,12 @@ class GmailDownloader:
         if not messages:
             return stats
 
-        # Load already processed messages
         processed_ids = set()
         if self.settings.get("skip_already_downloaded", True):
             processed_ids = self.load_processed_messages()
             if processed_ids:
                 logger.info(f"Already processed: {len(processed_ids)} messages")
 
-        # Process messages
         iterator = get_console().track(messages, "Downloading attachments") if not quiet else messages
         for msg_meta in iterator:
             msg_id = msg_meta["id"]
@@ -407,7 +290,6 @@ class GmailDownloader:
                     self.failure_logger.error(f"Failed to process message {msg_id}: {e}")
                 stats["attachments_failed"] += 1
 
-        # Save processed message IDs
         self.save_processed_messages(processed_ids)
 
         return stats
@@ -419,18 +301,7 @@ def download_gmail_attachments(
     end_date: datetime,
     quiet: bool = False,
 ) -> dict:
-    """
-    Download Gmail attachments for the specified date range.
-
-    Args:
-        output_dir: Directory to save downloaded files
-        start_date: Start of date range
-        end_date: End of date range
-        quiet: If True, suppress tqdm progress bars
-
-    Returns:
-        Download statistics dict
-    """
+    """Download Gmail attachments for the specified date range."""
     paths = get_gmail_config_paths()
 
     downloader = GmailDownloader(
