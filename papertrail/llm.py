@@ -6,7 +6,7 @@ from datetime import datetime
 from typing import Any, Optional
 
 from papertrail.logging_utils import get_logger, DocumentLogger
-from papertrail.models import DocumentMetadataRaw, DOCUMENT_TYPES, ISSUING_PARTIES
+from papertrail.models import DocumentMetadataRaw, DOCUMENT_TYPES
 from papertrail.qr.models import QRExtractedMetadata
 
 logger = get_logger('llm')
@@ -170,7 +170,6 @@ def get_system_prompt_raw_extraction(pre_extracted: dict[str, Any] | None = None
         "\n"
         "For your orientation, here are the typical canonical values we work with:\n"
         f"- Document types: {', '.join(DOCUMENT_TYPES[:20])}{'...' if len(DOCUMENT_TYPES) > 20 else ''}\n"
-        f"- Issuing parties: {', '.join(ISSUING_PARTIES[:30])}{'...' if len(ISSUING_PARTIES) > 30 else ''}\n"
         "\n"
         "NOTE: These lists are just for orientation. Always extract the EXACT text as it appears on the document, "
         "even if it doesn't match these canonical values. The raw text will be normalized in a later step.\n"
@@ -228,23 +227,24 @@ Given:
 Available canonical document types:
 {', '.join(DOCUMENT_TYPES)}
 
-Available canonical issuing parties:
-{', '.join(ISSUING_PARTIES)}
-
 Task:
 1. Map the raw document_type to the MOST APPROPRIATE canonical document type from the list
-2. Map the raw issuing_party to the MOST APPROPRIATE canonical issuing party from the list
+2. Normalize the raw issuing_party to a clean, short canonical form
 
-Rules:
+Rules for document_type:
 - If no good match exists, use "$UNKNOWN$"
-- Be flexible with variations (e.g., "Anthropic, PBC" -> "Anthropic", "Invoice" -> "invoice")
-- Consider common abbreviations and full names
 - Preserve the EXACT canonical value (case-sensitive)
+
+Rules for issuing_party:
+- Produce a clean, short company/entity name (e.g., "Anthropic, PBC" -> "Anthropic", "Amazon Web Services, Inc." -> "Amazon")
+- Strip legal suffixes (Inc., Ltd., S.A., Lda., PBC, etc.)
+- Use the most recognizable short form of the name
+- If the raw value is empty or truly unidentifiable, use "$UNKNOWN$"
 
 Respond in JSON format:
 {{
     "document_type": "canonical_value",
-    "issuing_party": "canonical_value",
+    "issuing_party": "normalized_name",
     "reasoning": "Brief explanation of mappings"
 }}
 """
@@ -278,13 +278,10 @@ Respond in JSON format:
         doc_type = result.get("document_type", "$UNKNOWN$")
         issuing_party = result.get("issuing_party", "$UNKNOWN$")
 
-        # Validate that the returned values are actually in the canonical lists
+        # Validate document_type against canonical list
         if doc_type not in DOCUMENT_TYPES:
             logger.warning(f"Rejected doc_type '{doc_type}' (not in canonical list)")
             doc_type = "$UNKNOWN$"
-        if issuing_party not in ISSUING_PARTIES:
-            logger.warning(f"Rejected issuing_party '{issuing_party}' (not in canonical list)")
-            issuing_party = "$UNKNOWN$"
 
         if doc_logger:
             doc_logger.log_normalization("document_type", raw_metadata.document_type, doc_type)

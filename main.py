@@ -82,6 +82,7 @@ from papertrail.tasks import (
     task_gmail_download,
     pipeline,
     task_qr_inventory,
+    task_reconcile,
     task_log_context,
 )
 
@@ -272,7 +273,7 @@ def main():
         'gmail_download',
         'backfill_page_count',
         'fix_unicode', 'sync', 'validate_extraction',
-        'qr_inventory'
+        'qr_inventory', 'reconcile'
     ], help="Task to perform (default: pipeline).")
     parser.add_argument("processed_path", type=str, nargs='?', help="Path to output folder.")
     parser.add_argument("--raw_path", type=str, help="Path to documents folder(s). Use ';' to separate multiple paths.")
@@ -290,7 +291,8 @@ def main():
     parser.add_argument("--all_unknown", action="store_true", help="Re-extract all files with $UNKNOWN$ values (for sync).")
     parser.add_argument("--workers", "-w", type=int, default=1, help="Number of parallel workers for sync (default: 1).")
     parser.add_argument("--all", action="store_true", help="Process all matching PDFs, not just those missing metadata (for sync).")
-    parser.add_argument("--export_path", type=str, help="Path to export folder for qr_inventory task.")
+    parser.add_argument("--export_path", type=str, help="Path to export folder for qr_inventory/reconcile tasks.")
+    parser.add_argument("--excel_path", type=str, help="Path to transactions Excel file (for reconcile task).")
     parser.add_argument("--no_resume", action="store_true", help="Don't resume from checkpoint (for qr_inventory).")
     args = parser.parse_args()
 
@@ -343,6 +345,12 @@ def main():
     if args.task == "qr_inventory":
         export = require_path(parser, args.export_path or get_profile_path("export"), "export_path")
         task_qr_inventory(export, resume=not args.no_resume)
+        return
+
+    if args.task == "reconcile":
+        export = require_path(parser, args.export_path or get_profile_path("export"), "export_path")
+        excel = Path(args.excel_path) if args.excel_path else None
+        task_reconcile(export, excel_path=excel, dry_run=args.dry_run)
         return
 
     processed_path = require_path(parser, args.processed_path or get_profile_path("processed"), "processed_path")

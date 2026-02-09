@@ -10,10 +10,8 @@ from pydantic import BaseModel, Field, field_validator
 from papertrail.enums import (
     clean_enum_string,
     load_document_types,
-    load_issuing_parties,
     create_dynamic_enum,
     get_document_types,
-    get_issuing_parties,
 )
 from papertrail.logging_utils import get_logger
 
@@ -22,15 +20,13 @@ logger = get_logger('models')
 
 # Load enum values at module level for initial type annotations
 DOCUMENT_TYPES = load_document_types()
-ISSUING_PARTIES = load_issuing_parties()
 
 # Create dynamic enums for Pydantic type annotations
 DocumentType = create_dynamic_enum('DocumentType', DOCUMENT_TYPES)
-IssuingParty = create_dynamic_enum('IssuingParty', ISSUING_PARTIES)
 
 
 def _validate_enum_field(value, enum_name: str, getter, field_label: str):
-    """Shared validator for enum fields (issuing_party, document_type)."""
+    """Validator for enum fields (e.g. document_type)."""
     if value is None or (isinstance(value, str) and value.strip() == ""):
         return "$UNKNOWN$"
     if isinstance(value, str):
@@ -88,7 +84,7 @@ class DocumentMetadata(BaseModel):
 
     # Document fields
     document_type: DocumentType = Field(description="Type of document.")
-    issuing_party: IssuingParty = Field(description="Issuer name.")
+    issuing_party: str = Field(description="Issuer name.")
     total_amount: Optional[float] = Field(default=None, description="Total currency amount.")
     total_amount_currency: Optional[str] = Field(default=None, description="Currency of the total amount.")
 
@@ -122,11 +118,6 @@ class DocumentMetadata(BaseModel):
             if "future" in str(e):
                 raise
         return value
-
-    @field_validator('issuing_party', mode='before')
-    @classmethod
-    def validate_issuing_party(cls, value):
-        return _validate_enum_field(value, "IssuingParty", get_issuing_parties, "issuing_party")
 
     @field_validator('document_type', mode='before')
     @classmethod

@@ -17,6 +17,8 @@ from rich.progress import (
 from rich.rule import Rule
 from rich.table import Table
 
+from papertrail.logging_utils import suppress_console_logging
+
 
 @dataclass
 class StepResult:
@@ -189,16 +191,14 @@ class PapertrailConsole:
         ctx = StepContext()
 
         with self.console.status(f"[cyan]{message}[/cyan]", spinner="dots") as status:
-            try:
-                yield ctx
-            except Exception:
-                # If an exception occurs and no status was set, mark as error
-                if ctx.result.status == "pending":
-                    ctx.error("Failed with exception")
-                raise
-            finally:
-                # Clear the status line - the final message will be printed below
-                pass
+            with suppress_console_logging():
+                try:
+                    yield ctx
+                except Exception:
+                    # If an exception occurs and no status was set, mark as error
+                    if ctx.result.status == "pending":
+                        ctx.error("Failed with exception")
+                    raise
 
         # Print the final result line
         result = ctx.result
