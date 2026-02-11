@@ -8,6 +8,7 @@
 profile:
   name: "default"
   description: "Default configuration for papertrail"
+  tax_number: "123456789"  # Your tax number (NIF) — used in export rules with ${profile.tax_number}
 
 # Directory paths for document processing
 paths:
@@ -74,6 +75,36 @@ validations:
 pipeline:
   tools_required: ["archive-extractor"]
   default_export_date: "last_month"
+
+# Export settings
+export:
+  # Warn during export when a file exceeds this size (in MB). null = no warning.
+  max_file_size_mb: 3
+  file_mappings:
+    enabled: true
+    default_prefix: "DIV_"
+    filename_fields: [date_issued, issuing_party, document_title]
+    rules:
+      # Vendor: I issued this invoice (my tax number is the issuer)
+      - match:
+          document_type: "invoice"
+          issuer_tax_number: "${profile.tax_number}"
+        prefix: "VND_"
+      - match:
+          document_type: "invoice-receipt"
+          issuer_tax_number: "${profile.tax_number}"
+        prefix: "VND_"
+      # Company: I received this invoice (someone else is the issuer)
+      - match:
+          document_type: "invoice"
+        prefix: "CMP_"
+      - match:
+          document_type: "invoice-receipt"
+        prefix: "CMP_"
+      # Bank statements
+      - match:
+          document_type: "bank-*"
+        prefix: "BNC_"
 
 # Task-specific defaults (optional)
 task_defaults: {}

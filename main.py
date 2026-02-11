@@ -241,7 +241,10 @@ def main():
     elif task == "export_all_dates":
         export_base_dir = args.export_base_dir or os.getenv("EXPORT_FILES_DIR")
         export_dir = require_path(parser, export_base_dir, "export_base_dir", create_if_missing=True)
-        task_export_all_dates(processed_path, export_dir, args.run_merge)
+        profile_context = None
+        if profile.profile.tax_number:
+            profile_context = {"tax_number": profile.profile.tax_number}
+        task_export_all_dates(processed_path, export_dir, args.run_merge, export_config=profile.export, profile_context=profile_context)
 
     elif task == "check_files_exist":
         check_schema_path = args.check_schema_path

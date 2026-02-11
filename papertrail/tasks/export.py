@@ -134,6 +134,8 @@ def task_export_all_dates(
     processed_path: Path,
     export_base_dir: Path,
     run_merge: bool = False,
+    export_config=None,
+    profile_context: dict | None = None,
 ):
     """Export files for all unique dates found in processed files."""
     console = get_console()
@@ -162,7 +164,7 @@ def task_export_all_dates(
         if export_date_dir.exists():
             shutil.rmtree(export_date_dir)
 
-        stats = copy_matching_files(processed_path, date, export_date_dir, incremental=False)
+        stats = copy_matching_files(processed_path, date, export_date_dir, incremental=False, export_config=export_config, profile_context=profile_context)
         total_copied += stats['copied']
         total_skipped += stats['skipped']
 

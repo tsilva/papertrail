@@ -38,6 +38,7 @@ class ProfileMetadata:
     """Profile metadata (name, description)."""
     name: str
     description: str = ""
+    tax_number: Optional[str] = None
 
 
 @dataclass
@@ -121,6 +122,7 @@ class ExportFileMappingsConfig:
 @dataclass
 class ExportConfig:
     """Export configuration."""
+    max_file_size_mb: Optional[float] = None
     file_mappings: ExportFileMappingsConfig = field(default_factory=ExportFileMappingsConfig)
 
 
@@ -248,7 +250,8 @@ def _parse_profile_dict(data: Dict[str, Any], profile_path: Path) -> Profile:
 
     profile_meta = ProfileMetadata(
         name=profile_meta_data["name"],
-        description=profile_meta_data.get("description", "")
+        description=profile_meta_data.get("description", ""),
+        tax_number=profile_meta_data.get("tax_number"),
     )
 
     paths_data = data.get("paths", {})
@@ -320,7 +323,10 @@ def _parse_profile_dict(data: Dict[str, Any], profile_path: Path) -> Profile:
         filename_fields=fm_data.get("filename_fields"),
         rules=export_rules,
     )
-    export_config = ExportConfig(file_mappings=export_file_mappings)
+    export_config = ExportConfig(
+        max_file_size_mb=export_data.get("max_file_size_mb"),
+        file_mappings=export_file_mappings,
+    )
 
     return Profile(
         profile=profile_meta,
