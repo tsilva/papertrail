@@ -21,7 +21,7 @@ from papertrail.profiles import (
     ProfileNotFoundError,
     ProfileError,
 )
-from papertrail.enums import reset_enum_cache
+from papertrail.enums import reset_enum_cache, reset_session_cache
 from papertrail.nif_lookup import NIFLookupCache
 from papertrail.logging_utils import setup_logging, get_logger
 from papertrail.console import get_console
@@ -109,6 +109,7 @@ def initialize_config(profile_name: Optional[str] = None) -> None:
 
     set_current_profile(profile)
     reset_enum_cache()
+    reset_session_cache()
 
     from papertrail.config import check_api_accessibility
     base_url = profile.openrouter.base_url

@@ -28,20 +28,21 @@ These are core constraints that must be preserved in all changes:
 ### Four-Phase Extraction Pipeline
 1. **Phase 0 - QR Extraction** (optional): Scans PDF for QR codes, extracts metadata with 100% confidence (e.g., Portuguese invoice QR codes)
 2. **Phase 1 - Raw Extraction** (`classify_pdf_document`): Renders first 2 pages as JPEG, sends to LLM with vision. For `issuing_party`, extracts EXACTLY as appears. For `document_type`, extracts only the core type label (strips dates, billing periods, reference numbers). For `document_title`, extracts the specific subject/product/service/transaction (e.g., "YouTube Premium", "Claude API")
-3. **Phase 2 - Normalization** (`normalize_metadata`): LLM maps raw values to canonical enums, validates against allowed lists, falls back to `$UNKNOWN$`
+3. **Phase 2 - Normalization** (`normalize_metadata`): LLM maps raw values to known types/parties from processed files. For new values, suggests a slug-cased name instead of falling back to `$UNKNOWN$`
 4. **Phase 3 - Merge**: QR-extracted values override LLM values (QR is 100% accurate)
-5. **Phase 4 - NIF Enrichment** (optional): If tax number present, looks up official issuer name via nif.pt web scraping
+5. **Phase 2b - Interactive Confirmation** (`confirm_classification`): If normalized value is not in known types/parties, prompts user to accept, pick existing, enter custom, or skip. Bypassed for QR-overridden document_type and NIF-enriched issuing_party (both 100% accurate). Session caching prevents re-asking for the same value within a run.
+6. **Phase 4 - NIF Enrichment** (optional): If tax number present, looks up official issuer name via nif.pt web scraping. Auto-accepted (no interactive confirmation).
 
-### Normalization (LLM-Based)
-Every extraction uses the LLM to normalize raw values to canonical forms:
+### Normalization (LLM + Interactive)
+Every extraction uses the LLM to normalize raw values. Known values (from processed files) are matched directly. New values trigger interactive confirmation:
 
 ```
-Raw: "Anthropic, PBC" → LLM → "anthropic" (validated against enum list)
-Raw: "New Vendor Inc" → LLM → "new-vendor" (validated against enum list)
-Raw: "Unknown Corp" → LLM → "xyz" (not in enum) → "$UNKNOWN$" (fallback)
+Raw: "Anthropic, PBC" → LLM → "anthropic" (known) → auto-accepted
+Raw: "New Vendor Inc" → LLM → "new-vendor" (new) → interactive prompt → user confirms
+Raw: "Unknown Corp" → LLM → "unknown-corp" (new) → user picks [s]kip → "$UNKNOWN$"
 ```
 
-The LLM receives the full list of canonical document types and issuing parties, and maps raw values to the best match. Values not in the canonical list are rejected and fall back to `$UNKNOWN$`.
+The LLM receives all known document types and issuing parties (scanned from processed JSON files). No fixed canonical list — processed files are the sole source of truth. Session-confirmed values are remembered within a run to avoid repeated prompts.
 
 ### Two-Tier Hashing
 - **Fast hash** (`hash_file_fast`): SHA256 of raw bytes, 8 chars - for quick duplicate filtering
@@ -161,7 +162,7 @@ nif_api:
 **Logging markers:** `[NIF-CACHE-HIT]`, `[NIF-WEB-LOOKUP]`, `[NIF-NOT-FOUND]`, `[NIF-ENRICH]`
 
 ### Dynamic Enums
-Document types and issuing parties are loaded dynamically from existing metadata JSON files in the processed directory. Falls back to hardcoded lists if directory doesn't exist. Always includes `$UNKNOWN$` sentinel.
+Document types and issuing parties are loaded dynamically from existing metadata JSON files in the processed directory. No fixed canonical list — processed files are the sole source of truth. Session-confirmed values (from interactive prompts within a run) are also included. Always includes `$UNKNOWN$` sentinel.
 
 ## Key Files
 
@@ -172,6 +173,7 @@ Document types and issuing parties are loaded dynamically from existing metadata
 | `papertrail/llm.py` | LLM classification | `normalize_metadata` with LLM normalization |
 | `papertrail/logging_utils.py` | Logging infrastructure | `setup_task_logging`, `DocumentLogger`, `setup_logging` |
 | `papertrail/hashing.py` | File hashing | `HashCache`, `hash_file_fast`, `hash_file_content` |
+| `papertrail/interactive.py` | Interactive classification prompts | `confirm_classification`, `set_interactive` |
 | `papertrail/nif_lookup.py` | NIF → issuer lookup | `NIFLookupCache` class |
 | `scripts/check_hash.py` | Verify hashes | CLI: `check-hash` |
 | `papertrail/gmail.py` | Gmail API client | `GmailDownloader`, `download_gmail_attachments` |

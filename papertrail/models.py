@@ -9,8 +9,6 @@ from pydantic import BaseModel, Field, field_validator
 
 from papertrail.enums import (
     clean_enum_string,
-    load_document_types,
-    create_dynamic_enum,
     get_document_types,
 )
 from papertrail.logging_utils import get_logger
@@ -18,15 +16,8 @@ from papertrail.logging_utils import get_logger
 logger = get_logger('models')
 
 
-# Load enum values at module level for initial type annotations
-DOCUMENT_TYPES = load_document_types()
-
-# Create dynamic enums for Pydantic type annotations
-DocumentType = create_dynamic_enum('DocumentType', DOCUMENT_TYPES)
-
-
-def _validate_enum_field(value, enum_name: str, getter, field_label: str):
-    """Validator for enum fields (e.g. document_type)."""
+def _normalize_to_known(value, enum_name: str, getter, field_label: str):
+    """Normalize a value to its known canonical form, or pass through as-is if new."""
     if value is None or (isinstance(value, str) and value.strip() == ""):
         return "$UNKNOWN$"
     if isinstance(value, str):
@@ -34,10 +25,10 @@ def _validate_enum_field(value, enum_name: str, getter, field_label: str):
         valid = getter()
         valid_lower = {v.lower(): v for v in valid}
         value_lower = value.lower()
-        if value_lower not in valid_lower:
-            logger.warning(f"Pydantic rejected {field_label} '{value}' - not in enum")
-            return "$UNKNOWN$"
-        return valid_lower[value_lower]
+        if value_lower in valid_lower:
+            return valid_lower[value_lower]
+        # New value — pass through (will be confirmed interactively downstream)
+        return value
     return value
 
 
@@ -68,7 +59,7 @@ class DocumentMetadata(BaseModel):
     date_created: Optional[str] = Field(default=None)
     date_issued: str = Field(description="Date issued, format: YYYY-MM-DD.")
     date_updated: Optional[str] = Field(default=None)
-    document_type: DocumentType = Field(description="Type of document.")
+    document_type: str = Field(description="Type of document.")
     issuing_party: str = Field(description="Issuer name.")
     total_amount: Optional[float] = Field(default=None)
     total_amount_currency: Optional[str] = Field(default=None)
@@ -101,7 +92,7 @@ class DocumentMetadata(BaseModel):
     @field_validator('document_type', mode='before')
     @classmethod
     def validate_document_type(cls, value):
-        return _validate_enum_field(value, "DocumentType", get_document_types, "document_type")
+        return _normalize_to_known(value, "DocumentType", get_document_types, "document_type")
 
     @field_validator('total_amount', mode='before')
     @classmethod
