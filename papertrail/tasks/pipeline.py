@@ -77,8 +77,6 @@ def pipeline(export_date_arg=None, processed_path_override=None):
     warnings: list[str] = []
     summary: dict[str, str] = {}
     output_paths: list[tuple[str, str]] = []
-    total_copied = 0
-    total_copy_months = 0
 
     # ── Stage 1: Ingest raw files ──
 
@@ -117,8 +115,8 @@ def pipeline(export_date_arg=None, processed_path_override=None):
 
     for rd in raw_dirs:
         # Mbox extraction
-        with console.step_progress("Google Takeout mbox extraction") as step:
-            logger.debug("### Google Takeout mbox extraction...")
+        with console.step_progress("Extract mbox attachments") as step:
+            logger.debug("### Extract mbox attachments...")
             stats = extract_mbox_attachments(rd)
             if stats['mbox_files'] > 0:
                 step.success(f"{stats['mbox_files']} mbox file(s), {stats['attachments_extracted']} attachment(s)")
@@ -129,13 +127,13 @@ def pipeline(export_date_arg=None, processed_path_override=None):
                 warnings.append(msg)
             if stats['errors']:
                 step.error(f"{len(stats['errors'])} error(s)")
-                logger.error(f"Google Takeout mbox extraction encountered {len(stats['errors'])} error(s)")
+                logger.error(f"Extract mbox attachments encountered {len(stats['errors'])} error(s)")
                 sys.exit(1)
-            logger.debug("### Google Takeout mbox extraction... Finished.")
+            logger.debug("### Extract mbox attachments... Finished.")
 
         # Archive extraction
-        with console.step_progress("Google Takeout archive extraction") as step:
-            logger.debug("### Google Takeout archive extraction...")
+        with console.step_progress("Extract compressed archives") as step:
+            logger.debug("### Extract compressed archives...")
             with suppress_stdout():
                 results = extract_archives(rd, passwords=passwords if passwords else None)
             total_extracted = 0
@@ -153,13 +151,13 @@ def pipeline(export_date_arg=None, processed_path_override=None):
                 step.warning(f"{failures} archive(s) failed")
             else:
                 step.warning("No archives found")
-            logger.debug("### Google Takeout archive extraction... Finished.")
+            logger.debug("### Extract compressed archives... Finished.")
 
     # ── Stage 2: Extract new documents ──
 
     from papertrail.tasks.extraction import task_extract_new
 
-    with console.step_progress("Extract new documents") as step:
+    with console.step_progress("Classify new documents") as step:
         try:
             extract_stats = task_extract_new(
                 Path(PROCESSED_FILES_DIR), [Path(d) for d in raw_dirs], quiet=True,
@@ -206,13 +204,13 @@ def pipeline(export_date_arg=None, processed_path_override=None):
 
         # Update summary
         if extract_stats["new"] > 0 or extract_stats["duplicates"] > 0:
-            summary["Extracted"] = f"{extract_stats['new']} new, {extract_stats['duplicates']} duplicates"
+            summary["Classified"] = f"{extract_stats['new']} new, {extract_stats['duplicates']} duplicates"
 
     # ── Stage 3: Sync orphans ──
 
     from papertrail.tasks.extraction import task_sync
 
-    with console.step_progress("Sync orphans") as step:
+    with console.step_progress("Sync orphaned metadata") as step:
         try:
             sync_stats = task_sync(Path(PROCESSED_FILES_DIR), quiet=True)
             orphans = sync_stats.get("targets", 0)
@@ -229,7 +227,7 @@ def pipeline(export_date_arg=None, processed_path_override=None):
 
     from papertrail.tasks.organization import task_rename_files
 
-    with console.step_progress("Rename files") as step:
+    with console.step_progress("Sync filenames to metadata") as step:
         try:
             rename_stats = task_rename_files(Path(PROCESSED_FILES_DIR), quiet=True)
             step.success(f"{rename_stats['validated']} validated, {rename_stats['renamed']} renamed")
@@ -275,7 +273,7 @@ def pipeline(export_date_arg=None, processed_path_override=None):
         if os.path.exists(export_date_dir):
             shutil.rmtree(export_date_dir)
 
-        with console.step_progress(f"Copy matching documents ({export_date})") as step:
+        with console.step_progress(f"Export documents ({export_date})") as step:
             try:
                 copy_stats = copy_matching_files(
                     Path(PROCESSED_FILES_DIR),
@@ -283,11 +281,10 @@ def pipeline(export_date_arg=None, processed_path_override=None):
                     Path(export_date_dir),
                     export_config=export_file_config,
                     profile_context=profile_context,
+                    quiet=True,
                 )
                 copied = copy_stats.get('copied', 0)
-                total_copied += copied
                 if copied:
-                    total_copy_months += 1
                     step.success(f"{copied} files")
                 else:
                     step.success("0 files")
@@ -323,9 +320,6 @@ def pipeline(export_date_arg=None, processed_path_override=None):
 
         output_paths.append(("Export", str(export_date_dir)))
 
-    if total_copied > 0:
-        summary["Copied"] = f"{total_copied} files across {total_copy_months} month{'s' if total_copy_months != 1 else ''}"
-
     # ── Stage 8: Reconcile bank statements (runs last) ──
 
     from papertrail.tasks.reconciliation import _discover_bank_statements, _reconcile_single
@@ -350,7 +344,7 @@ def pipeline(export_date_arg=None, processed_path_override=None):
             if period and len(period) >= 7:
                 period = period[:7]
 
-            with console.step_progress(f"Reconcile: {account} ({period})") as step:
+            with console.step_progress(f"Match bank transactions: {account} ({period})") as step:
                 try:
                     recon_stats = _reconcile_single(
                         Path(export_date_dir), bs_path, dry_run=False,
@@ -375,7 +369,7 @@ def pipeline(export_date_arg=None, processed_path_override=None):
         total_txns = sum(s["total"] for s in recon_stats_all)
         if total_txns > 0:
             avg_rate = total_matched / total_txns * 100
-            summary["Reconciled"] = (
+            summary["Matched"] = (
                 f"{total_statements} statement{'s' if total_statements != 1 else ''}, "
                 f"{avg_rate:.0f}% matched ({total_matched}/{total_txns})"
             )
