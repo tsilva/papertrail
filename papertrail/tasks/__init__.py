@@ -42,7 +42,6 @@ from papertrail.tasks.organization import (
 from papertrail.tasks.validation import (
     validate_metadata,
     validate_merged_pdf,
-    check_files_exist,
     task_backfill_page_count,
     task_fix_unicode,
 )

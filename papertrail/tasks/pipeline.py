@@ -21,7 +21,7 @@ logger = get_logger('cli')
 
 def pipeline(export_date_arg=None, processed_path_override=None):
     """Run the full document processing pipeline."""
-    from papertrail.config import get_passwords, resolve_validations_file
+    from papertrail.config import get_passwords
 
     console = get_console()
     start_time = time.time()
@@ -69,10 +69,6 @@ def pipeline(export_date_arg=None, processed_path_override=None):
     passwords, _ = get_passwords()
     if not passwords:
         logger.debug("No passwords configured. Password-protected archives will be skipped.")
-
-    validations_file_path, temp_validations_file = resolve_validations_file()
-    if validations_file_path:
-        logger.debug(f"Using validations file: {validations_file_path}")
 
     processed_files_excel_path = Path(PROCESSED_FILES_DIR) / "processed_files.xlsx"
 
@@ -189,15 +185,12 @@ def pipeline(export_date_arg=None, processed_path_override=None):
             sys.exit(1)
 
     from papertrail.tasks.organization import copy_matching_files
-    from papertrail.tasks.validation import check_files_exist
 
     export_file_config = profile.export
 
     profile_context = None
     if profile.profile.tax_number:
         profile_context = {"tax_number": profile.profile.tax_number}
-
-    all_validation_missing_items = []
 
     for export_date in export_dates:
         export_date_dir = os.path.join(EXPORT_FILES_DIR, export_date)
@@ -240,36 +233,7 @@ def pipeline(export_date_arg=None, processed_path_override=None):
         with suppress_console_logging():
             validate_merged_pdf(Path(export_date_dir))
 
-        # Stage 7: Validate exported files
-        with console.step_progress(f"Validate exported files ({export_date})") as step:
-            if validations_file_path:
-                try:
-                    stats = check_files_exist(
-                        Path(export_date_dir), Path(validations_file_path), quiet=True
-                    )
-                    if stats['all_passed']:
-                        step.success(f"{stats['passed']} checks passed")
-                    else:
-                        step.warning(f"{stats['passed']} checks passed, {stats['missing']} missing")
-                        all_validation_missing_items.extend(stats['missing_items'])
-                except Exception as e:
-                    step.error(str(e))
-                    sys.exit(1)
-            else:
-                step.warning("Skipped (no validation rules configured)")
-                logger.debug("Skipping file validation (no validation rules configured in profile)")
-
-    for item in all_validation_missing_items:
-        console.warning(item)
-
-    if temp_validations_file:
-        try:
-            os.unlink(temp_validations_file)
-            logger.debug(f"Cleaned up temporary validations file: {temp_validations_file}")
-        except Exception as e:
-            logger.debug(f"Failed to cleanup temporary validations file: {e}")
-
-    # Stage 8: Reconcile bank statements (runs last, after all validation)
+    # Stage 7: Reconcile bank statements (runs last)
     from papertrail.tasks.reconciliation import _discover_bank_statements, _reconcile_single
     for export_date in export_dates:
         export_date_dir = os.path.join(EXPORT_FILES_DIR, export_date)

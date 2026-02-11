@@ -112,34 +112,6 @@ def get_passwords() -> tuple[list[str], str | None]:
     return ([], None)
 
 
-def get_validations() -> tuple[dict, str | None]:
-    """Get file validation rules from profile."""
-    from papertrail.profiles import get_validations_from_profile
-
-    profile = get_current_profile()
-    if profile:
-        return get_validations_from_profile(profile)
-    return ({}, None)
-
-
-def resolve_validations_file() -> tuple[str | None, str | None]:
-    """Resolve validation rules to a file path, creating temp file if needed."""
-    import json
-    import tempfile
-
-    validations, validations_file = get_validations()
-    if not validations or not validations.get('rules'):
-        return None, None
-
-    if validations_file:
-        return validations_file, None
-
-    temp = tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.json')
-    json.dump(validations['rules'], temp, indent=2)
-    temp.close()
-    return temp.name, temp.name
-
-
 def check_api_accessibility(base_url: str, timeout: int = 10) -> bool:
     """Check if the API base URL is accessible."""
     import urllib.request
