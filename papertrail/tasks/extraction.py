@@ -24,7 +24,7 @@ from papertrail.llm import (
     get_qr_exclusions,
 )
 from papertrail.pdf import render_pdf_to_images, find_pdf_files, find_document_files, get_page_count
-from papertrail.metadata import build_hash_index, save_metadata_json, load_json_data
+from papertrail.metadata import build_hash_index, save_metadata_json, load_json_data, iter_json_files
 from papertrail.hashing import hash_file_fast, hash_file_content
 
 def enum_value(v):
@@ -271,7 +271,7 @@ def classify_pdf_document(pdf_path: Path, file_hash: str, failure_logger=None,
         raise RuntimeError(f"Classification failed for: {pdf_path}") from e
 
 
-def task_extract_new(processed_path: Path, raw_paths: list[Path]):
+def task_extract_new(processed_path: Path, raw_paths: list[Path], quiet: bool = False) -> dict | None:
     """Extract and classify new PDF files."""
     lock_path = Path(__file__).parents[1].parent / ".cache" / ".extract.lock"
     lock_path.parent.mkdir(parents=True, exist_ok=True)
@@ -281,9 +281,9 @@ def task_extract_new(processed_path: Path, raw_paths: list[Path]):
     except OSError:
         logger.error("Another extract_new process is already running. Exiting.")
         lock_file.close()
-        return
+        return None
     try:
-        _task_extract_new_locked(processed_path, raw_paths)
+        return _task_extract_new_locked(processed_path, raw_paths, quiet=quiet)
     finally:
         fcntl.flock(lock_file, fcntl.LOCK_UN)
         lock_file.close()
@@ -293,11 +293,13 @@ def _process_xlsx_files(xlsx_paths: list[Path], known_file_hashes: set,
                         known_content_hashes: set, processed_path: Path,
                         console) -> tuple[int, int]:
     """Process XLSX files (bank statements). Returns (processed, skipped)."""
+    import warnings
     from papertrail.bank_statement import classify_bank_statement
     from papertrail.tasks.organization import file_name_from_metadata
 
     processed_count = 0
     skipped_count = 0
+    warnings.filterwarnings("ignore", message="Workbook contains no default style")
 
     for xlsx_path in console.track(xlsx_paths, "Processing XLSX"):
         file_hash = hash_file_fast(xlsx_path)
@@ -329,13 +331,13 @@ def _process_xlsx_files(xlsx_paths: list[Path], known_file_hashes: set,
     return processed_count, skipped_count
 
 
-def _task_extract_new_locked(processed_path: Path, raw_paths: list[Path]):
+def _task_extract_new_locked(processed_path: Path, raw_paths: list[Path], quiet: bool = False) -> dict:
     """Extract and classify new PDF files (lock already held)."""
     from papertrail.tasks.organization import rename_pdf_files
 
     console = get_console()
 
-    with task_log_context(processed_path, "extract_new"):
+    with task_log_context(processed_path, "extract_new", show_header=not quiet):
         logs_dir = processed_path / "logs"
         failure_log_path = logs_dir / "classification_failures.log"
         failure_logger = setup_failure_logger(failure_log_path)
@@ -345,9 +347,10 @@ def _task_extract_new_locked(processed_path: Path, raw_paths: list[Path]):
         run_start = _time.monotonic()
 
         logger.debug("Building hash index from metadata files...")
-        known_content_hashes_idx, known_file_hashes_idx = build_hash_index(processed_path)
+        known_content_hashes_idx, known_file_hashes_idx, known_issuers_before = build_hash_index(processed_path)
         known_content_hashes = set(known_content_hashes_idx.keys())
         known_file_hashes = set(known_file_hashes_idx.keys())
+        hashes_before = set(known_content_hashes)
 
         # Discover all document files (PDF + XLSX)
         all_doc_paths = find_document_files(raw_paths)
@@ -358,12 +361,13 @@ def _task_extract_new_locked(processed_path: Path, raw_paths: list[Path]):
 
         # Process XLSX files first (deterministic, fast)
         xlsx_processed = 0
+        xlsx_skipped = 0
         if xlsx_paths:
             xlsx_processed, xlsx_skipped = _process_xlsx_files(
                 xlsx_paths, known_file_hashes, known_content_hashes,
                 processed_path, console,
             )
-            if xlsx_processed > 0:
+            if not quiet and xlsx_processed > 0:
                 console.success(f"{xlsx_processed} XLSX file(s) processed", indent=False)
 
         # Process PDF files
@@ -380,10 +384,24 @@ def _task_extract_new_locked(processed_path: Path, raw_paths: list[Path]):
         logger.debug(f"Skipped {already_processed} already-processed files")
         logger.debug(f"{len(potentially_new)} files need content-based hashing")
 
+        pdf_duplicates = len(pdf_paths) - len(potentially_new)
+
         if not potentially_new:
-            console.success(f"{len(pdf_paths)} PDFs scanned, 0 new to process", indent=False)
+            if not quiet:
+                console.success(f"{len(pdf_paths)} PDFs scanned, 0 new to process", indent=False)
             logger.debug("No new PDFs to process.")
-            return
+            return {
+                "pdf_scanned": len(pdf_paths),
+                "xlsx_scanned": len(xlsx_paths),
+                "new": xlsx_processed,
+                "duplicates": pdf_duplicates + xlsx_skipped,
+                "failed": 0,
+                "xlsx_new": xlsx_processed,
+                "pdf_new": 0,
+                "new_issuers": [],
+                "unknown_document_type": 0,
+                "unknown_issuing_party": 0,
+            }
 
         logger.debug(f"Stage 2: Content-based hashing for {len(potentially_new)} new files...")
         content_hash_map = {}
@@ -397,6 +415,7 @@ def _task_extract_new_locked(processed_path: Path, raw_paths: list[Path]):
                 logger.error(f"Error hashing {pdf.name}: {e}")
 
         files_to_process = [pdf for pdf in potentially_new if content_hash_map.get(pdf) not in known_content_hashes]
+        content_duplicates = len(potentially_new) - len(files_to_process)
         logger.debug(f"Found {len(files_to_process)} truly new PDFs to process.")
 
         success_count = len(known_content_hashes)
@@ -410,15 +429,47 @@ def _task_extract_new_locked(processed_path: Path, raw_paths: list[Path]):
         failed = len(files_to_process) - new_processed
         elapsed = _time.monotonic() - run_start
 
+        # Scan newly created files for new issuers and unknowns
+        new_hashes = known_content_hashes - hashes_before
+        new_issuers: set[str] = set()
+        unknown_dt_count = 0
+        unknown_ip_count = 0
+        if new_hashes:
+            for json_path, data in iter_json_files(processed_path):
+                ch = data.get("hash_content")
+                if ch not in new_hashes:
+                    continue
+                ip = data.get("issuing_party")
+                if ip and ip != "$UNKNOWN$" and ip not in known_issuers_before:
+                    new_issuers.add(ip)
+                if data.get("document_type") == "$UNKNOWN$":
+                    unknown_dt_count += 1
+                if ip == "$UNKNOWN$":
+                    unknown_ip_count += 1
+
         # Console output
-        console.success(f"{len(pdf_paths)} PDFs scanned, {len(files_to_process)} new to process", indent=False)
-        if new_processed > 0 or failed > 0:
-            if failed > 0:
-                console.warning(f"{new_processed} processed, {failed} failed", indent=False)
-            else:
-                console.success(f"{new_processed} processed successfully", indent=False)
+        if not quiet:
+            console.success(f"{len(pdf_paths)} PDFs scanned, {len(files_to_process)} new to process", indent=False)
+            if new_processed > 0 or failed > 0:
+                if failed > 0:
+                    console.warning(f"{new_processed} processed, {failed} failed", indent=False)
+                else:
+                    console.success(f"{new_processed} processed successfully", indent=False)
 
         logger.debug(f"=== SUMMARY: {len(files_to_process)} attempted, {new_processed} success, {failed} failed, {elapsed:.1f}s total ===")
+
+        return {
+            "pdf_scanned": len(pdf_paths),
+            "xlsx_scanned": len(xlsx_paths),
+            "new": new_processed + xlsx_processed,
+            "duplicates": pdf_duplicates + content_duplicates + xlsx_skipped,
+            "failed": failed,
+            "xlsx_new": xlsx_processed,
+            "pdf_new": new_processed,
+            "new_issuers": sorted(new_issuers),
+            "unknown_document_type": unknown_dt_count,
+            "unknown_issuing_party": unknown_ip_count,
+        }
 
 
 def _collect_sync_targets(processed_path: Path, all_unknown: bool = False,
@@ -496,18 +547,19 @@ def _collect_sync_targets(processed_path: Path, all_unknown: bool = False,
 
 def task_sync(processed_path: Path, dry_run: bool = False,
               all_unknown: bool = False, pattern: str = None,
-              workers: int = 1, all: bool = False):
+              workers: int = 1, all: bool = False, quiet: bool = False) -> dict:
     """Sync metadata by running classification. Default: orphans only."""
     console = get_console()
 
     orphans_only = not all and not all_unknown and pattern is None
 
-    with task_log_context(processed_path, "sync"):
+    with task_log_context(processed_path, "sync", show_header=not quiet):
         targets = _collect_sync_targets(processed_path, all_unknown=all_unknown,
                                         pattern=pattern, orphans_only=orphans_only)
         if not targets:
-            console.warning("No files to sync", indent=False)
-            return
+            if not quiet:
+                console.warning("No files to sync", indent=False)
+            return {"targets": 0}
 
         logger.debug(f"Found {len(targets)} files to sync (workers={workers})")
 
@@ -619,31 +671,41 @@ def task_sync(processed_path: Path, dry_run: bool = False,
                         progress.update(task, advance=1)
 
         # Summary output
-        parts = []
-        if new_count > 0:
-            parts.append(f"{new_count} new")
-        if fixed_count > 0:
-            parts.append(f"{fixed_count} changed")
-        if renamed_count > 0:
-            parts.append(f"{renamed_count} renamed")
-        if still_unknown_count > 0:
-            parts.append(f"{still_unknown_count} unchanged")
-        if failed_count > 0:
-            parts.append(f"{failed_count} failed")
+        if not quiet:
+            parts = []
+            if new_count > 0:
+                parts.append(f"{new_count} new")
+            if fixed_count > 0:
+                parts.append(f"{fixed_count} changed")
+            if renamed_count > 0:
+                parts.append(f"{renamed_count} renamed")
+            if still_unknown_count > 0:
+                parts.append(f"{still_unknown_count} unchanged")
+            if failed_count > 0:
+                parts.append(f"{failed_count} failed")
 
-        summary = ", ".join(parts) if parts else "No files processed"
+            summary = ", ".join(parts) if parts else "No files processed"
 
-        if failed_count > 0:
-            console.warning(summary, indent=False)
-        elif new_count > 0 or fixed_count > 0:
-            console.success(summary, indent=False)
-        else:
-            console.info(f"No changes ({still_unknown_count} files checked)", indent=False)
+            if failed_count > 0:
+                console.warning(summary, indent=False)
+            elif new_count > 0 or fixed_count > 0:
+                console.success(summary, indent=False)
+            else:
+                console.info(f"No changes ({still_unknown_count} files checked)", indent=False)
+
+            if dry_run:
+                console.detail("(dry run - no files were modified)", indent=False)
 
         logger.debug(f"New: {new_count}, Changed: {fixed_count}, Renamed: {renamed_count}, Unchanged: {still_unknown_count}, Failed: {failed_count}")
 
-        if dry_run:
-            console.detail("(dry run - no files were modified)", indent=False)
+        return {
+            "targets": len(targets),
+            "new": new_count,
+            "changed": fixed_count,
+            "renamed": renamed_count,
+            "unchanged": still_unknown_count,
+            "failed": failed_count,
+        }
 
 
 def task_validate_extraction(processed_path: Path, pattern: str = None):
