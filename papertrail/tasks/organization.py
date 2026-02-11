@@ -227,6 +227,7 @@ def copy_matching_files(
     incremental: bool = False,
     export_config=None,
     profile_context: Optional[dict] = None,
+    quiet: bool = False,
 ) -> dict:
     """Copy files matching pattern to destination."""
     from papertrail.pattern_utils import make_matcher
@@ -287,7 +288,8 @@ def copy_matching_files(
                 save_json_data(dest_json, metadata)
             stats['copied'] += 1
 
-        console.success(f"Copied {stats['copied']} files to {dest_folder.name}", indent=False)
+        if not quiet:
+            console.success(f"Copied {stats['copied']} files to {dest_folder.name}", indent=False)
     else:
         matching_files = []
         for file in processed_path.iterdir():
@@ -318,6 +320,7 @@ def copy_matching_files(
             stats['copied'] += 1
 
         pdf_copied = stats['copied'] // 2 if stats['copied'] > 0 else 0
-        console.success(f"Copied {pdf_copied} files to {dest_folder.name}", indent=False)
+        if not quiet:
+            console.success(f"Copied {pdf_copied} files to {dest_folder.name}", indent=False)
 
     return stats
