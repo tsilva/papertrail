@@ -379,22 +379,42 @@ Respond in JSON:
     return matches
 
 
+_REQUIRED_DOCUMENT_TYPES = ["bank-note"]
+
+
+def _validate_required_documents(matches: list[MatchResult]) -> dict[int, list[str]]:
+    """Check each match has all required document types. Returns {row_number: [missing_types]}."""
+    warnings = {}
+    for m in matches:
+        matched_types = {c.document_type for c in m.pdf_candidates if c.document_type}
+        missing = [dt for dt in _REQUIRED_DOCUMENT_TYPES if dt not in matched_types]
+        if missing:
+            warnings[m.transaction.row_number] = missing
+    return warnings
+
+
 def _write_reconciliation_file(
     excel_path: Path,
     matches: list[MatchResult],
     unmatched_transactions: list[Transaction],
     total_transactions: int,
+    warnings: dict[int, list[str]] | None = None,
 ) -> Path:
     """Write a .reconciliation JSON sidecar alongside the XLSX. Returns the output path."""
+    if warnings is None:
+        warnings = {}
+
     output_path = excel_path.with_suffix(".reconciliation.json")
 
     total_matched = len(matches)
     total_unmatched = total_transactions - total_matched
+    total_incomplete = sum(1 for m in matches if m.transaction.row_number in warnings)
     match_rate = (total_matched / total_transactions * 100) if total_transactions > 0 else 0
 
     match_entries = []
     for m in matches:
         txn = m.transaction
+        row_warnings = warnings.get(txn.row_number, [])
         match_entries.append({
             "row": txn.row_number,
             "date": txn.date_posting or txn.date_value,
@@ -405,6 +425,7 @@ def _write_reconciliation_file(
             "confidence": m.confidence,
             "reasoning": m.reasoning,
             "files": [c.pdf_filename for c in m.pdf_candidates],
+            "warnings": [f"missing {dt}" for dt in row_warnings],
         })
 
     unmatched_entries = []
@@ -424,6 +445,7 @@ def _write_reconciliation_file(
             "total": total_transactions,
             "matched": total_matched,
             "unmatched": total_unmatched,
+            "incomplete": total_incomplete,
             "match_rate": round(match_rate, 1),
         },
         "matches": match_entries,
@@ -472,9 +494,18 @@ def _reconcile_single(
     p2_matched_rows = {m.transaction.row_number for m in p2_matches}
     final_unmatched = [txn for txn in unmatched_txns if txn.row_number not in p2_matched_rows]
 
+    # Validate required document types
+    incomplete_warnings = _validate_required_documents(all_matches)
+    for row_num, missing in incomplete_warnings.items():
+        logger.info(
+            f"[INCOMPLETE] Row {row_num}: missing required document types: "
+            f"{', '.join(missing)}"
+        )
+
     if all_matches and not dry_run:
         _write_reconciliation_file(
             excel_path, all_matches, final_unmatched, len(transactions),
+            warnings=incomplete_warnings,
         )
     elif dry_run and all_matches:
         console.detail(f"Dry run: would write {len(all_matches)} matches to .reconciliation file")
@@ -482,11 +513,12 @@ def _reconcile_single(
     total_txns = len(transactions)
     total_matched = len(all_matches)
     total_unmatched = len(final_unmatched)
+    total_incomplete = len(incomplete_warnings)
     pct = (total_matched / total_txns * 100) if total_txns > 0 else 0
 
     logger.info(
         f"[SUMMARY] {total_matched}/{total_txns} matched ({pct:.1f}%), "
-        f"{total_unmatched} unmatched"
+        f"{total_unmatched} unmatched, {total_incomplete} incomplete"
     )
 
     console.info("")
@@ -494,6 +526,15 @@ def _reconcile_single(
         f"{total_matched}/{total_txns} transactions matched ({pct:.1f}%)",
         indent=False,
     )
+    if total_incomplete > 0:
+        console.warning(
+            f"{total_incomplete} matched transactions missing required documents",
+            indent=False,
+        )
+        for row_num, missing in incomplete_warnings.items():
+            console.detail(
+                f"Row {row_num}: missing {', '.join(missing)}"
+            )
     if total_unmatched > 0:
         console.warning(
             f"{total_unmatched} transactions unmatched", indent=False,
