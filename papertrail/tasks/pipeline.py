@@ -157,36 +157,18 @@ def pipeline(export_date_arg=None, processed_path_override=None):
 
     from papertrail.tasks.extraction import task_extract_new
 
-    with console.step_progress("Classify new documents") as step:
-        try:
-            extract_stats = task_extract_new(
-                Path(PROCESSED_FILES_DIR), [Path(d) for d in raw_dirs], quiet=True,
-            )
-            if extract_stats is None:
-                step.warning("Extraction locked by another process")
-            elif extract_stats["failed"] > 0:
-                step.error(f"OpenRouter API error ({extract_stats['failed']} failed)")
-            else:
-                parts = []
-                if extract_stats["new"] > 0 or extract_stats["duplicates"] > 0:
-                    parts.append(f"{extract_stats['new']} new")
-                    parts.append(f"{extract_stats['duplicates']} duplicates")
-                else:
-                    parts.append("0 new files")
-
-                # Add type breakdown when both types present
-                if extract_stats.get("xlsx_new", 0) > 0 and extract_stats.get("pdf_new", 0) > 0:
-                    type_parts = []
-                    if extract_stats["xlsx_new"]:
-                        type_parts.append(f"{extract_stats['xlsx_new']} XLSX")
-                    if extract_stats["pdf_new"]:
-                        type_parts.append(f"{extract_stats['pdf_new']} PDF")
-                    parts.append(f"({', '.join(type_parts)})")
-
-                step.success(" ".join(parts))
-        except Exception as e:
-            step.error(str(e))
-            sys.exit(1)
+    console.step("Classify new documents")
+    try:
+        extract_stats = task_extract_new(
+            Path(PROCESSED_FILES_DIR), [Path(d) for d in raw_dirs], quiet=False,
+        )
+        if extract_stats is None:
+            console.warning("Extraction locked by another process")
+        elif extract_stats["failed"] > 0:
+            console.error(f"OpenRouter API error ({extract_stats['failed']} failed)")
+    except Exception as e:
+        console.error(str(e))
+        sys.exit(1)
 
     # Notable items below extraction step
     if extract_stats:
@@ -210,18 +192,18 @@ def pipeline(export_date_arg=None, processed_path_override=None):
 
     from papertrail.tasks.extraction import task_sync
 
-    with console.step_progress("Sync orphaned metadata") as step:
-        try:
-            sync_stats = task_sync(Path(PROCESSED_FILES_DIR), quiet=True)
-            orphans = sync_stats.get("targets", 0)
-            if orphans == 0:
-                step.success("0 orphans found")
-            else:
-                resynced = sync_stats.get("new", 0) + sync_stats.get("changed", 0)
-                step.success(f"{resynced} orphans re-synced")
-        except Exception as e:
-            step.error(str(e))
-            sys.exit(1)
+    console.step("Sync orphaned metadata")
+    try:
+        sync_stats = task_sync(Path(PROCESSED_FILES_DIR), quiet=False)
+        orphans = sync_stats.get("targets", 0)
+        if orphans == 0:
+            console.success("0 orphans found")
+        else:
+            resynced = sync_stats.get("new", 0) + sync_stats.get("changed", 0)
+            console.success(f"{resynced} orphans re-synced")
+    except Exception as e:
+        console.error(str(e))
+        sys.exit(1)
 
     # ── Stage 4: Rename files ──
 
