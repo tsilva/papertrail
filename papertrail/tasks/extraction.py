@@ -23,6 +23,13 @@ from papertrail.llm import (
     build_extraction_tools,
     get_qr_exclusions,
 )
+from papertrail.enums import (
+    get_document_types,
+    get_issuing_parties,
+    add_session_type,
+    add_session_party,
+)
+from papertrail.interactive import confirm_classification, set_interactive
 from papertrail.pdf import render_pdf_to_images, find_pdf_files, find_document_files, get_page_count
 from papertrail.metadata import build_hash_index, save_metadata_json, load_json_data, iter_json_files
 from papertrail.hashing import hash_file_fast, hash_file_content
@@ -229,13 +236,47 @@ def classify_pdf_document(pdf_path: Path, file_hash: str, failure_logger=None,
             "issuer_tax_number": raw_metadata.issuer_tax_number,
             "locale": raw_metadata.locale,
         }
+        qr_overrode_doc_type = False
         if qr_metadata:
+            old_doc_type = merged["document_type"]
             _merge_qr_metadata(qr_metadata, merged, doc_logger)
+            qr_overrode_doc_type = merged["document_type"] != old_doc_type
+
+        # Phase 2b: Interactive confirmation for document_type
+        # Skip if QR overrode it (100% accurate)
+        if not qr_overrode_doc_type:
+            known_types = set(get_document_types())
+            if merged["document_type"] not in known_types:
+                merged["document_type"] = confirm_classification(
+                    "document_type", raw_metadata.document_type,
+                    merged["document_type"], known_types, pdf_path.name,
+                )
+                if merged["document_type"] != "$UNKNOWN$":
+                    add_session_type(merged["document_type"])
 
         # Phase 4: NIF enrichment
+        nif_enriched = False
+        old_issuing_party = normalized_issuing_party
         normalized_issuing_party = _phase4_nif_enrich(
             merged, raw_metadata, normalized_issuing_party, ctx, doc_logger,
         )
+        nif_enriched = normalized_issuing_party != old_issuing_party
+
+        # Auto-accept NIF-enriched issuer names (100% accurate official data)
+        if nif_enriched and normalized_issuing_party != "$UNKNOWN$":
+            add_session_party(normalized_issuing_party)
+
+        # Phase 2b: Interactive confirmation for issuing_party
+        # Skip if NIF enriched it (100% accurate)
+        if not nif_enriched:
+            known_parties = set(get_issuing_parties())
+            if normalized_issuing_party not in known_parties:
+                normalized_issuing_party = confirm_classification(
+                    "issuing_party", raw_metadata.issuing_party,
+                    normalized_issuing_party, known_parties, pdf_path.name,
+                )
+                if normalized_issuing_party != "$UNKNOWN$":
+                    add_session_party(normalized_issuing_party)
 
         metadata = DocumentMetadata(
             date_issued=merged["issue_date"],
@@ -658,17 +699,21 @@ def task_sync(processed_path: Path, dry_run: bool = False,
                     process_result(metadata_path, old_data, new_metadata, error)
                     progress.update(task, advance=1)
         else:
-            # Parallel path - process results as they complete
-            with ThreadPoolExecutor(max_workers=workers) as executor:
-                futures = {executor.submit(classify_one, item): item for item in targets}
-                with console.progress("Syncing", total=len(futures)) as progress:
-                    task = progress.add_task("Syncing", total=len(futures))
-                    for future in as_completed(futures):
-                        item = futures[future]
-                        progress.update(task, description=f"[dim]{_truncated_name(item[1])}[/dim]")
-                        metadata_path, old_data, new_metadata, error = future.result()
-                        process_result(metadata_path, old_data, new_metadata, error)
-                        progress.update(task, advance=1)
+            # Parallel path - disable interactive prompts (not thread-safe)
+            set_interactive(False)
+            try:
+                with ThreadPoolExecutor(max_workers=workers) as executor:
+                    futures = {executor.submit(classify_one, item): item for item in targets}
+                    with console.progress("Syncing", total=len(futures)) as progress:
+                        task = progress.add_task("Syncing", total=len(futures))
+                        for future in as_completed(futures):
+                            item = futures[future]
+                            progress.update(task, description=f"[dim]{_truncated_name(item[1])}[/dim]")
+                            metadata_path, old_data, new_metadata, error = future.result()
+                            process_result(metadata_path, old_data, new_metadata, error)
+                            progress.update(task, advance=1)
+            finally:
+                set_interactive(True)
 
         # Summary output
         if not quiet:

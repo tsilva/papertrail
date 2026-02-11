@@ -1,7 +1,6 @@
 """Dynamic enum loading and utilities."""
 
 import json
-from enum import Enum
 from pathlib import Path
 from typing import Optional
 
@@ -9,12 +8,35 @@ from papertrail.config import get_current_profile
 
 
 _DOCUMENT_TYPES_LIST: list[str] | None = None
+_ISSUING_PARTIES_LIST: list[str] | None = None
+
+# Session-scoped sets for values confirmed during a single run.
+# Cleared automatically on next run (module-level state).
+_session_types: set[str] = set()
+_session_parties: set[str] = set()
 
 
 def reset_enum_cache() -> None:
     """Reset the enum cache, forcing re-evaluation on next access."""
-    global _DOCUMENT_TYPES_LIST
+    global _DOCUMENT_TYPES_LIST, _ISSUING_PARTIES_LIST
     _DOCUMENT_TYPES_LIST = None
+    _ISSUING_PARTIES_LIST = None
+
+
+def reset_session_cache() -> None:
+    """Reset session-scoped confirmed values."""
+    _session_types.clear()
+    _session_parties.clear()
+
+
+def add_session_type(value: str) -> None:
+    """Track a confirmed document type within the current run."""
+    _session_types.add(value)
+
+
+def add_session_party(value: str) -> None:
+    """Track a confirmed issuing party within the current run."""
+    _session_parties.add(value)
 
 
 def clean_enum_string(value: str, enum_prefix: Optional[str] = None) -> str:
@@ -30,53 +52,73 @@ def clean_enum_string(value: str, enum_prefix: Optional[str] = None) -> str:
     return value
 
 
-def create_dynamic_enum(name: str, values: list[str]) -> Enum:
-    """Create a dynamic Enum class from a list of values."""
-    return Enum(name, {k: k for k in values}, type=str)
-
-
-FALLBACK_DOCUMENT_TYPES = [
-    "$UNKNOWN$", "bank-note", "bank-statement", "contract", "contract-signup",
-    "finance-balance", "finance-income", "insurance-auto", "insurance-notice",
-    "invoice", "invoice-credit", "invoice-receipt", "notice", "notice-request",
-    "other", "payroll-salary", "payroll-social", "payroll-vacation", "receipt",
-    "tax-declaration", "tax-irs", "tax-vat"
-]
+def _scan_json_field(processed_dir: str, field: str) -> set[str]:
+    """Scan processed JSON files and collect unique values for a field."""
+    values = set()
+    path = Path(processed_dir)
+    if not path.exists():
+        return values
+    for json_file in path.rglob("*.json"):
+        if json_file.name.endswith(".reconciliation.json"):
+            continue
+        try:
+            with open(json_file, "r", encoding="utf-8") as f:
+                value = json.load(f).get(field)
+            if value and isinstance(value, str) and value != "$UNKNOWN$":
+                values.add(clean_enum_string(value, "DocumentType" if field == "document_type" else None))
+        except Exception:
+            continue
+    return values
 
 
 def load_document_types(processed_files_dir: Optional[str] = None) -> list[str]:
-    """Load document types from profile predefined, processed files, or fallback."""
+    """Load document types from processed files + session confirmations."""
     profile = get_current_profile()
-
-    if profile and profile.document_types.predefined is not None:
-        values = list(profile.document_types.predefined)
-        if "$UNKNOWN$" not in values:
-            values.append("$UNKNOWN$")
-        return sorted(values)
 
     if processed_files_dir is None and profile and profile.paths.processed:
         processed_files_dir = profile.paths.processed
 
-    values_set = set(FALLBACK_DOCUMENT_TYPES)
-    if processed_files_dir and Path(processed_files_dir).exists():
-        for json_file in Path(processed_files_dir).rglob("*.json"):
-            try:
-                with open(json_file, "r", encoding="utf-8") as f:
-                    value = json.load(f).get("document_type")
-                if value and isinstance(value, str):
-                    values_set.add(clean_enum_string(value, "DocumentType"))
-            except Exception:
-                continue
+    values_set: set[str] = set()
+    if processed_files_dir:
+        values_set = _scan_json_field(processed_files_dir, "document_type")
 
+    values_set |= _session_types
+    values_set.add("$UNKNOWN$")
+    return sorted(values_set)
+
+
+def load_issuing_parties(processed_files_dir: Optional[str] = None) -> list[str]:
+    """Load issuing parties from processed files + session confirmations."""
+    profile = get_current_profile()
+
+    if processed_files_dir is None and profile and profile.paths.processed:
+        processed_files_dir = profile.paths.processed
+
+    values_set: set[str] = set()
+    if processed_files_dir:
+        values_set = _scan_json_field(processed_files_dir, "issuing_party")
+
+    values_set |= _session_parties
     values_set.add("$UNKNOWN$")
     return sorted(values_set)
 
 
 def get_document_types() -> list[str]:
-    """Get document types list (cached after first call)."""
+    """Get document types list (cached after first call, includes session types)."""
     global _DOCUMENT_TYPES_LIST
     if _DOCUMENT_TYPES_LIST is None:
+        _DOCUMENT_TYPES_LIST = load_document_types()
+    # Always include session types even if cache was populated before they were added
+    if _session_types - set(_DOCUMENT_TYPES_LIST):
         _DOCUMENT_TYPES_LIST = load_document_types()
     return _DOCUMENT_TYPES_LIST
 
 
+def get_issuing_parties() -> list[str]:
+    """Get issuing parties list (cached after first call, includes session parties)."""
+    global _ISSUING_PARTIES_LIST
+    if _ISSUING_PARTIES_LIST is None:
+        _ISSUING_PARTIES_LIST = load_issuing_parties()
+    if _session_parties - set(_ISSUING_PARTIES_LIST):
+        _ISSUING_PARTIES_LIST = load_issuing_parties()
+    return _ISSUING_PARTIES_LIST

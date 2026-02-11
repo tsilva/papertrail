@@ -5,7 +5,8 @@ from datetime import datetime
 from typing import Any, Optional
 
 from papertrail.logging_utils import get_logger, DocumentLogger
-from papertrail.models import DocumentMetadataRaw, DOCUMENT_TYPES
+from papertrail.models import DocumentMetadataRaw
+from papertrail.enums import get_document_types, get_issuing_parties
 from papertrail.qr.models import QRExtractedMetadata
 
 logger = get_logger('llm')
@@ -67,6 +68,9 @@ def get_qr_exclusions(qr_metadata: QRExtractedMetadata) -> tuple[set[str], dict[
 
 def get_system_prompt_raw_extraction(pre_extracted: dict[str, Any] | None = None) -> str:
     """Build system prompt for raw metadata extraction."""
+    # Use live lists (includes session-confirmed values)
+    doc_types = get_document_types()
+
     prompt = (
         f"You are an expert document extraction assistant. "
         f"Today's date is {datetime.now().strftime('%Y-%m-%d')}. "
@@ -107,7 +111,7 @@ def get_system_prompt_raw_extraction(pre_extracted: dict[str, Any] | None = None
         "If uncertain, leave locale as null.\n"
         "\n"
         "For your orientation, here are the typical canonical values we work with:\n"
-        f"- Document types: {', '.join(DOCUMENT_TYPES[:20])}{'...' if len(DOCUMENT_TYPES) > 20 else ''}\n"
+        f"- Document types: {', '.join(doc_types[:20])}{'...' if len(doc_types) > 20 else ''}\n"
         "\n"
         "NOTE: These lists are just for orientation. Always extract the EXACT text as it appears on the document, "
         "even if it doesn't match these canonical values. The raw text will be normalized in a later step.\n"
@@ -138,29 +142,43 @@ def normalize_metadata(
     model_id: Optional[str] = None,
     doc_logger: Optional[DocumentLogger] = None,
 ) -> tuple[str, str]:
-    """Normalize raw values to canonical enums via LLM. Returns (doc_type, issuing_party)."""
+    """Normalize raw values to canonical forms via LLM. Returns (doc_type, issuing_party).
+
+    When no good match exists in the known lists, the LLM suggests a new slug-cased
+    name instead of falling back to $UNKNOWN$. The caller is responsible for confirming
+    new values interactively.
+    """
+    # Use live lists (includes session-confirmed values)
+    doc_types = get_document_types()
+    issuing_parties = get_issuing_parties()
+
     normalization_prompt = f"""You are a metadata normalization assistant. Your job is to map extracted document values to their canonical forms.
 
 Given:
 - Raw document_type: "{raw_metadata.document_type}"
 - Raw issuing_party: "{raw_metadata.issuing_party}"
 
-Available canonical document types:
-{', '.join(DOCUMENT_TYPES)}
+Known document types:
+{', '.join(doc_types)}
+
+Known issuing parties:
+{', '.join(p for p in issuing_parties if p != '$UNKNOWN$')}
 
 Task:
-1. Map the raw document_type to the MOST APPROPRIATE canonical document type from the list
-2. Normalize the raw issuing_party to a clean, short canonical form
+1. Map the raw document_type to the MOST APPROPRIATE known document type from the list above
+2. Map the raw issuing_party to the MOST APPROPRIATE known issuing party from the list above, or normalize to a clean canonical form
 
 Rules for document_type:
-- If no good match exists, use "$UNKNOWN$"
-- Preserve the EXACT canonical value (case-sensitive)
+- If a good match exists in the known list, use the EXACT canonical value (case-sensitive)
+- If no good match exists, suggest the best slug-cased name following the naming convention (lowercase, hyphen-separated, English, namespace-prefixed where appropriate e.g. tax-*, bank-*, invoice-*)
+- Only use "$UNKNOWN$" if the raw value is empty or truly unidentifiable
 
 Rules for issuing_party:
-- Produce a clean, short company/entity name (e.g., "Anthropic, PBC" -> "Anthropic", "Amazon Web Services, Inc." -> "Amazon")
-- Strip legal suffixes (Inc., Ltd., S.A., Lda., PBC, etc.)
+- If a good match exists in the known list, use the EXACT canonical value (case-sensitive)
+- If no good match exists, produce a clean, short company/entity name (e.g., "Anthropic, PBC" -> "anthropic", "Amazon Web Services, Inc." -> "amazon")
+- Lowercase, strip legal suffixes (Inc., Ltd., S.A., Lda., PBC, etc.)
 - Use the most recognizable short form of the name
-- If the raw value is empty or truly unidentifiable, use "$UNKNOWN$"
+- Only use "$UNKNOWN$" if the raw value is empty or truly unidentifiable
 
 Respond in JSON format:
 {{
@@ -197,9 +215,11 @@ Respond in JSON format:
         doc_type = result.get("document_type", "$UNKNOWN$")
         issuing_party = result.get("issuing_party", "$UNKNOWN$")
 
-        if doc_type not in DOCUMENT_TYPES:
-            logger.warning(f"Rejected doc_type '{doc_type}' (not in canonical list)")
-            doc_type = "$UNKNOWN$"
+        # Log the normalization result (no rejection — new values are confirmed downstream)
+        if doc_type not in doc_types:
+            logger.debug(f"LLM suggested new doc_type '{doc_type}' (not in known list)")
+        if issuing_party not in issuing_parties and issuing_party != "$UNKNOWN$":
+            logger.debug(f"LLM suggested new issuing_party '{issuing_party}' (not in known list)")
 
         if doc_logger:
             doc_logger.log_normalization("document_type", raw_metadata.document_type, doc_type)
