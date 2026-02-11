@@ -1,6 +1,5 @@
 """Validation tasks."""
 
-import json
 from datetime import datetime
 from pathlib import Path
 
@@ -135,68 +134,6 @@ def validate_merged_pdf(folder_path: Path) -> bool:
 
     logger.debug(f"Merge validation passed: {actual_pages} pages from {len(source_pdfs)} files")
     return True
-
-
-def check_files_exist(target_folder: Path, validation_schema_path: Path, quiet: bool = False) -> dict:
-    """Validate files exist based on a JSON schema."""
-    console = get_console()
-
-    with open(validation_schema_path, "r", encoding="utf-8") as f:
-        checks = json.load(f)
-
-    file_data = []
-    for json_path, _, data in load_validated_metadata(target_folder, require_pdf=False, validate=False):
-        file_data.append((json_path, data))
-
-    check_results = []
-    for idx, check in enumerate(checks):
-        found = any(
-            all(str(data.get(k, "")).strip() == str(v).strip() for k, v in check.items())
-            for _, data in file_data
-        )
-        check_results.append((found, idx, check))
-
-    passed_count = sum(1 for found, _, _ in check_results if found)
-    missing_count = len(check_results) - passed_count
-    all_passed = missing_count == 0
-
-    # Build descriptions and collect missing items
-    missing_items = []
-    table_rows = []
-    sorted_results = sorted(check_results, key=lambda x: (not x[0], x[1]))
-    for found, idx, check in sorted_results:
-        desc_parts = []
-        if "document_type" in check:
-            desc_parts.append(check["document_type"])
-        if "issuing_party" in check:
-            desc_parts.append(f"({check['issuing_party']})")
-        if "document_title" in check:
-            desc_parts.append(f"[{check['document_title']}]")
-
-        description = " ".join(desc_parts) if desc_parts else str(check)
-        table_rows.append({"description": description, "found": found})
-
-        if not found:
-            missing_items.append(description)
-
-        # Log to file
-        logger.debug(f"{'[OK]' if found else '[FAIL]'} {check} -- {'FOUND' if found else 'NOT FOUND'}")
-
-    if not quiet:
-        # Display validation table
-        console.validation_table("File Validation Results", table_rows)
-
-        # Print machine-parseable lines for missing items
-        for item in missing_items:
-            print(f"[MISSING] {item}")
-
-        # Summary
-        if all_passed:
-            console.success(f"{passed_count} checks passed", indent=False)
-        else:
-            console.warning(f"{passed_count} checks passed, {missing_count} missing", indent=False)
-
-    return {'passed': passed_count, 'missing': missing_count, 'missing_items': missing_items, 'all_passed': all_passed}
 
 
 def _batch_update_metadata(

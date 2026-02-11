@@ -61,16 +61,6 @@ passwords:
   # Or use external file
   # passwords_file: "../config/passwords.txt"
 
-# File validation rules (inline - recommended)
-validations:
-  rules:
-    - document_type: "invoice"
-      issuing_party: "Amazon"
-    - document_type: "receipt"
-      document_title: "AWS"
-  # Or use external file
-  # validations_file: "../config/file_check_validations.json"
-
 # Pipeline task configuration
 pipeline:
   tools_required: ["archive-extractor"]

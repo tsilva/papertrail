@@ -102,11 +102,6 @@ passwords:
   passwords:
     - "password1"
 
-validations:
-  rules:
-    - document_type: "invoice"
-      issuing_party: "Amazon"
-
 pipeline:
   tools_required: []
   default_export_date: "last_month"
@@ -206,19 +201,6 @@ passwords:
   passwords:
     - "password1"
     - "password2"
-```
-
-### `validations` (Optional)
-
-File validation schema configuration.
-
-**Inline rules (recommended)**:
-```yaml
-validations:
-  rules:
-    - document_type: "invoice"
-      issuing_party: "Amazon"
-    - document_type: "receipt"
 ```
 
 ### `pipeline` (Optional)

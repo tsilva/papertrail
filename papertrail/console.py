@@ -2,7 +2,7 @@
 
 from contextlib import contextmanager
 from dataclasses import dataclass
-from typing import Any, Generator, Sequence
+from typing import Any, Generator
 
 from rich.console import Console
 from rich.progress import (
@@ -15,8 +15,6 @@ from rich.progress import (
     TimeElapsedColumn,
 )
 from rich.rule import Rule
-from rich.table import Table
-
 from papertrail.logging_utils import suppress_console_logging
 
 
@@ -206,31 +204,6 @@ class PapertrailConsole:
             for item in items:
                 yield item
                 progress.update(task_id, advance=1)
-
-    def validation_table(
-        self,
-        title: str,
-        results: Sequence[dict[str, Any]],
-    ) -> None:
-        table = Table(title=title, show_header=False, box=None, padding=(0, 2))
-
-        table.add_column("Status", justify="left", no_wrap=True)
-        table.add_column("Description", style="white")
-
-        for result in results:
-            found = result.get("found", False)
-            desc = result.get("description", "Unknown")
-
-            if found:
-                status = "[green]\u2713[/green]"
-            else:
-                status = "[red]\u2717[/red]"
-
-            table.add_row(status, desc)
-
-        self.console.print()
-        self.console.print(table)
-
 
 _console: PapertrailConsole | None = None
 
