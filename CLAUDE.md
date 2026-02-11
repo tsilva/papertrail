@@ -260,6 +260,7 @@ Each profile is a self-contained folder under `profiles/` (or an external direct
 profile:
   name: "default"
   description: "Default configuration"
+  tax_number: "TESTOWNER"  # Optional: your tax number (NIF)
 
 paths:
   raw: ["/path/to/raw/documents/"]
@@ -286,6 +287,31 @@ python main.py extract_new /path/to/processed  # Auto-uses default profile if av
 **External profiles directory**: Set `PAPERTRAIL_PROFILES_DIR` to load profiles from an external directory (e.g., a private git repo). Falls back to repo `profiles/` if unset or directory doesn't exist.
 
 **Full docs**: See `profiles/README.md` for complete YAML schema and examples
+
+### Export Prefix Rules with Profile Variables
+
+Export match rules support `${profile.*}` variable syntax to reference profile-level configuration. This enables distinguishing vendor invoices (VND — you issued them) from company invoices (CMP — you received them) by comparing `issuer_tax_number` against the profile owner's tax number. Rules are **first-match-wins**.
+
+```yaml
+profile:
+  tax_number: "TESTOWNER"
+
+export:
+  file_mappings:
+    enabled: true
+    default_prefix: "DIV_"
+    rules:
+      - match:
+          document_type: "invoice"
+          issuer_tax_number: "${profile.tax_number}"
+        prefix: "VND_"      # My tax number = I issued it
+      - match:
+          document_type: "invoice"
+        prefix: "CMP_"      # Someone else issued it
+      - match:
+          document_type: "bank-*"
+        prefix: "BNC_"
+```
 
 ### Logs Directory
 

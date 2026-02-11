@@ -4,6 +4,7 @@ import re
 import shutil
 import unicodedata
 from pathlib import Path
+from typing import Optional
 
 from papertrail.console import get_console
 from papertrail.hashing import hash_file_fast
@@ -157,13 +158,31 @@ def _match_value(actual, pattern: str) -> bool:
     actual_str = str(actual)
     if pattern.endswith("*"):
         return actual_str.startswith(pattern[:-1])
+    # Numeric comparison for numeric values (handles float repr: 0.0 vs "0")
+    if isinstance(actual, (int, float)):
+        try:
+            return float(actual) == float(pattern)
+        except (ValueError, TypeError):
+            pass
     return actual_str == pattern
 
 
-def _evaluate_export_prefix(metadata: dict, config) -> str:
+def _resolve_match_value(pattern: str, profile_context: Optional[dict]) -> str:
+    """Resolve ${profile.*} variables in a match pattern."""
+    if not profile_context or not pattern.startswith("${profile."):
+        return pattern
+    key = pattern[len("${profile."):-1]
+    value = profile_context.get(key)
+    return value if value is not None else pattern
+
+
+def _evaluate_export_prefix(metadata: dict, config, profile_context: Optional[dict] = None) -> str:
     """Evaluate export prefix rules against metadata. First match wins."""
     for rule in config.rules:
-        if all(_match_value(_get_nested_value(metadata, k), v) for k, v in rule.match.items()):
+        if all(
+            _match_value(_get_nested_value(metadata, k), _resolve_match_value(v, profile_context))
+            for k, v in rule.match.items()
+        ):
             return rule.prefix
     return config.default_prefix
 
@@ -190,12 +209,24 @@ def _should_skip_copy(src: Path, dst: Path) -> bool:
             and hash_file_fast(src) == hash_file_fast(dst))
 
 
+def _check_file_size(src: Path, max_file_size_mb: float | None) -> None:
+    """Log a warning if file exceeds the configured max size threshold."""
+    if max_file_size_mb is None:
+        return
+    size = src.stat().st_size
+    threshold = max_file_size_mb * 1024 * 1024
+    if size >= threshold:
+        size_mb = size / (1024 * 1024)
+        logger.warning(f"Large file: {src.name} ({size_mb:.1f} MB exceeds {max_file_size_mb} MB threshold)")
+
+
 def copy_matching_files(
     processed_path: Path,
     pattern: str,
     dest_folder: Path,
     incremental: bool = False,
     export_config=None,
+    profile_context: Optional[dict] = None,
 ) -> dict:
     """Copy files matching pattern to destination."""
     from papertrail.pattern_utils import make_matcher
@@ -206,7 +237,9 @@ def copy_matching_files(
     matcher = make_matcher(pattern, use_search=True)
     stats = {'copied': 0, 'skipped': 0, 'total': 0}
 
-    use_prefixes = export_config is not None and export_config.enabled
+    file_mappings = export_config.file_mappings if export_config is not None else None
+    max_file_size_mb = export_config.max_file_size_mb if export_config is not None else None
+    use_prefixes = file_mappings is not None and file_mappings.enabled
 
     if use_prefixes:
         matching_pdfs = []
@@ -227,12 +260,12 @@ def copy_matching_files(
             if json_file.exists():
                 metadata = load_json_data(json_file)
 
-            prefix = _evaluate_export_prefix(metadata, export_config)
+            prefix = _evaluate_export_prefix(metadata, file_mappings, profile_context)
 
-            if export_config.filename_fields and metadata:
+            if file_mappings.filename_fields and metadata:
                 file_hash = metadata.get("hash_content", pdf_file.stem.split(" - ")[-1])
                 base_name = _build_filename_from_fields(
-                    metadata, export_config.filename_fields, file_hash
+                    metadata, file_mappings.filename_fields, file_hash
                 )
             else:
                 base_name = pdf_file.name
@@ -247,6 +280,7 @@ def copy_matching_files(
                 stats['skipped'] += 1
                 continue
 
+            _check_file_size(pdf_file, max_file_size_mb)
             shutil.copy2(pdf_file, dest_pdf)
             if json_file.exists():
                 metadata['source_filename'] = pdf_file.name
@@ -279,6 +313,7 @@ def copy_matching_files(
                 data['source_filename'] = file.with_suffix(src_ext).name
                 save_json_data(dest_file, data)
             else:
+                _check_file_size(file, max_file_size_mb)
                 shutil.copy2(file, dest_file)
             stats['copied'] += 1
 

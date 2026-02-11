@@ -191,9 +191,11 @@ def pipeline(export_date_arg=None, processed_path_override=None):
     from papertrail.tasks.organization import copy_matching_files
     from papertrail.tasks.validation import check_files_exist
 
-    export_file_config = None
-    if profile.export.file_mappings.enabled:
-        export_file_config = profile.export.file_mappings
+    export_file_config = profile.export
+
+    profile_context = None
+    if profile.profile.tax_number:
+        profile_context = {"tax_number": profile.profile.tax_number}
 
     all_validation_missing_items = []
 
@@ -211,6 +213,7 @@ def pipeline(export_date_arg=None, processed_path_override=None):
                     export_date,
                     Path(export_date_dir),
                     export_config=export_file_config,
+                    profile_context=profile_context,
                 )
                 copied = copy_stats.get('copied', 0)
                 if copied:
