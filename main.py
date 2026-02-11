@@ -35,7 +35,6 @@ from papertrail.tasks import (
     export_metadata_to_excel,
     copy_matching_files,
     task_export_all_dates,
-    check_files_exist,
     task_backfill_page_count,
     task_fix_unicode,
     task_gmail_download,
@@ -142,7 +141,7 @@ def main():
     parser.add_argument("--verbose", "-v", action="store_true", help="Enable verbose output.")
     parser.add_argument("task", type=str, nargs='?', default='pipeline', choices=[
         'extract_new', 'rename_files', 'validate_metadata', 'export_excel',
-        'copy_matching', 'export_all_dates', 'check_files_exist', 'pipeline',
+        'copy_matching', 'export_all_dates', 'pipeline',
         'gmail_download', 'backfill_page_count', 'fix_unicode', 'sync',
         'validate_extraction', 'qr_inventory', 'reconcile',
     ], help="Task to perform (default: pipeline).")
@@ -153,7 +152,6 @@ def main():
     parser.add_argument("--copy_dest_folder", type=str, help="Destination folder for copied files.")
     parser.add_argument("--export_base_dir", type=str, help="Base export directory.")
     parser.add_argument("--run_merge", action="store_true", help="Run PDF merge for changed directories.")
-    parser.add_argument("--check_schema_path", type=str, help="Validation schema path.")
     parser.add_argument("--export_date", type=str, help="Export date in YYYY-MM format (for pipeline).")
     parser.add_argument("--dry_run", action="store_true", help="Show what would be changed without modifying files.")
     parser.add_argument("--all_unknown", action="store_true", help="Re-extract all files with $UNKNOWN$ values.")
@@ -245,23 +243,6 @@ def main():
         if profile.profile.tax_number:
             profile_context = {"tax_number": profile.profile.tax_number}
         task_export_all_dates(processed_path, export_dir, args.run_merge, export_config=profile.export, profile_context=profile_context)
-
-    elif task == "check_files_exist":
-        check_schema_path = args.check_schema_path
-        temp_file = None
-        if not check_schema_path:
-            from papertrail.config import resolve_validations_file
-            check_schema_path, temp_file = resolve_validations_file()
-            if not check_schema_path:
-                parser.error("No validation rules found. Use --check_schema_path or configure validations in profile.")
-        schema = require_path(parser, check_schema_path, "check_schema_path", must_be_dir=False)
-        with task_log_context(processed_path, "check_files_exist"):
-            check_files_exist(processed_path, schema)
-        if temp_file:
-            try:
-                os.unlink(temp_file)
-            except Exception:
-                pass
 
     elif task == "sync":
         task_sync(

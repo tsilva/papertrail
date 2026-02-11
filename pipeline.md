@@ -64,11 +64,6 @@ Copies PDFs and metadata JSONs matching the export date pattern (e.g., `2025-01`
 
 Merges all PDFs in the export date directory into `merged_all.pdf` using the `pdf_gluer.merge_all_pdfs()` function. After merging, validates that the merged PDF page count equals the sum of all source PDF page counts.
 
-### Step 9: Validate exported files
-**Task:** `check_files_exist` | **File:** `main.py:576`
-
-Validates that expected files exist in the export directory by checking against validation rules from the profile configuration. Skipped if no validation rules are configured.
-
 ## Data Flow
 
 ```
@@ -93,5 +88,5 @@ Gmail / mbox / archives
   PDF + metadata.json in paths.processed
         │
         ▼
-  Rename ──► Excel export ──► Copy to export/YYYY-MM/ ──► Merge ──► Validate
+  Rename ──► Excel export ──► Copy to export/YYYY-MM/ ──► Merge
 ```

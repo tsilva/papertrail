@@ -84,13 +84,6 @@ class PasswordsConfig:
 
 
 @dataclass
-class ValidationsConfig:
-    """File validation schema configuration."""
-    rules: Optional[List[Dict[str, Any]]] = None
-    validations_file: Optional[str] = None
-
-
-@dataclass
 class PipelineConfig:
     """Pipeline task configuration."""
     tools_required: List[str] = field(default_factory=list)
@@ -135,7 +128,6 @@ class Profile:
     document_types: DocumentTypesConfig = field(default_factory=DocumentTypesConfig)
     gmail: GmailConfig = field(default_factory=GmailConfig)
     passwords: PasswordsConfig = field(default_factory=PasswordsConfig)
-    validations: ValidationsConfig = field(default_factory=ValidationsConfig)
     pipeline: PipelineConfig = field(default_factory=PipelineConfig)
     nif_api: NifApiConfig = field(default_factory=NifApiConfig)
     export: ExportConfig = field(default_factory=ExportConfig)
@@ -176,7 +168,6 @@ def resolve_paths_in_profile(profile: Profile) -> None:
     profile.paths.processed = resolve_path(profile.paths.processed, pp)
     profile.paths.export = resolve_path(profile.paths.export, pp)
     profile.passwords.passwords_file = resolve_path(profile.passwords.passwords_file, pp)
-    profile.validations.validations_file = resolve_path(profile.validations.validations_file, pp)
 
     # Gmail credentials (resolve explicit paths; defaults handled by get_gmail_config_paths())
     if profile.gmail.credentials_file:
@@ -291,12 +282,6 @@ def _parse_profile_dict(data: Dict[str, Any], profile_path: Path) -> Profile:
         passwords_file=passwords_data.get("passwords_file")
     )
 
-    validations_data = data.get("validations", {})
-    validations = ValidationsConfig(
-        rules=validations_data.get("rules"),
-        validations_file=validations_data.get("validations_file")
-    )
-
     pipeline_data = data.get("pipeline", {})
     pipeline = PipelineConfig(
         tools_required=pipeline_data.get("tools_required", []),
@@ -335,7 +320,6 @@ def _parse_profile_dict(data: Dict[str, Any], profile_path: Path) -> Profile:
         document_types=document_types,
         gmail=gmail,
         passwords=passwords,
-        validations=validations,
         pipeline=pipeline,
         nif_api=nif_api,
         export=export_config,
@@ -360,18 +344,3 @@ def get_passwords_from_profile(profile: Profile) -> tuple[list[str], str | None]
     return ([], None)
 
 
-def get_validations_from_profile(profile: Profile) -> tuple[dict, str | None]:
-    """Get validation rules from profile."""
-    import json
-
-    if profile.validations.rules:
-        return ({"rules": profile.validations.rules}, None)
-
-    if profile.validations.validations_file:
-        validations_file = Path(profile.validations.validations_file)
-        if validations_file.exists():
-            with open(validations_file, 'r', encoding='utf-8') as f:
-                validations = json.load(f)
-            return (validations, str(validations_file))
-
-    return ({}, None)

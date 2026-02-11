@@ -225,7 +225,7 @@ def _phase1_deterministic_match(
             f"Amount match: {abs_amount:.2f} "
             f"({len(matched_pdfs)} PDF(s), closest date: {closest_days}d)"
         )
-        logger.info(
+        logger.debug(
             f"[PHASE-1] Row {txn.row_number}: {txn.description[:50]} -> "
             f"{', '.join(c.pdf_filename for c in matched_pdfs)} ({reasoning})"
         )
@@ -354,7 +354,7 @@ Respond in JSON:
         confidence = m.get("confidence", 0.5)
         reasoning = m.get("reasoning", "")
 
-        logger.info(
+        logger.debug(
             f"[PHASE-2] Row {txn.row_number}: {txn.description[:50]} -> "
             f"{', '.join(c.pdf_filename for c in matched_pdfs)} "
             f"(confidence={confidence:.1f}, {reasoning})"
@@ -367,14 +367,6 @@ Respond in JSON:
             confidence=confidence,
             reasoning=reasoning,
         ))
-
-    for txn_idx in result.get("unmatched_transactions", []):
-        if 1 <= txn_idx <= len(transactions):
-            txn = transactions[txn_idx - 1]
-            logger.info(
-                f"[NO-MATCH] Row {txn.row_number}: {txn.description[:50]} "
-                f"({txn.amount:.2f} {txn.currency})"
-            )
 
     return matches
 
@@ -497,7 +489,7 @@ def _reconcile_single(
     # Validate required document types
     incomplete_warnings = _validate_required_documents(all_matches)
     for row_num, missing in incomplete_warnings.items():
-        logger.info(
+        logger.debug(
             f"[INCOMPLETE] Row {row_num}: missing required document types: "
             f"{', '.join(missing)}"
         )
@@ -516,7 +508,7 @@ def _reconcile_single(
     total_incomplete = len(incomplete_warnings)
     pct = (total_matched / total_txns * 100) if total_txns > 0 else 0
 
-    logger.info(
+    logger.debug(
         f"[SUMMARY] {total_matched}/{total_txns} matched ({pct:.1f}%), "
         f"{total_unmatched} unmatched, {total_incomplete} incomplete"
     )
@@ -546,7 +538,7 @@ def _reconcile_single(
             )
 
     for txn in final_unmatched:
-        logger.info(
+        logger.debug(
             f"[NO-MATCH] Row {txn.row_number}: {txn.description[:50]} "
             f"({txn.amount:.2f} {txn.currency})"
         )
