@@ -579,7 +579,7 @@ def build_ui():
                                 bank_json = gr.Code(language="json", label="")
 
             # ── Documents Tab ────────────────────────────────────
-            with gr.Tab("Documents"):
+            with gr.Tab("Documents") as documents_tab:
                 with gr.Row(equal_height=False):
                     with gr.Column(scale=1, min_width=300):
                         doc_dd = gr.Dropdown(
@@ -726,6 +726,14 @@ def build_ui():
             [doc_preview, d_page, doc_page],
         )
 
+        # ── Documents: re-apply preview on tab select ─────────
+        # Gradio 6.x doesn't apply updates to hidden tab components,
+        # so re-trigger the preview when the Documents tab becomes visible.
+        documents_tab.select(
+            on_doc_select, [doc_dd],
+            [doc_preview, doc_meta, doc_json, d_page, doc_page],
+        )
+
         # ── Auto-load most recent folder on startup ──────────────
 
         if default_folder:
@@ -738,5 +746,7 @@ def build_ui():
     return app
 
 
+demo = build_ui()
+
 if __name__ == "__main__":
-    build_ui().launch(css=_CSS, js=_JS)
+    demo.launch(css=_CSS, js=_JS)
