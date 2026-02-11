@@ -68,8 +68,42 @@ class PapertrailConsole:
         self.console.print(" | ".join(info_parts))
         self.console.print()
 
-    def pipeline_footer(self, elapsed_seconds: float | None = None) -> None:
+    def notable(self, message: str) -> None:
+        """Print an indented notable item below a step line."""
+        self.console.print(f"    [dim]{message}[/dim]")
+
+    def pipeline_footer(
+        self,
+        elapsed_seconds: float | None = None,
+        warnings: list[str] | None = None,
+        summary: dict[str, str] | None = None,
+        output_paths: list[tuple[str, str]] | None = None,
+    ) -> None:
         self.console.print()
+
+        # Warnings section
+        if warnings:
+            self.console.print("[yellow bold]\u26a0 Warnings:[/]")
+            for w in warnings:
+                self.console.print(f"  [yellow]![/yellow] {w}")
+            self.console.print()
+
+        # Summary section
+        if summary:
+            self.console.print("[bold]Summary:[/]")
+            max_label = max(len(k) for k in summary)
+            for label, value in summary.items():
+                self.console.print(f"  {label + ':':<{max_label + 1}}  {value}")
+            self.console.print()
+
+        # Output section
+        if output_paths:
+            self.console.print("[bold]Output:[/]")
+            max_label = max(len(label) for label, _ in output_paths)
+            for label, path in output_paths:
+                self.console.print(f"  {label + ':':<{max_label + 1}}  [dim]{path}[/dim]")
+            self.console.print()
+
         self.console.print(Rule(style="cyan", characters="="))
 
         if elapsed_seconds is not None:

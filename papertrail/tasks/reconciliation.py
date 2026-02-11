@@ -92,6 +92,8 @@ def _parse_date(value) -> Optional[str]:
 
 def _load_transactions(excel_path: Path) -> list[Transaction]:
     """Load untreated transactions from a Millennium BCP Excel export."""
+    import warnings
+    warnings.filterwarnings("ignore", message="Workbook contains no default style")
     wb = openpyxl.load_workbook(excel_path, data_only=True)
     ws = wb.active
 
@@ -453,19 +455,24 @@ def _reconcile_single(
     excel_path: Path,
     dry_run: bool,
     console,
-) -> None:
+    quiet: bool = False,
+) -> dict:
     """Reconcile a single bank statement against PDF documents in export_path."""
+    empty_stats = {"total": 0, "matched": 0, "unmatched": 0, "incomplete": 0, "match_rate": 0.0}
+
     transactions = _load_transactions(excel_path)
 
     if not transactions:
-        console.warning("No untreated transactions found")
-        return
+        if not quiet:
+            console.warning("No untreated transactions found")
+        return empty_stats
 
     candidates = _load_pdf_candidates(export_path)
 
     if not candidates:
-        console.warning("No document candidates found")
-        return
+        if not quiet:
+            console.warning("No document candidates found")
+        return empty_stats
 
     p1_matches, unmatched_txns, remaining_cands = (
         _phase1_deterministic_match(transactions, candidates)
@@ -500,7 +507,8 @@ def _reconcile_single(
             warnings=incomplete_warnings,
         )
     elif dry_run and all_matches:
-        console.detail(f"Dry run: would write {len(all_matches)} matches to .reconciliation file")
+        if not quiet:
+            console.detail(f"Dry run: would write {len(all_matches)} matches to .reconciliation file")
 
     total_txns = len(transactions)
     total_matched = len(all_matches)
@@ -513,35 +521,44 @@ def _reconcile_single(
         f"{total_unmatched} unmatched, {total_incomplete} incomplete"
     )
 
-    console.info("")
-    console.success(
-        f"{total_matched}/{total_txns} transactions matched ({pct:.1f}%)",
-        indent=False,
-    )
-    if total_incomplete > 0:
-        console.warning(
-            f"{total_incomplete} matched transactions missing required documents",
+    if not quiet:
+        console.info("")
+        console.success(
+            f"{total_matched}/{total_txns} transactions matched ({pct:.1f}%)",
             indent=False,
         )
-        for row_num, missing in incomplete_warnings.items():
-            console.detail(
-                f"Row {row_num}: missing {', '.join(missing)}"
+        if total_incomplete > 0:
+            console.warning(
+                f"{total_incomplete} matched transactions missing required documents",
+                indent=False,
             )
-    if total_unmatched > 0:
-        console.warning(
-            f"{total_unmatched} transactions unmatched", indent=False,
-        )
-        for txn in final_unmatched:
-            console.detail(
-                f"Row {txn.row_number}: {txn.description[:50]} "
-                f"({txn.amount:.2f} {txn.currency})"
+            for row_num, missing in incomplete_warnings.items():
+                console.detail(
+                    f"Row {row_num}: missing {', '.join(missing)}"
+                )
+        if total_unmatched > 0:
+            console.warning(
+                f"{total_unmatched} transactions unmatched", indent=False,
             )
+            for txn in final_unmatched:
+                console.detail(
+                    f"Row {txn.row_number}: {txn.description[:50]} "
+                    f"({txn.amount:.2f} {txn.currency})"
+                )
 
     for txn in final_unmatched:
         logger.debug(
             f"[NO-MATCH] Row {txn.row_number}: {txn.description[:50]} "
             f"({txn.amount:.2f} {txn.currency})"
         )
+
+    return {
+        "total": total_txns,
+        "matched": total_matched,
+        "unmatched": total_unmatched,
+        "incomplete": total_incomplete,
+        "match_rate": pct,
+    }
 
 
 def task_reconcile(
