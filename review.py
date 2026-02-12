@@ -195,8 +195,6 @@ def load_export_folder(folder_path):
     # Collect bank-related filenames for the bank tab dropdown
     bank_files = set()
     for bs in bank_statements:
-        if bs.get("doc_path"):
-            bank_files.add(Path(bs["doc_path"]).name)
         recon = bs.get("reconciliation")
         if recon:
             for m in recon.get("matches", []):
@@ -307,15 +305,6 @@ def render_bank_statements_html(bank_statements):
         if info:
             parts.append(f'<div class="bank-info">{" &middot; ".join(info)}</div>')
 
-        # XLSX preview link
-        if bs.get("doc_path"):
-            safe = Path(bs["doc_path"]).name.replace("'", "\\'")
-            parts.append(
-                f'<div class="bank-info">'
-                f'<button class="file-link" onclick="selectReviewFile(\'{safe}\');'
-                f'return false;">View XLSX</button></div>'
-            )
-
         # Reconciliation
         if recon:
             s = recon.get("summary", {})
@@ -405,81 +394,16 @@ def _render_txn_table(recon):
     return "\n".join(lines)
 
 
-def format_metadata_html(metadata):
-    """Format metadata as a clean HTML card."""
-    if not metadata:
-        return '<p class="placeholder">No metadata.</p>'
-
-    amt = None
-    if metadata.get("total_amount") is not None:
-        cur = metadata.get("total_amount_currency", "")
-        amt = f'{metadata["total_amount"]:.2f} {cur}'.strip()
-
-    fields = [
-        ("Date Issued", metadata.get("date_issued")),
-        ("Document Type", metadata.get("document_type")),
-        ("Issuing Party", metadata.get("issuing_party")),
-        ("Document Title", metadata.get("document_title")),
-        ("Amount", amt),
-        ("Confidence", (
-            f'{metadata["class_confidence"]:.0%}'
-            if metadata.get("class_confidence") is not None else None
-        )),
-        ("Locale", metadata.get("locale")),
-        ("Tax Number", metadata.get("issuer_tax_number")),
-        ("Content Hash", metadata.get("hash_content")),
-        ("File Hash", metadata.get("hash_file")),
-        ("Pages", str(metadata["page_count"]) if metadata.get("page_count") else None),
-    ]
-
-    tc = "var(--body-text-color,#ddd)"
-    tcs = "var(--body-text-color-subdued,#999)"
-    h = [f'<div style="font-size:14px;padding:8px;color:{tc};">']
-    for label, val in fields:
-        if val and str(val) != "$UNKNOWN$":
-            h.append(
-                f'<div style="margin-bottom:6px;">'
-                f'<span style="color:{tcs};font-weight:500;">{label}:</span> '
-                f"<span>{html_lib.escape(str(val))}</span></div>"
-            )
-
-    if metadata.get("class_reasoning"):
-        h.append(
-            f'<div style="margin-top:10px;padding:8px;'
-            f'background:var(--block-background-fill,#2a2a2a);'
-            f'border-radius:4px;font-size:13px;color:{tcs};">'
-            f'<strong style="color:{tc};">Reasoning:</strong> '
-            f'{html_lib.escape(metadata["class_reasoning"])}'
-            f"</div>"
-        )
-
-    bs = metadata.get("bank_statement")
-    if bs:
-        h.append(f'<div style="margin-top:12px;font-weight:600;color:{tc};">'
-                 f'Bank Statement Details</div>')
-        for k, v in bs.items():
-            if v is not None:
-                h.append(
-                    f'<div style="margin-bottom:4px;">'
-                    f'<span style="color:{tcs};">{k}:</span> '
-                    f"{html_lib.escape(str(v))}</div>"
-                )
-
-    h.append("</div>")
-    return "\n".join(h)
-
-
 # ── Preview logic ────────────────────────────────────────────────
 
 _EMPTY_PREVIEW = (
     '<p class="placeholder">Select a file to preview.</p>',
-    '<p class="placeholder">Select a file to view metadata.</p>',
     "", "Page -/-", 0,
 )
 
 
 def _do_preview(filename, page):
-    """Preview a file using cached data. Returns (preview_html, meta_html, json_str, page_label, page_num)."""
+    """Preview a file using cached data. Returns (preview_html, json_str, page_label, page_num)."""
     data = _CACHE["data"]
     if not filename or not data:
         return _EMPTY_PREVIEW
@@ -492,29 +416,28 @@ def _do_preview(filename, page):
     if not entry:
         return (
             f'<p class="placeholder">File not found: {html_lib.escape(filename)}</p>',
-            "", "", "Page -/-", 0,
+            "", "Page -/-", 0,
         )
 
     doc_path = entry.get("doc_path")
     metadata = entry.get("metadata", {})
-    meta_html = format_metadata_html(metadata)
     json_str = json.dumps(metadata, indent=2, ensure_ascii=False, sort_keys=True)
 
     if not doc_path or not Path(doc_path).exists():
         return ('<p class="placeholder">File not found on disk.</p>',
-                meta_html, json_str, "No file", 0)
+                json_str, "No file", 0)
 
     p = Path(doc_path)
     if p.suffix.lower() == ".pdf":
         preview_html, total, clamped = _render_pdf_page_html(doc_path, page)
         pl = f"Page {clamped + 1}/{total}" if total else "Page -/-"
-        return (preview_html, meta_html, json_str, pl, clamped)
+        return (preview_html, json_str, pl, clamped)
     elif p.suffix.lower() == ".xlsx":
-        return (render_xlsx_as_html(doc_path), meta_html, json_str, "XLSX", 0)
+        return (render_xlsx_as_html(doc_path), json_str, "XLSX", 0)
     else:
         return (
             f'<p class="placeholder">Unsupported: {p.suffix}</p>',
-            meta_html, json_str, "Page -/-", 0,
+            json_str, "Page -/-", 0,
         )
 
 
@@ -526,7 +449,7 @@ def build_ui():
     folder_choices = _list_export_folders(export_base)
     default_folder = folder_choices[0] if folder_choices else None
 
-    with gr.Blocks(title="Papertrail Review") as app:
+    with gr.Blocks(title="Papertrail Review", css=_CSS, js=_JS) as app:
         # State (small values only — large data lives in _CACHE)
         export_base_state = gr.State(str(export_base) if export_base else "")
         bank_page = gr.State(0)
@@ -572,10 +495,6 @@ def build_ui():
                                     b_prev = gr.Button("< Prev", size="sm")
                                     b_page = gr.Markdown("Page -/-")
                                     b_next = gr.Button("Next >", size="sm")
-                            with gr.Tab("Metadata"):
-                                bank_meta = gr.HTML(
-                                    '<p class="placeholder">Select a file.</p>'
-                                )
                             with gr.Tab("Raw JSON"):
                                 bank_json = gr.Code(language="json", label="")
 
@@ -596,10 +515,6 @@ def build_ui():
                                     d_prev = gr.Button("< Prev", size="sm")
                                     d_page = gr.Markdown("Page -/-")
                                     d_next = gr.Button("Next >", size="sm")
-                            with gr.Tab("Metadata"):
-                                doc_meta = gr.HTML(
-                                    '<p class="placeholder">Select a document.</p>'
-                                )
                             with gr.Tab("Raw JSON"):
                                 doc_json = gr.Code(language="json", label="")
 
@@ -648,7 +563,7 @@ def build_ui():
         folder_dd.change(
             on_load, [folder_dd, export_base_state],
             [status_bar, bank_html, bank_file_dd, doc_dd,
-             doc_preview, doc_meta, doc_json, d_page, doc_page],
+             doc_preview, doc_json, d_page, doc_page],
         )
 
         # ── Bank: file selection via Dropdown ────────────────────
@@ -656,12 +571,12 @@ def build_ui():
         def on_bank_dd_select(filename):
             if not filename:
                 return (*_EMPTY_PREVIEW, 0, "")
-            preview, meta, js_str, pl, pg = _do_preview(filename, 0)
-            return preview, meta, js_str, pl, pg, filename
+            preview, js_str, pl, pg = _do_preview(filename, 0)
+            return preview, js_str, pl, pg, filename
 
         bank_file_dd.change(
             on_bank_dd_select, [bank_file_dd],
-            [bank_preview, bank_meta, bank_json, b_page, bank_page, bank_file],
+            [bank_preview, bank_json, b_page, bank_page, bank_file],
         )
 
         # ── Bank: file selection via JS bridge (click in table) ──
@@ -680,11 +595,11 @@ def build_ui():
         # ── Bank: page navigation ────────────────────────────────
 
         def on_bank_prev(pg, fn):
-            preview, _m, _j, pl, p = _do_preview(fn, max(0, pg - 1))
+            preview, _j, pl, p = _do_preview(fn, max(0, pg - 1))
             return preview, pl, p
 
         def on_bank_next(pg, fn):
-            preview, _m, _j, pl, p = _do_preview(fn, pg + 1)
+            preview, _j, pl, p = _do_preview(fn, pg + 1)
             return preview, pl, p
 
         b_prev.click(
@@ -705,17 +620,17 @@ def build_ui():
 
         doc_dd.change(
             on_doc_select, [doc_dd],
-            [doc_preview, doc_meta, doc_json, d_page, doc_page],
+            [doc_preview, doc_json, d_page, doc_page],
         )
 
         # ── Documents: page navigation ──────────────────────────
 
         def on_doc_prev(pg, fn):
-            preview, _m, _j, pl, p = _do_preview(fn, max(0, pg - 1))
+            preview, _j, pl, p = _do_preview(fn, max(0, pg - 1))
             return preview, pl, p
 
         def on_doc_next(pg, fn):
-            preview, _m, _j, pl, p = _do_preview(fn, pg + 1)
+            preview, _j, pl, p = _do_preview(fn, pg + 1)
             return preview, pl, p
 
         d_prev.click(
@@ -732,7 +647,7 @@ def build_ui():
         # so re-trigger the preview when the Documents tab becomes visible.
         documents_tab.select(
             on_doc_select, [doc_dd],
-            [doc_preview, doc_meta, doc_json, d_page, doc_page],
+            [doc_preview, doc_json, d_page, doc_page],
         )
 
         # ── Auto-load most recent folder on startup ──────────────
@@ -741,7 +656,7 @@ def build_ui():
             app.load(
                 on_load, [folder_dd, export_base_state],
                 [status_bar, bank_html, bank_file_dd, doc_dd,
-                 doc_preview, doc_meta, doc_json, d_page, doc_page],
+                 doc_preview, doc_json, d_page, doc_page],
             )
 
     return app
@@ -750,4 +665,4 @@ def build_ui():
 demo = build_ui()
 
 if __name__ == "__main__":
-    demo.launch(css=_CSS, js=_JS)
+    demo.launch()
