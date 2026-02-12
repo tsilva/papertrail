@@ -96,5 +96,32 @@ export:
           document_type: "bank-*"
         prefix: "BNC_"
 
+# Reconciliation validation — controls which documents are required per transaction type
+reconciliation:
+  # Keywords that identify bank fee transactions (matched case-insensitively, diacritics-stripped)
+  bank_fee_keywords:
+    - "COMISSAO"
+    - "IMPOSTO SELO"
+    - "IMP.SELO"
+    - "JUROS"
+    - "ANUIDADE"
+    - "MANUTENCAO"
+    - "DESPESAS"
+    - "PORTES"
+  # Document types that satisfy vendor payment validation
+  vendor_document_types:
+    - "invoice"
+    - "invoice-credit"
+    - "invoice-debit"
+    - "invoice-receipt"
+    - "invoice-order"
+    - "receipt"
+    - "receipt-reference"
+    - "receipt-delivery"
+  # Document types that satisfy credit (positive amount) validation
+  credit_document_types:
+    - "bank-note"
+    - "invoice-credit"
+
 # Task-specific defaults (optional)
 task_defaults: {}

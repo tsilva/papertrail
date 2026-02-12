@@ -1,6 +1,7 @@
 """Bank transaction reconciliation: matches bank transactions to PDF documents."""
 
 import json
+import unicodedata
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -387,17 +388,53 @@ Respond in JSON:
     return matches
 
 
-_REQUIRED_DOCUMENT_TYPES = ["bank-note"]
+def _strip_diacritics(s: str) -> str:
+    """Remove diacritics/accents from a string."""
+    return "".join(
+        c for c in unicodedata.normalize("NFD", s)
+        if unicodedata.category(c) != "Mn"
+    )
 
 
-def _validate_required_documents(matches: list[MatchResult]) -> dict[int, list[str]]:
-    """Check each match has all required document types. Returns {row_number: [missing_types]}."""
+def _classify_transaction(txn: Transaction, bank_fee_keywords: list[str]) -> str:
+    """Classify a transaction: 'credit', 'bank-fee', or 'vendor-payment'."""
+    if txn.amount > 0:
+        return "credit"
+    normalized = _strip_diacritics(txn.description).upper()
+    for keyword in bank_fee_keywords:
+        if keyword in normalized:
+            return "bank-fee"
+    return "vendor-payment"
+
+
+def _validate_required_documents(
+    matches: list[MatchResult],
+    bank_fee_keywords: list[str],
+    vendor_document_types: set[str],
+    credit_document_types: set[str],
+) -> dict[int, list[str]]:
+    """Check each match has the correct document types based on transaction category."""
     warnings = {}
     for m in matches:
         matched_types = {c.document_type for c in m.pdf_candidates if c.document_type}
-        missing = [dt for dt in _REQUIRED_DOCUMENT_TYPES if dt not in matched_types]
-        if missing:
-            warnings[m.transaction.row_number] = missing
+        row_warnings = []
+        category = _classify_transaction(m.transaction, bank_fee_keywords)
+
+        if category == "credit":
+            if not matched_types & credit_document_types:
+                row_warnings.append("missing bank-note or credit note")
+        elif category == "bank-fee":
+            if "bank-note" not in matched_types:
+                row_warnings.append("missing bank-note")
+            bank_note_count = sum(1 for c in m.pdf_candidates if c.document_type == "bank-note")
+            if bank_note_count > 1:
+                row_warnings.append(f"multiple bank-notes ({bank_note_count})")
+        else:  # vendor-payment
+            if not matched_types & vendor_document_types:
+                row_warnings.append("missing vendor document (invoice/receipt)")
+
+        if row_warnings:
+            warnings[m.transaction.row_number] = row_warnings
     return warnings
 
 
@@ -407,10 +444,16 @@ def _write_reconciliation_file(
     unmatched_transactions: list[Transaction],
     total_transactions: int,
     warnings: dict[int, list[str]] | None = None,
+    unmatched_files: list[PDFCandidate] | None = None,
+    bank_fee_keywords: list[str] | None = None,
 ) -> Path:
     """Write a .reconciliation JSON sidecar alongside the XLSX. Returns the output path."""
     if warnings is None:
         warnings = {}
+    if unmatched_files is None:
+        unmatched_files = []
+    if bank_fee_keywords is None:
+        bank_fee_keywords = []
 
     output_path = excel_path.with_suffix(".reconciliation.json")
 
@@ -429,11 +472,12 @@ def _write_reconciliation_file(
             "description": txn.description,
             "amount": txn.amount,
             "currency": txn.currency,
+            "transaction_category": _classify_transaction(txn, bank_fee_keywords),
             "method": m.method,
             "confidence": m.confidence,
             "reasoning": m.reasoning,
             "files": [c.pdf_filename for c in m.pdf_candidates],
-            "warnings": [f"missing {dt}" for dt in row_warnings],
+            "warnings": row_warnings,
         })
 
     unmatched_entries = []
@@ -444,6 +488,18 @@ def _write_reconciliation_file(
             "description": txn.description,
             "amount": txn.amount,
             "currency": txn.currency,
+            "transaction_category": _classify_transaction(txn, bank_fee_keywords),
+        })
+
+    unmatched_file_entries = []
+    for cand in unmatched_files:
+        unmatched_file_entries.append({
+            "file": cand.pdf_filename,
+            "date_issued": cand.date_issued,
+            "document_type": cand.document_type,
+            "issuing_party": cand.issuing_party,
+            "total_amount": cand.total_amount,
+            "currency": cand.total_amount_currency,
         })
 
     data = {
@@ -454,10 +510,12 @@ def _write_reconciliation_file(
             "matched": total_matched,
             "unmatched": total_unmatched,
             "incomplete": total_incomplete,
+            "unmatched_files": len(unmatched_files),
             "match_rate": round(match_rate, 1),
         },
         "matches": match_entries,
         "unmatched": unmatched_entries,
+        "unmatched_files": unmatched_file_entries,
     }
 
     output_path.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n")
@@ -472,7 +530,7 @@ def _reconcile_single(
     quiet: bool = False,
 ) -> dict:
     """Reconcile a single bank statement against PDF documents in export_path."""
-    empty_stats = {"total": 0, "matched": 0, "unmatched": 0, "incomplete": 0, "match_rate": 0.0}
+    empty_stats = {"total": 0, "matched": 0, "unmatched": 0, "incomplete": 0, "unmatched_files": 0, "match_rate": 0.0}
 
     transactions = _load_transactions(excel_path)
 
@@ -507,18 +565,35 @@ def _reconcile_single(
     p2_matched_rows = {m.transaction.row_number for m in p2_matches}
     final_unmatched = [txn for txn in unmatched_txns if txn.row_number not in p2_matched_rows]
 
-    # Validate required document types
-    incomplete_warnings = _validate_required_documents(all_matches)
-    for row_num, missing in incomplete_warnings.items():
+    # Build set of all matched PDF json_paths
+    matched_pdf_paths = set()
+    for m in all_matches:
+        for c in m.pdf_candidates:
+            matched_pdf_paths.add(str(c.json_path))
+    unmatched_files = [c for c in candidates if str(c.json_path) not in matched_pdf_paths]
+
+    # Validate required document types per transaction category
+    profile = get_current_profile()
+    recon_config = profile.reconciliation
+    incomplete_warnings = _validate_required_documents(
+        all_matches,
+        bank_fee_keywords=recon_config.bank_fee_keywords,
+        vendor_document_types=set(recon_config.vendor_document_types),
+        credit_document_types=set(recon_config.credit_document_types),
+    )
+    for row_num, row_warnings in incomplete_warnings.items():
+        txn = next(m.transaction for m in all_matches if m.transaction.row_number == row_num)
+        category = _classify_transaction(txn, recon_config.bank_fee_keywords)
         logger.debug(
-            f"[INCOMPLETE] Row {row_num}: missing required document types: "
-            f"{', '.join(missing)}"
+            f"[INCOMPLETE] Row {row_num} ({category}): {', '.join(row_warnings)}"
         )
 
     if all_matches and not dry_run:
         _write_reconciliation_file(
             excel_path, all_matches, final_unmatched, len(transactions),
             warnings=incomplete_warnings,
+            unmatched_files=unmatched_files,
+            bank_fee_keywords=recon_config.bank_fee_keywords,
         )
     elif dry_run and all_matches:
         if not quiet:
@@ -528,11 +603,13 @@ def _reconcile_single(
     total_matched = len(all_matches)
     total_unmatched = len(final_unmatched)
     total_incomplete = len(incomplete_warnings)
+    total_unmatched_files = len(unmatched_files)
     pct = (total_matched / total_txns * 100) if total_txns > 0 else 0
 
     logger.debug(
         f"[SUMMARY] {total_matched}/{total_txns} matched ({pct:.1f}%), "
-        f"{total_unmatched} unmatched, {total_incomplete} incomplete"
+        f"{total_unmatched} unmatched, {total_incomplete} incomplete, "
+        f"{total_unmatched_files} unmatched files"
     )
 
     if not quiet:
@@ -543,12 +620,12 @@ def _reconcile_single(
         )
         if total_incomplete > 0:
             console.warning(
-                f"{total_incomplete} matched transactions missing required documents",
+                f"{total_incomplete} matched transactions with warnings",
                 indent=False,
             )
-            for row_num, missing in incomplete_warnings.items():
+            for row_num, row_warnings in incomplete_warnings.items():
                 console.detail(
-                    f"Row {row_num}: missing {', '.join(missing)}"
+                    f"Row {row_num}: {', '.join(row_warnings)}"
                 )
         if total_unmatched > 0:
             console.warning(
@@ -561,9 +638,27 @@ def _reconcile_single(
                 )
 
     for txn in final_unmatched:
+        category = _classify_transaction(txn, recon_config.bank_fee_keywords)
         logger.debug(
-            f"[NO-MATCH] Row {txn.row_number}: {txn.description[:50]} "
+            f"[NO-MATCH] Row {txn.row_number} ({category}): {txn.description[:50]} "
             f"({txn.amount:.2f} {txn.currency})"
+        )
+
+    if not quiet and total_unmatched_files > 0:
+        console.warning(
+            f"{total_unmatched_files} document files unmatched", indent=False,
+        )
+        for cand in unmatched_files:
+            amount_str = ""
+            if cand.total_amount is not None:
+                currency = cand.total_amount_currency or "EUR"
+                amount_str = f" ({cand.total_amount:.2f} {currency})"
+            console.detail(f"{cand.pdf_filename}{amount_str}")
+
+    for cand in unmatched_files:
+        logger.debug(
+            f"[NO-MATCH-FILE] {cand.pdf_filename} "
+            f"(type={cand.document_type}, party={cand.issuing_party})"
         )
 
     return {
@@ -571,6 +666,7 @@ def _reconcile_single(
         "matched": total_matched,
         "unmatched": total_unmatched,
         "incomplete": total_incomplete,
+        "unmatched_files": total_unmatched_files,
         "match_rate": pct,
     }
 

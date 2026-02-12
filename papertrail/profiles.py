@@ -97,6 +97,22 @@ class NifApiConfig:
 
 
 @dataclass
+class ReconciliationConfig:
+    """Reconciliation validation configuration."""
+    bank_fee_keywords: List[str] = field(default_factory=lambda: [
+        "COMISSAO", "IMPOSTO SELO", "IMP.SELO", "JUROS",
+        "ANUIDADE", "MANUTENCAO", "DESPESAS", "PORTES",
+    ])
+    vendor_document_types: List[str] = field(default_factory=lambda: [
+        "invoice", "invoice-credit", "invoice-debit", "invoice-receipt",
+        "invoice-order", "receipt", "receipt-reference", "receipt-delivery",
+    ])
+    credit_document_types: List[str] = field(default_factory=lambda: [
+        "bank-note", "invoice-credit",
+    ])
+
+
+@dataclass
 class ExportMappingRule:
     """A single prefix mapping rule for export files."""
     match: Dict[str, str]
@@ -130,6 +146,7 @@ class Profile:
     passwords: PasswordsConfig = field(default_factory=PasswordsConfig)
     pipeline: PipelineConfig = field(default_factory=PipelineConfig)
     nif_api: NifApiConfig = field(default_factory=NifApiConfig)
+    reconciliation: ReconciliationConfig = field(default_factory=ReconciliationConfig)
     export: ExportConfig = field(default_factory=ExportConfig)
     task_defaults: Dict[str, Any] = field(default_factory=dict)
     _profile_path: Optional[Path] = field(default=None, repr=False)
@@ -293,6 +310,14 @@ def _parse_profile_dict(data: Dict[str, Any], profile_path: Path) -> Profile:
         enabled=nif_api_data.get("enabled", False),
     )
 
+    recon_data = data.get("reconciliation", {})
+    recon_defaults = ReconciliationConfig()
+    reconciliation = ReconciliationConfig(
+        bank_fee_keywords=recon_data.get("bank_fee_keywords", recon_defaults.bank_fee_keywords),
+        vendor_document_types=recon_data.get("vendor_document_types", recon_defaults.vendor_document_types),
+        credit_document_types=recon_data.get("credit_document_types", recon_defaults.credit_document_types),
+    )
+
     export_data = data.get("export", {})
     fm_data = export_data.get("file_mappings", {})
     export_rules = []
@@ -322,6 +347,7 @@ def _parse_profile_dict(data: Dict[str, Any], profile_path: Path) -> Profile:
         passwords=passwords,
         pipeline=pipeline,
         nif_api=nif_api,
+        reconciliation=reconciliation,
         export=export_config,
         task_defaults=data.get("task_defaults", {}),
         _profile_path=profile_path

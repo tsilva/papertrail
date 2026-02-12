@@ -67,14 +67,8 @@ _CSS = """
 }
 .file-link:hover { color: #79c0ff; }
 .bank-section {
-    margin-bottom: 16px; border: 1px solid var(--border-color-primary, #444);
+    border: 1px solid var(--border-color-primary, #444);
     border-radius: 8px; overflow: hidden;
-}
-.bank-section summary {
-    padding: 12px 16px; cursor: pointer; font-weight: 600; font-size: 14px;
-    background: var(--block-background-fill, #2a2a2a);
-    border-bottom: 1px solid var(--border-color-primary, #444);
-    color: var(--body-text-color, #ddd);
 }
 .bank-info {
     padding: 6px 16px; font-size: 13px;
@@ -300,50 +294,45 @@ def _match_status(m):
     return "exact"
 
 
-def render_bank_statements_html(bank_statements):
-    """Render all bank statements as stacked HTML sections with transaction tables."""
-    if not bank_statements:
-        return '<p class="placeholder">No bank statements found in this folder.</p>'
+def render_single_bank_html(bs):
+    """Render a single bank statement entry as HTML with info line and transaction table."""
+    if not bs:
+        return '<p class="placeholder">Select a bank statement.</p>'
 
-    parts = []
-    for i, bs in enumerate(bank_statements):
-        name = Path(bs["doc_path"]).name if bs.get("doc_path") else "Unknown"
-        meta = bs.get("metadata", {})
-        recon = bs.get("reconciliation")
-        bs_data = meta.get("bank_statement", {})
+    meta = bs.get("metadata", {})
+    recon = bs.get("reconciliation")
+    bs_data = meta.get("bank_statement", {})
 
-        parts.append(f'<details {"open" if i == 0 else ""} class="bank-section">')
-        parts.append(f"<summary>{html_lib.escape(name)}</summary>")
+    parts = ['<div class="bank-section">']
 
-        # Info line
-        info = []
-        if bs_data.get("account_number"):
-            info.append(f'Account: <strong>{bs_data["account_number"]}</strong>')
-        if bs_data.get("period_start") and bs_data.get("period_end"):
-            info.append(f'Period: {bs_data["period_start"]} to {bs_data["period_end"]}')
-        if bs_data.get("transaction_count"):
-            info.append(f'{bs_data["transaction_count"]} transactions')
-        if info:
-            parts.append(f'<div class="bank-info">{" &middot; ".join(info)}</div>')
+    # Info line
+    info = []
+    if bs_data.get("account_number"):
+        info.append(f'Account: <strong>{bs_data["account_number"]}</strong>')
+    if bs_data.get("period_start") and bs_data.get("period_end"):
+        info.append(f'Period: {bs_data["period_start"]} to {bs_data["period_end"]}')
+    if bs_data.get("transaction_count"):
+        info.append(f'{bs_data["transaction_count"]} transactions')
+    if info:
+        parts.append(f'<div class="bank-info">{" &middot; ".join(info)}</div>')
 
-        # Reconciliation
-        if recon:
-            s = recon.get("summary", {})
-            inc = f' &middot; {s.get("incomplete", 0)} incomplete' if s.get("incomplete") else ""
-            parts.append(
-                f'<div class="bank-info"><strong>Reconciliation:</strong> '
-                f'{s.get("matched", 0)}/{s.get("total", 0)} matched '
-                f'({s.get("match_rate", 0):.1f}%){inc}</div>'
-            )
-            parts.append(_render_txn_table(recon))
-        else:
-            parts.append(
-                '<div class="bank-info" style="color:var(--body-text-color-subdued,#666);">'
-                'No reconciliation data.</div>'
-            )
+    # Reconciliation
+    if recon:
+        s = recon.get("summary", {})
+        inc = f' &middot; {s.get("incomplete", 0)} incomplete' if s.get("incomplete") else ""
+        parts.append(
+            f'<div class="bank-info"><strong>Reconciliation:</strong> '
+            f'{s.get("matched", 0)}/{s.get("total", 0)} matched '
+            f'({s.get("match_rate", 0):.1f}%){inc}</div>'
+        )
+        parts.append(_render_txn_table(recon))
+    else:
+        parts.append(
+            '<div class="bank-info" style="color:var(--body-text-color-subdued,#666);">'
+            'No reconciliation data.</div>'
+        )
 
-        parts.append("</details>")
-
+    parts.append("</div>")
     return "\n".join(parts)
 
 
@@ -362,7 +351,7 @@ def _render_txn_table(recon):
         })
     rows.sort(key=lambda r: r.get("row", 0))
 
-    lines = ['<div style="max-height:400px;overflow-y:auto;margin:0 16px 12px;">']
+    lines = ['<div style="margin:0 16px 12px;">']
     lines.append("<table class='txn-table'><thead><tr>")
     for h, a in [
         ("Row", "left"), ("Date", "left"), ("Description", "left"),
@@ -502,6 +491,11 @@ def build_ui():
 
         with gr.Row(equal_height=False):
             with gr.Column(scale=1, min_width=400):
+                bank_stmt_dd = gr.Dropdown(
+                    label="Bank Statement",
+                    choices=[],
+                    interactive=True,
+                )
                 bank_html = gr.HTML(
                     '<p class="placeholder">Load a folder to view bank statements.</p>'
                 )
@@ -526,35 +520,60 @@ def build_ui():
         # ── Load folder handler ──────────────────────────────────
 
         def on_load(folder_name, base_dir):
+            empty = (
+                "Select an export folder.",
+                '<p class="placeholder">No data loaded.</p>',
+                gr.update(choices=[], value=None),
+                gr.update(choices=[], value=None),
+            )
             if not folder_name or not base_dir:
                 _CACHE["data"] = {}
-                return (
-                    "Select an export folder.",
-                    '<p class="placeholder">No data loaded.</p>',
-                    gr.update(choices=[], value=None),
-                )
+                return empty
             folder_path = str(Path(base_dir) / folder_name)
             data, status = load_export_folder(folder_path)
             if not data:
                 _CACHE["data"] = {}
-                return (
-                    status,
-                    '<p class="placeholder">No data loaded.</p>',
-                    gr.update(choices=[], value=None),
-                )
+                return (status, empty[1], empty[2], empty[3])
 
             _CACHE["data"] = data
 
-            bank_content = render_bank_statements_html(data.get("bank_statements", []))
+            # Build bank statement dropdown choices keyed by filename
+            bs_list = data.get("bank_statements", [])
+            bs_choices = [
+                Path(b["doc_path"]).name if b.get("doc_path") else f"Statement {i}"
+                for i, b in enumerate(bs_list)
+            ]
+            first_bs = bs_choices[0] if bs_choices else None
+            bank_content = render_single_bank_html(bs_list[0]) if bs_list else (
+                '<p class="placeholder">No bank statements found in this folder.</p>'
+            )
+
             bank_file_choices = data.get("bank_files", [])
             return (
                 status, bank_content,
+                gr.update(choices=bs_choices, value=first_bs),
                 gr.update(choices=bank_file_choices, value=bank_file_choices[0] if bank_file_choices else None),
             )
 
         folder_dd.change(
             on_load, [folder_dd, export_base_state],
-            [status_bar, bank_html, bank_file_dd],
+            [status_bar, bank_html, bank_stmt_dd, bank_file_dd],
+        )
+
+        # ── Bank: statement dropdown ─────────────────────────────
+
+        def on_bank_stmt_select(stmt_name):
+            data = _CACHE["data"]
+            if not stmt_name or not data:
+                return '<p class="placeholder">Select a bank statement.</p>'
+            for bs in data.get("bank_statements", []):
+                name = Path(bs["doc_path"]).name if bs.get("doc_path") else ""
+                if name == stmt_name:
+                    return render_single_bank_html(bs)
+            return '<p class="placeholder">Bank statement not found.</p>'
+
+        bank_stmt_dd.change(
+            on_bank_stmt_select, [bank_stmt_dd], [bank_html],
         )
 
         # ── Bank: file selection via Dropdown ────────────────────
@@ -609,7 +628,7 @@ def build_ui():
         if default_folder:
             app.load(
                 on_load, [folder_dd, export_base_state],
-                [status_bar, bank_html, bank_file_dd],
+                [status_bar, bank_html, bank_stmt_dd, bank_file_dd],
             )
 
     return app
