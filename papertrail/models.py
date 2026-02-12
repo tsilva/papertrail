@@ -52,6 +52,21 @@ class DocumentMetadataRaw(BaseModel):
     )
 
 
+class SubDocumentMetadata(BaseModel):
+    """QR-extracted metadata for a single sub-document within a multi-invoice PDF."""
+    date_issued: Optional[str] = None
+    document_type: Optional[str] = None
+    total_amount: Optional[float] = None
+    total_amount_currency: Optional[str] = None
+    issuer_tax_number: Optional[str] = None
+    issuing_party: Optional[str] = None
+    issuing_party_raw: Optional[str] = None
+    document_number: Optional[str] = None
+    atcud: Optional[str] = None
+    locale: Optional[str] = None
+    qrcode: Optional[dict] = None
+
+
 class DocumentMetadata(BaseModel):
     """Full document metadata with hashes, timestamps, and validated enum fields."""
     class_confidence: float = Field(description="Confidence score between 0 and 1.")
@@ -76,6 +91,7 @@ class DocumentMetadata(BaseModel):
     qrcode: Optional[dict] = Field(default=None)
     bank_statement: Optional[dict] = Field(default=None)
     source_extension: Optional[str] = Field(default=None)
+    sub_documents: Optional[list[dict]] = Field(default=None)
 
     @field_validator('date_issued', mode='before')
     @classmethod

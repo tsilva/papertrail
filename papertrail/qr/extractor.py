@@ -308,27 +308,35 @@ def extract_all_qr_codes(pdf_path: Path, max_pages: int = 5, include_last: bool 
     return all_qr_codes
 
 
-def extract_metadata_from_qr(pdf_path: Path) -> tuple[Optional[QRExtractedMetadata], Optional[dict]]:
-    """Extract metadata from QR codes in a PDF. Returns (metadata, raw_data) or (None, None)."""
+def extract_all_metadata_from_qr(pdf_path: Path) -> list[tuple[QRExtractedMetadata, dict]]:
+    """Extract metadata from ALL Portuguese invoice QR codes in a PDF.
+
+    Returns list of (metadata, raw_data) tuples, one per successful parse.
+    Empty list when no Portuguese invoice QR codes found.
+    """
     qr_codes = extract_all_qr_codes(pdf_path)
-
     if not qr_codes:
-        return None, None
+        return []
 
-    priority_order = {
-        QRCodeType.PORTUGUESE_INVOICE: 0,
-        QRCodeType.URL: 10,
-        QRCodeType.UNKNOWN: 20,
-    }
-    qr_codes.sort(key=lambda x: priority_order.get(x.qr_type, 15))
-
+    results = []
     for qr_data in qr_codes:
         if is_portuguese_invoice_qr(qr_data.raw_content):
             metadata, raw_data = parse_portuguese_invoice_qr(qr_data)
             if metadata:
-                logger.debug(f"Extracted metadata from {qr_data.qr_type.value} QR: "
-                           f"date={metadata.issue_date}, type={metadata.document_type}, "
-                           f"amount={metadata.total_amount}")
-                return metadata, raw_data
+                logger.debug(
+                    f"Extracted metadata from {qr_data.qr_type.value} QR: "
+                    f"date={metadata.issue_date}, type={metadata.document_type}, "
+                    f"amount={metadata.total_amount}, nif={metadata.issuer_tax_number}"
+                )
+                results.append((metadata, raw_data))
 
-    return None, None
+    if len(results) >= 2:
+        logger.debug(f"[MULTI-QR] Found {len(results)} Portuguese invoice QR codes in {pdf_path.name}")
+
+    return results
+
+
+def extract_metadata_from_qr(pdf_path: Path) -> tuple[Optional[QRExtractedMetadata], Optional[dict]]:
+    """Extract metadata from QR codes in a PDF. Returns (metadata, raw_data) or (None, None)."""
+    results = extract_all_metadata_from_qr(pdf_path)
+    return results[0] if results else (None, None)

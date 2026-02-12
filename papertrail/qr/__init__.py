@@ -26,6 +26,7 @@ from papertrail.qr.extractor import (
     extract_qr_codes_from_page,
     extract_all_qr_codes,
     extract_metadata_from_qr,
+    extract_all_metadata_from_qr,
     check_pyzbar_available,
     detect_qr_type,
 )
@@ -40,6 +41,7 @@ __all__ = [
     "extract_qr_codes_from_page",
     "extract_all_qr_codes",
     "extract_metadata_from_qr",
+    "extract_all_metadata_from_qr",
     "check_pyzbar_available",
     "detect_qr_type",
 ]

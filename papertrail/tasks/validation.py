@@ -275,3 +275,61 @@ def task_backfill_text_hash(processed_path: Path):
         update_fn=_update,
         skip_label="already had hash_text",
     )
+
+
+def task_backfill_sub_documents(processed_path: Path):
+    """Backfill sub_documents for PDFs with multiple Portuguese invoice QR codes.
+
+    Scans each PDF for QR codes. If 2+ Portuguese invoice QR codes found,
+    builds sub_documents list from QR data and sets parent qrcode to None.
+    NIF enrichment is skipped for speed — use sync afterward for full enrichment.
+    """
+    from papertrail.metadata import find_companion_file
+    from papertrail.qr import extract_all_metadata_from_qr
+    from papertrail.models import SubDocumentMetadata
+
+    def _should_skip(_mp, _pp, data):
+        return data.get("sub_documents") is not None
+
+    def _update(metadata_path, _pdf_path, data):
+        companion = find_companion_file(metadata_path, data)
+        if companion is None or companion.suffix.lower() != ".pdf":
+            data["sub_documents"] = None
+            data["date_updated"] = datetime.now().strftime("%Y-%m-%d")
+            return
+
+        all_results = extract_all_metadata_from_qr(companion)
+        if len(all_results) < 2:
+            data["sub_documents"] = None
+            data["date_updated"] = datetime.now().strftime("%Y-%m-%d")
+            return
+
+        sub_docs = []
+        for qr_metadata, qr_raw_data in all_results:
+            sub_doc = SubDocumentMetadata(
+                date_issued=qr_metadata.issue_date,
+                document_type=qr_metadata.document_type,
+                total_amount=qr_metadata.total_amount,
+                total_amount_currency=qr_metadata.total_amount_currency,
+                issuer_tax_number=qr_metadata.issuer_tax_number,
+                document_number=qr_metadata.document_number,
+                atcud=qr_metadata.atcud,
+                locale=qr_metadata.locale,
+                qrcode=qr_raw_data,
+            )
+            sub_docs.append(sub_doc.model_dump())
+
+        data["sub_documents"] = sub_docs
+        data["qrcode"] = None
+        data["date_updated"] = datetime.now().strftime("%Y-%m-%d")
+        logger.debug(f"[MULTI-QR] {companion.name}: {len(sub_docs)} sub-documents")
+
+    _batch_update_metadata(
+        processed_path,
+        task_name="backfill_sub_documents",
+        progress_desc="Backfilling sub_documents",
+        require_pdf=False,
+        should_skip=_should_skip,
+        update_fn=_update,
+        skip_label="already processed",
+    )

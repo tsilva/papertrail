@@ -16,7 +16,7 @@ from papertrail.logging_utils import (
     DocumentLogger,
     setup_task_logging,
 )
-from papertrail.models import DocumentMetadata, DocumentMetadataRaw
+from papertrail.models import DocumentMetadata, DocumentMetadataRaw, SubDocumentMetadata
 from papertrail.llm import (
     get_system_prompt_raw_extraction,
     normalize_metadata,
@@ -39,7 +39,7 @@ def enum_value(v):
     """Extract value from enum or return as-is."""
     return v.value if hasattr(v, 'value') else v
 from papertrail.tasks import task_log_context
-from papertrail.qr import extract_metadata_from_qr, QRExtractedMetadata
+from papertrail.qr import extract_all_metadata_from_qr, QRExtractedMetadata
 from papertrail.nif_lookup import NIFLookupCache
 
 logger = get_logger('cli')
@@ -71,13 +71,27 @@ def _merge_qr_metadata(
 
 
 def _phase0_qr_extract(pdf_path, doc_logger):
-    """Phase 0: Extract metadata from QR codes (fast, 100% accurate)."""
+    """Phase 0: Extract metadata from QR codes (fast, 100% accurate).
+
+    Returns 3-tuple: (qr_metadata, qr_raw_data, all_qr_results)
+    - 0 results: (None, None, [])
+    - 1 result: (metadata, raw_data, []) — single-QR path
+    - 2+ results: (None, None, all_results) — multi-QR, sub-documents
+    """
     try:
         t0 = _time.monotonic()
-        qr_metadata, qr_raw_data = extract_metadata_from_qr(pdf_path)
+        all_results = extract_all_metadata_from_qr(pdf_path)
         if doc_logger:
             doc_logger.log_timing("qr_extraction", _time.monotonic() - t0)
-            if qr_metadata:
+
+        if not all_results:
+            if doc_logger:
+                doc_logger.log_qr_not_found()
+            return None, None, []
+
+        if len(all_results) == 1:
+            qr_metadata, qr_raw_data = all_results[0]
+            if doc_logger:
                 doc_logger.log_qr_extraction(
                     qr_metadata.extraction_source,
                     {k: getattr(qr_metadata, k) for k in (
@@ -85,14 +99,27 @@ def _phase0_qr_extract(pdf_path, doc_logger):
                         "issuer_nif", "issuer_tax_number", "atcud", "locale",
                     )},
                 )
-            else:
-                doc_logger.log_qr_not_found()
-        return qr_metadata, qr_raw_data
+            return qr_metadata, qr_raw_data, []
+
+        # 2+ results: multi-QR mode
+        if doc_logger:
+            doc_logger.log_multi_qr(len(all_results), pdf_path.name)
+            for qr_meta, qr_raw in all_results:
+                doc_logger.log_qr_extraction(
+                    qr_meta.extraction_source,
+                    {k: getattr(qr_meta, k) for k in (
+                        "issue_date", "document_type", "total_amount",
+                        "issuer_nif", "issuer_tax_number", "atcud", "locale",
+                    )},
+                    page_number=qr_raw.get("page_number", 0) if qr_raw else 0,
+                )
+        return None, None, all_results
+
     except Exception as e:
         logger.debug(f"QR extraction failed (continuing with LLM): {e}")
         if doc_logger:
             doc_logger.log_qr_not_found()
-        return None, None
+        return None, None, []
 
 
 def _phase1_llm_extract(pdf_path, exclude_fields, pre_extracted, ctx, doc_logger):
@@ -195,6 +222,68 @@ def _phase4_nif_enrich(merged, raw_metadata, normalized_issuing_party, ctx, doc_
     return normalized_issuing_party
 
 
+def _build_sub_documents(all_qr_results, ctx, doc_logger):
+    """Build sub-document metadata list from multiple QR results.
+
+    Each sub-document gets independent NIF enrichment since issuers differ.
+    Returns list[dict] suitable for storing in DocumentMetadata.sub_documents.
+    """
+    sub_docs = []
+    for qr_metadata, qr_raw_data in all_qr_results:
+        issuing_party = None
+        issuing_party_raw = None
+
+        # NIF enrichment for this sub-document's issuer
+        tax_number = qr_metadata.issuer_tax_number
+        if tax_number and ctx.nif_cache and NIFLookupCache.is_portuguese_nif(tax_number):
+            official_issuer, lookup_source, lookup_error = ctx.nif_cache.lookup(tax_number)
+
+            if official_issuer:
+                issuing_party_raw = official_issuer
+                if doc_logger:
+                    if lookup_source == "cache":
+                        doc_logger.log_nif_cache_hit(tax_number, official_issuer)
+                    elif lookup_source == "web":
+                        doc_logger.log_nif_web_lookup(tax_number, official_issuer)
+
+                # Normalize the official name
+                nif_raw = DocumentMetadataRaw(
+                    issue_date=qr_metadata.issue_date or "$UNKNOWN$",
+                    document_type=qr_metadata.document_type or "$UNKNOWN$",
+                    issuing_party=official_issuer,
+                    confidence=1.0,
+                    reasoning="NIF lookup for sub-document",
+                )
+                _, nif_normalized = normalize_metadata(
+                    nif_raw, ctx.openai_client, ctx.model_id,
+                )
+                if nif_normalized != "$UNKNOWN$":
+                    issuing_party = nif_normalized
+                    add_session_party(issuing_party)
+                    if doc_logger:
+                        doc_logger.log_nif_enrichment(tax_number, official_issuer, nif_normalized)
+
+        sub_doc = SubDocumentMetadata(
+            date_issued=qr_metadata.issue_date,
+            document_type=qr_metadata.document_type,
+            total_amount=qr_metadata.total_amount,
+            total_amount_currency=qr_metadata.total_amount_currency,
+            issuer_tax_number=qr_metadata.issuer_tax_number,
+            issuing_party=issuing_party,
+            issuing_party_raw=issuing_party_raw,
+            document_number=qr_metadata.document_number,
+            atcud=qr_metadata.atcud,
+            locale=qr_metadata.locale,
+            qrcode=qr_raw_data,
+        )
+        sub_docs.append(sub_doc.model_dump())
+
+    if ctx.nif_cache:
+        ctx.nif_cache.save()
+
+    return sub_docs
+
+
 def classify_pdf_document(pdf_path: Path, file_hash: str, failure_logger=None,
                           doc_logger: DocumentLogger = None) -> DocumentMetadata:
     """Classify a PDF document using QR extraction and LLM.
@@ -208,10 +297,11 @@ def classify_pdf_document(pdf_path: Path, file_hash: str, failure_logger=None,
         doc_logger.start_document(pdf_path)
 
     # Phase 0: QR extraction
-    qr_metadata, qr_raw_data = _phase0_qr_extract(pdf_path, doc_logger)
+    qr_metadata, qr_raw_data, all_qr_results = _phase0_qr_extract(pdf_path, doc_logger)
+    is_multi_qr = len(all_qr_results) >= 2
 
     exclude_fields, pre_extracted = set(), {}
-    if qr_metadata:
+    if qr_metadata and not is_multi_qr:
         exclude_fields, pre_extracted = get_qr_exclusions(qr_metadata)
         if doc_logger and exclude_fields:
             doc_logger.log_qr_skip(exclude_fields)
@@ -228,7 +318,10 @@ def classify_pdf_document(pdf_path: Path, file_hash: str, failure_logger=None,
         if doc_logger:
             doc_logger.log_timing("normalization", _time.monotonic() - t0)
 
-        # Phase 3: Merge QR overrides
+        # Build sub-documents for multi-QR PDFs (before merge, needs ctx for NIF)
+        sub_documents = _build_sub_documents(all_qr_results, ctx, doc_logger) if is_multi_qr else None
+
+        # Phase 3: Merge QR overrides (skip for multi-QR — QR data lives in sub_documents)
         merged = {
             "issue_date": raw_metadata.issue_date,
             "document_type": normalized_doc_type,
@@ -238,7 +331,7 @@ def classify_pdf_document(pdf_path: Path, file_hash: str, failure_logger=None,
             "locale": raw_metadata.locale,
         }
         qr_overrode_doc_type = False
-        if qr_metadata:
+        if qr_metadata and not is_multi_qr:
             old_doc_type = merged["document_type"]
             _merge_qr_metadata(qr_metadata, merged, doc_logger)
             qr_overrode_doc_type = merged["document_type"] != old_doc_type
@@ -285,7 +378,7 @@ def classify_pdf_document(pdf_path: Path, file_hash: str, failure_logger=None,
             issuing_party=normalized_issuing_party,
             total_amount=merged["total_amount"],
             total_amount_currency=merged["total_amount_currency"],
-            class_confidence=1.0 if qr_metadata else raw_metadata.confidence,
+            class_confidence=raw_metadata.confidence if is_multi_qr else (1.0 if qr_metadata else raw_metadata.confidence),
             class_reasoning=raw_metadata.reasoning,
             hash_content=file_hash,
             document_type_raw=raw_metadata.document_type,
@@ -293,7 +386,8 @@ def classify_pdf_document(pdf_path: Path, file_hash: str, failure_logger=None,
             issuing_party_raw=raw_metadata.issuing_party,
             issuer_tax_number=merged["issuer_tax_number"],
             locale=merged["locale"],
-            qrcode=qr_raw_data,
+            qrcode=None if is_multi_qr else qr_raw_data,
+            sub_documents=sub_documents,
         )
 
         now = datetime.now().strftime("%Y-%m-%d")
