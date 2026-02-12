@@ -28,6 +28,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 
 PLAN_FILENAME = "_dupes_plan.json"
+DECISIONS_FILENAME = "_dupes_decisions.json"
 DUPES_DIRNAME = "_dupes"
 
 
@@ -196,6 +197,28 @@ def execute(directory: Path, dry_run: bool = False):
         print("Plan has no duplicate groups. Nothing to do.")
         return
 
+    # Load decisions file if present
+    decisions = None
+    decisions_path = directory / DECISIONS_FILENAME
+    if decisions_path.exists():
+        try:
+            with open(decisions_path, "r", encoding="utf-8") as f:
+                decisions_data = json.load(f)
+            if decisions_data.get("plan_generated") != plan_data.get("generated"):
+                print(
+                    f"Warning: {DECISIONS_FILENAME} was generated for a different plan. "
+                    "Ignoring decisions."
+                )
+            else:
+                decisions = decisions_data.get("decisions", {})
+                s = decisions_data.get("summary", {})
+                print(
+                    f"Loaded decisions: {s.get('approved', 0)} approved, "
+                    f"{s.get('rejected', 0)} rejected, {s.get('pending', 0)} pending\n"
+                )
+        except Exception as e:
+            print(f"Warning: Failed to load {DECISIONS_FILENAME}: {e}")
+
     dupes_dir = directory / DUPES_DIRNAME
     if not dry_run:
         dupes_dir.mkdir(exist_ok=True)
@@ -204,9 +227,20 @@ def execute(directory: Path, dry_run: bool = False):
         print("DRY RUN — no files will be moved\n")
 
     moved_count = 0
+    skipped_count = 0
     errors = 0
 
-    for group in groups:
+    for group_idx, group in enumerate(groups):
+        if decisions is not None:
+            decision = decisions.get(str(group_idx))
+            if decision == "rejected":
+                print(f"  [SKIP-REJECTED] hash_text={group['hash_text']}")
+                skipped_count += 1
+                continue
+            elif decision != "approved":
+                print(f"  [SKIP-PENDING] hash_text={group['hash_text']}")
+                skipped_count += 1
+                continue
         for entry in group["move"]:
             json_name = entry["json"]
             json_path = directory / json_name
@@ -250,7 +284,7 @@ def execute(directory: Path, dry_run: bool = False):
 
             moved_count += 1
 
-    print(f"\nSummary: {moved_count} duplicate entries processed, {errors} errors")
+    print(f"\nSummary: {moved_count} duplicate entries processed, {skipped_count} skipped, {errors} errors")
     if not dry_run:
         print(f"Duplicates moved to: {dupes_dir}")
 
