@@ -349,6 +349,8 @@ def _process_xlsx_files(xlsx_paths: list[Path], known_file_hashes: set,
             continue
 
         metadata = classify_bank_statement(xlsx_path, file_hash)
+        if metadata is not None:
+            metadata.file_size_kb = round(xlsx_path.stat().st_size / 1024)
         if metadata is None:
             logger.debug(f"Skipping unrecognized XLSX: {xlsx_path.name}")
             skipped_count += 1

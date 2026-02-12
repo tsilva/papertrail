@@ -200,6 +200,31 @@ def task_backfill_page_count(processed_path: Path):
     )
 
 
+def task_backfill_file_size(processed_path: Path):
+    """Backfill file_size_kb for existing metadata files that don't have it."""
+    from papertrail.metadata import find_companion_file
+
+    def _should_skip(_mp, _pp, data):
+        return data.get("file_size_kb") is not None
+
+    def _update(metadata_path, _pdf_path, data):
+        companion = find_companion_file(metadata_path, data)
+        if companion is None:
+            return
+        data["file_size_kb"] = round(companion.stat().st_size / 1024)
+        data["date_updated"] = datetime.now().strftime("%Y-%m-%d")
+
+    _batch_update_metadata(
+        processed_path,
+        task_name="backfill_file_size",
+        progress_desc="Backfilling file_size_kb",
+        require_pdf=False,
+        should_skip=_should_skip,
+        update_fn=_update,
+        skip_label="already had file_size_kb",
+    )
+
+
 def task_fix_unicode(processed_path: Path):
     """Fix Unicode escape sequences in metadata JSON files."""
     def _should_skip(metadata_path, _pdf_path, _data):

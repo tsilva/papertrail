@@ -1,4 +1,2 @@
-- collapse preview
-- remoev documents tab
 - document selection
 - collapse preview
