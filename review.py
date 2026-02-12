@@ -557,7 +557,7 @@ def build_ui():
 
         def on_bank_dd_select(filename):
             if not filename:
-                return (*_EMPTY_PREVIEW, 0, "")
+                return (*_EMPTY_PREVIEW, "")
             preview, js_str, pl, pg = _do_preview(filename, 0)
             return preview, js_str, pl, pg, filename
 
@@ -570,13 +570,14 @@ def build_ui():
 
         def on_bridge_input(raw_value):
             if not raw_value:
-                return gr.update()
+                return gr.update(), *_EMPTY_PREVIEW, ""
             filename = raw_value.rsplit("|", 1)[0] if "|" in raw_value else raw_value
-            return gr.update(value=filename)
+            preview, js_str, pl, pg = _do_preview(filename, 0)
+            return gr.update(value=filename), preview, js_str, pl, pg, filename
 
-        selected_file_bridge.input(
+        selected_file_bridge.change(
             on_bridge_input, [selected_file_bridge],
-            [bank_file_dd],
+            [bank_file_dd, bank_preview, bank_json, b_page, bank_page, bank_file],
         )
 
         # ── Bank: page navigation ────────────────────────────────
