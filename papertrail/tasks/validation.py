@@ -38,7 +38,7 @@ def validate_metadata(output_path: Path):
                 errors.append((metadata_path, f"Missing PDF for metadata: {pdf_path.name}"))
                 continue
 
-            pdf_info.append((metadata_path, pdf_path, content_hash, metadata))
+            pdf_info.append((metadata_path, pdf_path, content_hash, metadata, None))
 
         except Exception as e:
             errors.append((metadata_path, str(e)))
@@ -51,10 +51,12 @@ def validate_metadata(output_path: Path):
 
     logger.debug(f"Computing fast hashes for {len(pdf_info)} PDFs...")
     hash_results = {}
+    fast_hash_results = {}
     uncached = []
 
-    for _, pdf_path, _, _ in console.track(pdf_info, "Fast hashing"):
+    for _, pdf_path, _, _, _ in console.track(pdf_info, "Fast hashing"):
         file_hash = hash_file_fast(pdf_path)
+        fast_hash_results[pdf_path] = file_hash
         cached_content_hash = cache.get(file_hash)
         if cached_content_hash:
             hash_results[pdf_path] = cached_content_hash
@@ -79,7 +81,7 @@ def validate_metadata(output_path: Path):
                         hash_results[pdf_path] = content_hash
                         cache.set(file_hash, content_hash)
                     except Exception as e:
-                        for metadata_path, p, _, _ in pdf_info:
+                        for metadata_path, p, _, _, _ in pdf_info:
                             if p == pdf_path:
                                 errors.append((metadata_path, f"Content hashing failed: {e}"))
                                 break
@@ -88,17 +90,22 @@ def validate_metadata(output_path: Path):
         cache.save()
         logger.debug(f"Hash cache saved with {len(cache)} entries")
 
-    for metadata_path, pdf_path, expected_hash, metadata in pdf_info:
-        actual_hash = hash_results.get(pdf_path)
-        if actual_hash is None:
+    for metadata_path, pdf_path, expected_hash, metadata, _ in pdf_info:
+        actual_content_hash = hash_results.get(pdf_path)
+        if actual_content_hash is None:
             continue
 
-        if expected_hash != actual_hash:
-            errors.append((metadata_path, f"Hash mismatch: metadata hash_content is '{expected_hash}', actual is '{actual_hash}'."))
+        if expected_hash != actual_content_hash:
+            errors.append((metadata_path, f"Hash mismatch: metadata hash_content is '{expected_hash}', actual is '{actual_content_hash}'."))
             continue
 
-        if expected_hash not in pdf_path.name:
-            errors.append((metadata_path, f"Filename '{pdf_path.name}' does not include the expected hash '{expected_hash}'."))
+        actual_file_hash = fast_hash_results.get(pdf_path)
+        if metadata.hash_file and actual_file_hash and metadata.hash_file != actual_file_hash:
+            errors.append((metadata_path, f"Hash mismatch: metadata hash_file is '{metadata.hash_file}', actual is '{actual_file_hash}'."))
+            continue
+
+        if metadata.hash_file and metadata.hash_file not in pdf_path.name:
+            errors.append((metadata_path, f"Filename '{pdf_path.name}' does not include the expected hash_file '{metadata.hash_file}'."))
             continue
 
         valid_entries.append((pdf_path, metadata))
