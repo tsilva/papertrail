@@ -76,7 +76,15 @@ def find_pdf_files(folder_paths) -> list[Path]:
     return pdfs
 
 
-def find_document_files(folder_paths, extensions=('.pdf', '.xlsx')) -> list[Path]:
+IMAGE_EXTENSIONS = ('.png', '.jpg', '.jpeg', '.tiff', '.tif', '.bmp', '.webp')
+
+
+def is_image_file(path: Path) -> bool:
+    """Check if a file path has an image extension."""
+    return path.suffix.lower() in IMAGE_EXTENSIONS
+
+
+def find_document_files(folder_paths, extensions=('.pdf', '.xlsx') + IMAGE_EXTENSIONS) -> list[Path]:
     """Return all document files with given extensions within one or multiple folders."""
     if isinstance(folder_paths, (str, Path)):
         folder_paths = [folder_paths]
