@@ -1,2 +1,0 @@
-- document selection
-- collapse preview
