@@ -1,27 +1,27 @@
-"""Gradio duplicate review tool for auditing deduplication plans."""
+"""Gradio duplicate review tool — scan, review, and execute deduplication in one place."""
 
 import base64
 import html as html_lib
 import json
+import shutil
+import sys
 from datetime import datetime
 from pathlib import Path
+
+# Add project root to path for imports
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import fitz  # PyMuPDF
 import gradio as gr
 
 from papertrail.profiles import load_profile
-
-# ── Constants ─────────────────────────────────────────────────────
-
-PLAN_FILENAME = "_dupes_plan.json"
-DECISIONS_FILENAME = "_dupes_decisions.json"
+from scripts.deduplicate import PLAN_FILENAME, scan_directory
 
 # ── Module-level cache (single-user local tool) ──────────────────
 
 _CACHE = {
     "plan": {},
     "directory": None,
-    "decisions": {},
 }
 
 # ── CSS ──────────────────────────────────────────────────────────
@@ -70,6 +70,16 @@ _CSS = """
 .status-pending { color: var(--body-text-color-subdued, #888); }
 """
 
+_JS = """
+document.addEventListener('keydown', function(e) {
+    if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
+    if (e.key === 'a') document.querySelector('#approve_btn button')?.click();
+    if (e.key === 'r') document.querySelector('#reject_btn button')?.click();
+    if (e.key === 'ArrowLeft') document.querySelector('#prev_btn button')?.click();
+    if (e.key === 'ArrowRight') document.querySelector('#next_btn button')?.click();
+});
+"""
+
 
 # ── Helpers ──────────────────────────────────────────────────────
 
@@ -114,17 +124,13 @@ def _render_pdf_page_html(pdf_path, page_num=0):
 
 
 def _render_file_card(entry, role, directory):
-    """Render an HTML card for one file in a group.
-
-    role is "KEEP" or "DUPE".
-    """
+    """Render an HTML card for one file in a group."""
     badge_class = "badge-keep" if role == "KEEP" else "badge-dupe"
     json_name = entry["json"]
     size_kb = entry.get("size_kb")
     hash_content = entry.get("hash_content", "?")
     size_str = f"{size_kb} KB" if size_kb is not None else "? KB"
 
-    # Try to render PDF preview
     json_path = Path(directory) / json_name
     preview_html = ""
     if json_path.exists():
@@ -181,10 +187,8 @@ def _render_group(index):
     group = groups[index]
     cards = []
 
-    # Keep card
     cards.append(_render_file_card(group["keep"], "KEEP", directory))
 
-    # Dupe cards
     for entry in group.get("move", []):
         cards.append(_render_file_card(entry, "DUPE", directory))
 
@@ -205,12 +209,16 @@ def _status_text():
     if total == 0:
         return "No plan loaded."
 
-    decisions = _CACHE["decisions"]
-    approved = sum(1 for v in decisions.values() if v == "approved")
-    rejected = sum(1 for v in decisions.values() if v == "rejected")
+    approved = sum(1 for g in groups if g.get("decision") == "approved")
+    rejected = sum(1 for g in groups if g.get("decision") == "rejected")
     pending = total - approved - rejected
 
+    stats = _CACHE["plan"].get("scan_stats", {})
+    scanned = stats.get("scanned", "?")
+    skipped = stats.get("skipped_no_text_hash", "?")
+
     return (
+        f"Scanned {scanned} files ({skipped} without text hash) &mdash; "
         f"**{total}** groups &mdash; "
         f'<span class="status-approved">{approved} approved</span>, '
         f'<span class="status-rejected">{rejected} rejected</span>, '
@@ -220,7 +228,10 @@ def _status_text():
 
 def _decision_label(index):
     """Return the decision label for a given group index."""
-    d = _CACHE["decisions"].get(index)
+    groups = _CACHE["plan"].get("groups", [])
+    if not groups or index < 0 or index >= len(groups):
+        return '<span class="status-pending">PENDING</span>'
+    d = groups[index].get("decision")
     if d == "approved":
         return '<span class="status-approved">APPROVED</span>'
     elif d == "rejected":
@@ -245,7 +256,7 @@ def _next_undecided(start, direction=1):
 
     idx = start + direction
     while 0 <= idx < total:
-        if idx not in _CACHE["decisions"]:
+        if groups[idx].get("decision") is None:
             return idx
         idx += direction
 
@@ -253,59 +264,88 @@ def _next_undecided(start, direction=1):
     return max(0, min(start + direction, total - 1))
 
 
+def _save_plan():
+    """Save plan with updated decisions to disk (atomic write)."""
+    plan = _CACHE["plan"]
+    directory = _CACHE["directory"]
+    if not plan or not directory:
+        return
+
+    groups = plan.get("groups", [])
+    approved = sum(1 for g in groups if g.get("decision") == "approved")
+    rejected = sum(1 for g in groups if g.get("decision") == "rejected")
+    plan["summary"].update(
+        approved=approved,
+        rejected=rejected,
+        pending=len(groups) - approved - rejected,
+    )
+
+    plan_path = Path(directory) / PLAN_FILENAME
+    tmp = plan_path.with_suffix(".json.tmp")
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(plan, f, indent=4, ensure_ascii=False)
+    tmp.rename(plan_path)
+
+
 # ── Event handlers ───────────────────────────────────────────────
 
-def on_load(directory_path):
-    """Load a deduplication plan from the given directory."""
+def on_scan(directory_path):
+    """Scan directory for duplicates, preserving old decisions."""
     directory_path = directory_path.strip().strip("'\"")
     directory = Path(directory_path)
 
     if not directory.is_dir():
         _CACHE["plan"] = {}
         _CACHE["directory"] = None
-        _CACHE["decisions"] = {}
         return (
             f"**Error:** `{directory_path}` is not a valid directory.",
-            "", '<p class="placeholder">No plan loaded.</p>',
+            "", '<p class="placeholder">Enter a valid directory and click Scan.</p>',
+            gr.update(visible=False),
         )
 
-    plan_path = directory / PLAN_FILENAME
-    if not plan_path.exists():
-        _CACHE["plan"] = {}
-        _CACHE["directory"] = None
-        _CACHE["decisions"] = {}
-        return (
-            f"**Error:** No `{PLAN_FILENAME}` found in `{directory_path}`.",
-            "", '<p class="placeholder">No plan found. Run deduplicate.py plan first.</p>',
-        )
-
-    with open(plan_path, "r", encoding="utf-8") as f:
-        plan_data = json.load(f)
-
-    _CACHE["plan"] = plan_data
-    _CACHE["directory"] = str(directory)
-    _CACHE["decisions"] = {}
-
-    # Load existing decisions if present
-    decisions_path = directory / DECISIONS_FILENAME
-    if decisions_path.exists():
+    # Preserve old decisions by hash_text
+    old_decisions = {}
+    old_plan_path = directory / PLAN_FILENAME
+    if old_plan_path.exists():
         try:
-            with open(decisions_path, "r", encoding="utf-8") as f:
-                decisions_data = json.load(f)
-            # Validate plan_generated matches
-            if decisions_data.get("plan_generated") == plan_data.get("generated"):
-                for k, v in decisions_data.get("decisions", {}).items():
-                    _CACHE["decisions"][int(k)] = v
+            with open(old_plan_path, "r", encoding="utf-8") as f:
+                old_plan = json.load(f)
+            for group in old_plan.get("groups", []):
+                if group.get("decision"):
+                    old_decisions[group["hash_text"]] = group["decision"]
         except Exception:
             pass
 
-    # Render group 0
+    # Run scan
+    plan_data = scan_directory(directory)
+
+    # Restore old decisions
+    for group in plan_data["groups"]:
+        group["decision"] = old_decisions.get(group["hash_text"])
+
+    _CACHE["plan"] = plan_data
+    _CACHE["directory"] = str(directory)
+
+    # Save to disk
+    _save_plan()
+
+    groups = plan_data["groups"]
+    if not groups:
+        return (
+            "Scan complete — no duplicates found.",
+            "", '<p class="placeholder">No duplicate groups found.</p>',
+            gr.update(visible=False),
+        )
+
     group_html = _render_group(0)
     status = _status_text()
     nav = _nav_label(0)
     decision = _decision_label(0)
 
-    return status, f"{nav} &mdash; {decision}", group_html
+    return (
+        status, f"{nav} &mdash; {decision}", group_html,
+        gr.update(visible=True),
+    )
 
 
 def on_prev(index):
@@ -329,7 +369,11 @@ def on_next(index):
 
 def on_approve(index):
     """Approve current group and advance to next undecided."""
-    _CACHE["decisions"][index] = "approved"
+    groups = _CACHE["plan"].get("groups", [])
+    if groups and 0 <= index < len(groups):
+        groups[index]["decision"] = "approved"
+        _save_plan()
+
     new_index = _next_undecided(index, direction=1)
     group_html = _render_group(new_index)
     status = _status_text()
@@ -340,7 +384,11 @@ def on_approve(index):
 
 def on_reject(index):
     """Reject current group and advance to next undecided."""
-    _CACHE["decisions"][index] = "rejected"
+    groups = _CACHE["plan"].get("groups", [])
+    if groups and 0 <= index < len(groups):
+        groups[index]["decision"] = "rejected"
+        _save_plan()
+
     new_index = _next_undecided(index, direction=1)
     group_html = _render_group(new_index)
     status = _status_text()
@@ -349,39 +397,135 @@ def on_reject(index):
     return new_index, status, f"{nav} &mdash; {decision}", group_html
 
 
-def on_save():
-    """Save decisions to JSON file alongside the plan."""
-    directory = _CACHE["directory"]
+def on_execute():
+    """Show confirmation for executing deduplication."""
     plan = _CACHE["plan"]
-    decisions = _CACHE["decisions"]
-
-    if not directory or not plan:
-        return "**Error:** No plan loaded."
-
     groups = plan.get("groups", [])
-    total = len(groups)
-    approved = sum(1 for v in decisions.values() if v == "approved")
-    rejected = sum(1 for v in decisions.values() if v == "rejected")
-    pending = total - approved - rejected
+    if not groups:
+        return gr.update(visible=False), ""
 
-    decisions_data = {
-        "generated": datetime.now().isoformat(timespec="seconds"),
-        "plan_generated": plan.get("generated"),
-        "directory": directory,
-        "decisions": {str(k): v for k, v in sorted(decisions.items())},
-        "summary": {
-            "total_groups": total,
-            "approved": approved,
-            "rejected": rejected,
-            "pending": pending,
-        },
-    }
+    approved = [g for g in groups if g.get("decision") == "approved"]
+    pending = sum(1 for g in groups if g.get("decision") is None)
+    files_to_move = sum(len(g.get("move", [])) for g in approved)
 
-    out_path = Path(directory) / DECISIONS_FILENAME
-    with open(out_path, "w", encoding="utf-8") as f:
-        json.dump(decisions_data, f, indent=4, ensure_ascii=False)
+    if not approved:
+        return gr.update(visible=False), "**No approved groups to execute.**"
 
-    return f"Saved to `{out_path.name}` — {approved} approved, {rejected} rejected, {pending} pending"
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    parent_name = Path(_CACHE["directory"]).parent.name
+    msg = (
+        f"**Move {files_to_move} files** from {len(approved)} approved groups "
+        f"to `{parent_name}/_dupes_{timestamp}/`."
+    )
+    if pending:
+        msg += f" {pending} pending groups will be skipped."
+
+    return gr.update(visible=True), msg
+
+
+def on_confirm():
+    """Execute deduplication — move approved dupes to timestamped folder."""
+    plan = _CACHE["plan"]
+    directory = _CACHE["directory"]
+    if not plan or not directory:
+        return (
+            gr.update(visible=False), "**Error:** No plan loaded.",
+            "", "", '<p class="placeholder">No plan loaded.</p>',
+        )
+
+    directory = Path(directory)
+    groups = plan.get("groups", [])
+    approved = [g for g in groups if g.get("decision") == "approved"]
+
+    if not approved:
+        return (
+            gr.update(visible=False), "**No approved groups.**",
+            _status_text(), "Group -/-", '<p class="placeholder">Nothing to execute.</p>',
+        )
+
+    # Create timestamped dupes directory in parent of processed
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    dupes_dir = directory.parent / f"_dupes_{timestamp}"
+    dupes_dir.mkdir(exist_ok=True)
+
+    # Copy plan as audit trail
+    plan_path = directory / PLAN_FILENAME
+    if plan_path.exists():
+        shutil.copy2(plan_path, dupes_dir / PLAN_FILENAME)
+
+    # Move files
+    moved = 0
+    errors = []
+    for group in approved:
+        for entry in group.get("move", []):
+            json_name = entry["json"]
+            json_path = directory / json_name
+
+            if not json_path.exists():
+                errors.append(f"{json_name}: not found")
+                continue
+
+            files_to_move = [json_path]
+
+            try:
+                with open(json_path, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                companion = _find_companion(json_path, data)
+                if companion and companion.exists():
+                    files_to_move.append(companion)
+            except Exception:
+                pass
+
+            stem = json_path.stem
+            for extra_suffix in (".embeddings.json", ".reconciliation.json"):
+                extra = json_path.parent / (stem + extra_suffix)
+                if extra.exists():
+                    files_to_move.append(extra)
+
+            for src in files_to_move:
+                dst = dupes_dir / src.name
+                if dst.exists():
+                    base = dst.stem
+                    suffix = dst.suffix
+                    counter = 2
+                    while dst.exists():
+                        dst = dupes_dir / f"{base}_{counter}{suffix}"
+                        counter += 1
+                try:
+                    src.rename(dst)
+                    moved += 1
+                except Exception as e:
+                    errors.append(f"{src.name}: {e}")
+
+    # Delete plan from processed dir
+    if plan_path.exists():
+        plan_path.unlink()
+
+    # Reset cache
+    _CACHE["plan"] = {}
+    _CACHE["directory"] = None
+
+    error_msg = ""
+    if errors:
+        error_msg = f" Errors: {'; '.join(errors[:5])}"
+        if len(errors) > 5:
+            error_msg += f" (+{len(errors) - 5} more)"
+
+    summary = (
+        f"**Done.** Moved {moved} files to `{dupes_dir.name}/`.{error_msg} "
+        f"Click Scan to start fresh."
+    )
+
+    return (
+        gr.update(visible=False), summary,
+        "No plan loaded.", "Group -/-",
+        '<p class="placeholder">Execution complete. Click Scan to start fresh.</p>',
+    )
+
+
+def on_cancel():
+    """Cancel execution confirmation."""
+    return gr.update(visible=False), ""
 
 
 # ── Gradio UI ────────────────────────────────────────────────────
@@ -389,7 +533,7 @@ def on_save():
 def build_ui():
     default_dir = _get_default_directory()
 
-    with gr.Blocks(title="Papertrail Duplicate Review", css=_CSS) as app:
+    with gr.Blocks(title="Papertrail Duplicate Review", css=_CSS, js=_JS) as app:
         index_state = gr.State(0)
 
         gr.Markdown("## Papertrail Duplicate Review")
@@ -400,35 +544,45 @@ def build_ui():
                 value=default_dir,
                 scale=4,
             )
-            load_btn = gr.Button("Load", scale=1)
+            scan_btn = gr.Button("Scan", scale=1)
 
         status_bar = gr.Markdown("No plan loaded.")
 
-        with gr.Row():
-            prev_btn = gr.Button("< Prev", size="sm", scale=1)
-            approve_btn = gr.Button(
-                "Approve", variant="primary", size="sm", scale=1,
-            )
-            reject_btn = gr.Button(
-                "Reject", variant="stop", size="sm", scale=1,
-            )
-            next_btn = gr.Button("Next >", size="sm", scale=1)
+        with gr.Row(elem_id="approve_reject_row"):
+            with gr.Column(elem_id="prev_btn", min_width=0, scale=1):
+                prev_btn = gr.Button("< Prev", size="sm")
+            with gr.Column(elem_id="approve_btn", min_width=0, scale=1):
+                approve_btn = gr.Button(
+                    "Approve (a)", variant="primary", size="sm",
+                )
+            with gr.Column(elem_id="reject_btn", min_width=0, scale=1):
+                reject_btn = gr.Button(
+                    "Reject (r)", variant="stop", size="sm",
+                )
+            with gr.Column(elem_id="next_btn", min_width=0, scale=1):
+                next_btn = gr.Button("Next >", size="sm")
 
         nav_label = gr.Markdown("Group -/-")
 
         group_html = gr.HTML(
-            '<p class="placeholder">Load a directory with a deduplication plan.</p>'
+            '<p class="placeholder">Enter a directory and click Scan.</p>'
         )
 
         with gr.Row():
-            save_btn = gr.Button("Save Decisions", size="sm", scale=1)
-            save_status = gr.Markdown("")
+            execute_btn = gr.Button("Execute", size="sm", scale=1)
+            exec_status = gr.Markdown("")
+
+        confirm_row = gr.Row(visible=False)
+        with confirm_row:
+            confirm_msg = gr.Markdown("")
+            confirm_btn = gr.Button("Confirm", variant="primary", size="sm")
+            cancel_btn = gr.Button("Cancel", size="sm")
 
         # ── Wire events ──────────────────────────────────────────
 
-        load_btn.click(
-            on_load, [dir_input],
-            [status_bar, nav_label, group_html],
+        scan_btn.click(
+            on_scan, [dir_input],
+            [status_bar, nav_label, group_html, confirm_row],
         )
 
         prev_btn.click(
@@ -451,7 +605,20 @@ def build_ui():
             [index_state, status_bar, nav_label, group_html],
         )
 
-        save_btn.click(on_save, [], [save_status])
+        execute_btn.click(
+            on_execute, [],
+            [confirm_row, exec_status],
+        )
+
+        confirm_btn.click(
+            on_confirm, [],
+            [confirm_row, exec_status, status_bar, nav_label, group_html],
+        )
+
+        cancel_btn.click(
+            on_cancel, [],
+            [confirm_row, exec_status],
+        )
 
     return app
 

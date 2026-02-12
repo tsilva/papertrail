@@ -60,7 +60,7 @@ def rename_single_pdf(pdf_path: Path, content_hash: str, processed_path: Path,
         metadata.hash_text = hash_file_text(pdf_path)
         metadata.file_size_kb = round(pdf_path.stat().st_size / 1024)
 
-        filename = file_name_from_metadata(metadata, content_hash)
+        filename = file_name_from_metadata(metadata, file_hash)
         new_pdf_path = processed_path / filename
 
         if new_pdf_path.exists():
@@ -118,8 +118,7 @@ def task_rename_files(processed_path: Path, quiet: bool = False) -> dict:
 
         renamed_count = 0
         for old_pdf_path, metadata in valid_entries:
-            content_hash = metadata.hash_content
-            new_filename = file_name_from_metadata(metadata, content_hash)
+            new_filename = file_name_from_metadata(metadata, metadata.hash_file)
             new_pdf_path = processed_path / new_filename
             new_metadata_path = new_pdf_path.with_suffix(".json")
 
@@ -266,7 +265,7 @@ def copy_matching_files(
             prefix = _evaluate_export_prefix(metadata, file_mappings, profile_context)
 
             if file_mappings.filename_fields and metadata:
-                file_hash = metadata.get("hash_content", pdf_file.stem.split(" - ")[-1])
+                file_hash = metadata.get("hash_file", pdf_file.stem.split(" - ")[-1])
                 base_name = _build_filename_from_fields(
                     metadata, file_mappings.filename_fields, file_hash
                 )

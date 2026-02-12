@@ -537,7 +537,8 @@ def _collect_sync_targets(processed_path: Path, all_unknown: bool = False,
 
     console = get_console()
 
-    pdf_files = list(processed_path.rglob("*.pdf"))
+    pdf_files = [f for f in processed_path.rglob("*.pdf")
+                 if not any(part.startswith("_dupes") for part in f.parts)]
     if not pdf_files:
         logger.debug(f"No PDF files found in {processed_path}")
         return []
@@ -581,7 +582,8 @@ def _collect_sync_targets(processed_path: Path, all_unknown: bool = False,
                 targets.append((metadata_path, pdf_path, None))
 
     if all_unknown:
-        json_files = list(processed_path.rglob("*.json"))
+        json_files = [f for f in processed_path.rglob("*.json")
+                      if not any(part.startswith("_dupes") for part in f.parts)]
         for metadata_path in console.track(json_files, "Scanning for $UNKNOWN$"):
             try:
                 data = load_json_data(metadata_path)
@@ -693,7 +695,7 @@ def task_sync(processed_path: Path, dry_run: bool = False,
                 save_metadata_json(metadata_path.with_suffix(".pdf"), new_metadata)
 
                 from papertrail.tasks.organization import file_name_from_metadata
-                new_filename = file_name_from_metadata(new_metadata, new_metadata.hash_content)
+                new_filename = file_name_from_metadata(new_metadata, new_metadata.hash_file)
                 new_pdf_path = metadata_path.parent / new_filename
                 old_pdf_path = metadata_path.with_suffix(".pdf")
                 if old_pdf_path != new_pdf_path:
@@ -778,7 +780,8 @@ def task_validate_extraction(processed_path: Path, pattern: str = None):
     console = get_console()
 
     with task_log_context(processed_path, "validate_extraction"):
-        json_files = list(processed_path.rglob("*.json"))
+        json_files = [f for f in processed_path.rglob("*.json")
+                      if not any(part.startswith("_dupes") for part in f.parts)]
         if not json_files:
             console.warning("No metadata files found", indent=False)
             return

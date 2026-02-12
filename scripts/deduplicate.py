@@ -15,6 +15,7 @@ Plan phase:
 Execute phase:
   - Reads _dupes_plan.json from <directory>
   - Moves duplicate files (JSON + companion + any extra sidecars) to _dupes/ subfolder
+  - Respects embedded decisions if present (approved/rejected/pending)
   - Use --dry-run to preview without moving
 """
 
@@ -28,7 +29,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 
 PLAN_FILENAME = "_dupes_plan.json"
-DECISIONS_FILENAME = "_dupes_decisions.json"
 DUPES_DIRNAME = "_dupes"
 
 
@@ -76,8 +76,12 @@ def _get_file_size(json_path: Path, data: dict) -> int | None:
     return None
 
 
-def plan(directory: Path):
-    """Generate deduplication plan."""
+def scan_directory(directory: Path) -> dict:
+    """Scan directory and return deduplication plan dict (does not write to disk).
+
+    Returns a plan dict with groups, summary, and scan_stats.
+    Each group has a `decision` field (initially None).
+    """
     json_files = sorted(directory.rglob("*.json"))
 
     # Group by text hash
@@ -86,11 +90,14 @@ def plan(directory: Path):
     skipped = 0
 
     for json_path in json_files:
+        # Skip logs, internal files, sidecars, and _dupes* folders
         if "/logs/" in str(json_path) or json_path.name.startswith("_"):
             continue
         if json_path.name.endswith(".reconciliation.json"):
             continue
         if json_path.name.endswith(".embeddings.json"):
+            continue
+        if any(part.startswith("_dupes") for part in json_path.parts):
             continue
 
         try:
@@ -130,6 +137,7 @@ def plan(directory: Path):
 
         group = {
             "hash_text": text_hash,
+            "decision": None,
             "keep": {
                 "json": keep["json"],
                 "size_kb": keep["size_kb"],
@@ -148,27 +156,43 @@ def plan(directory: Path):
         total_files_to_move += len(move)
         space_savings_kb += sum((m["size_kb"] or 0) for m in move)
 
-    plan_data = {
+    return {
         "generated": datetime.now().isoformat(timespec="seconds"),
         "directory": str(directory),
-        "groups": dupe_groups,
+        "scan_stats": {
+            "scanned": scanned,
+            "skipped_no_text_hash": skipped,
+        },
         "summary": {
             "total_groups": len(dupe_groups),
             "total_files_to_move": total_files_to_move,
             "space_savings_kb": space_savings_kb,
+            "approved": 0,
+            "rejected": 0,
+            "pending": len(dupe_groups),
         },
+        "groups": dupe_groups,
     }
+
+
+def plan(directory: Path):
+    """Generate deduplication plan and write to disk."""
+    plan_data = scan_directory(directory)
 
     plan_path = directory / PLAN_FILENAME
     with open(plan_path, "w", encoding="utf-8") as f:
         json.dump(plan_data, f, indent=4, ensure_ascii=False)
 
     # Print summary
-    print(f"\nScanned {scanned} files ({skipped} without text hash)")
-    print(f"Found {len(dupe_groups)} duplicate groups:")
+    stats = plan_data["scan_stats"]
+    groups = plan_data["groups"]
+    summary = plan_data["summary"]
+
+    print(f"\nScanned {stats['scanned']} files ({stats['skipped_no_text_hash']} without text hash)")
+    print(f"Found {len(groups)} duplicate groups:")
     print()
 
-    for group in dupe_groups:
+    for group in groups:
         keep = group["keep"]
         print(f"  hash_text={group['hash_text']}:")
         print(f"    KEEP: {keep['json']} ({keep['size_kb']} KB)")
@@ -176,13 +200,20 @@ def plan(directory: Path):
             print(f"    MOVE: {m['json']} ({m['size_kb']} KB)")
         print()
 
-    print(f"Summary: {total_files_to_move} files to move, ~{space_savings_kb} KB savings")
+    print(f"Summary: {summary['total_files_to_move']} files to move, ~{summary['space_savings_kb']} KB savings")
     print(f"Plan written to: {plan_path}")
     print(f"\nReview the plan, then run: python scripts/deduplicate.py execute {directory}")
 
 
-def execute(directory: Path, dry_run: bool = False):
-    """Execute deduplication plan."""
+def execute(directory: Path, dry_run: bool = False, dupes_dir: Path | None = None):
+    """Execute deduplication plan.
+
+    Args:
+        directory: The directory containing the plan file.
+        dry_run: If True, preview without moving files.
+        dupes_dir: Optional custom directory for moved duplicates.
+                   Defaults to <directory>/../_dupes/.
+    """
     plan_path = directory / PLAN_FILENAME
     if not plan_path.exists():
         print(f"Error: No plan found at {plan_path}")
@@ -197,42 +228,24 @@ def execute(directory: Path, dry_run: bool = False):
         print("Plan has no duplicate groups. Nothing to do.")
         return
 
-    # Load decisions file if present
-    decisions = None
-    decisions_path = directory / DECISIONS_FILENAME
-    if decisions_path.exists():
-        try:
-            with open(decisions_path, "r", encoding="utf-8") as f:
-                decisions_data = json.load(f)
-            if decisions_data.get("plan_generated") != plan_data.get("generated"):
-                print(
-                    f"Warning: {DECISIONS_FILENAME} was generated for a different plan. "
-                    "Ignoring decisions."
-                )
-            else:
-                decisions = decisions_data.get("decisions", {})
-                s = decisions_data.get("summary", {})
-                print(
-                    f"Loaded decisions: {s.get('approved', 0)} approved, "
-                    f"{s.get('rejected', 0)} rejected, {s.get('pending', 0)} pending\n"
-                )
-        except Exception as e:
-            print(f"Warning: Failed to load {DECISIONS_FILENAME}: {e}")
-
-    dupes_dir = directory / DUPES_DIRNAME
+    if dupes_dir is None:
+        dupes_dir = directory.parent / DUPES_DIRNAME
     if not dry_run:
         dupes_dir.mkdir(exist_ok=True)
 
     if dry_run:
         print("DRY RUN — no files will be moved\n")
 
+    # Detect whether any decisions are present
+    has_decisions = any(g.get("decision") is not None for g in groups)
+
     moved_count = 0
     skipped_count = 0
     errors = 0
 
     for group_idx, group in enumerate(groups):
-        if decisions is not None:
-            decision = decisions.get(str(group_idx))
+        if has_decisions:
+            decision = group.get("decision")
             if decision == "rejected":
                 print(f"  [SKIP-REJECTED] hash_text={group['hash_text']}")
                 skipped_count += 1
@@ -241,6 +254,7 @@ def execute(directory: Path, dry_run: bool = False):
                 print(f"  [SKIP-PENDING] hash_text={group['hash_text']}")
                 skipped_count += 1
                 continue
+
         for entry in group["move"]:
             json_name = entry["json"]
             json_path = directory / json_name
@@ -271,6 +285,15 @@ def execute(directory: Path, dry_run: bool = False):
 
             for src in files_to_move:
                 dst = dupes_dir / src.name
+                # Handle name conflicts
+                if dst.exists():
+                    base = dst.stem
+                    suffix = dst.suffix
+                    counter = 2
+                    while dst.exists():
+                        dst = dupes_dir / f"{base}_{counter}{suffix}"
+                        counter += 1
+
                 if dry_run:
                     print(f"  [WOULD MOVE] {src.name}")
                 else:

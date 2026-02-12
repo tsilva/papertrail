@@ -4,8 +4,12 @@ import base64
 import html as html_lib
 import json
 import re
+import sys
 import warnings
 from pathlib import Path
+
+# Add project root to path for imports
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import fitz  # PyMuPDF
 import gradio as gr

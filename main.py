@@ -115,11 +115,11 @@ def initialize_config(profile_name: Optional[str] = None) -> None:
 
     from papertrail.config import check_api_accessibility
     base_url = profile.openrouter.base_url
-    if not check_api_accessibility(base_url):
+    api_accessible = check_api_accessibility(base_url)
+    if not api_accessible:
         console = get_console()
-        console.error(f"API base URL is not accessible: {base_url}", indent=False)
-        console.error("Please check your network connection and the base_url in your profile.", indent=False)
-        sys.exit(1)
+        console.warning(f"API base URL is not accessible: {base_url}", indent=False)
+        console.warning("LLM-dependent tasks will fail. Offline tasks (rename, validate, backfill) will work.", indent=False)
 
     cache_dir = get_cache_dir()
     nif_cache = None
@@ -129,7 +129,7 @@ def initialize_config(profile_name: Optional[str] = None) -> None:
 
     set_ctx(AppContext(
         model_id=profile.openrouter.model_id,
-        openai_client=get_openai_client(),
+        openai_client=get_openai_client() if api_accessible else None,
         nif_cache=nif_cache,
     ))
 
