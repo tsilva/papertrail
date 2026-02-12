@@ -30,9 +30,13 @@ dependencies = [
 ]
 requires-python = ">=3.12"
 
+[project.optional-dependencies]
+similarity = ["cohere>=5.0", "numpy"]
+
 [project.scripts]
 papertrail = "main:main"
 check-hash = "scripts.check_hash:main"
+find-similar = "scripts.find_similar:main"
 
 [tool.hatch.build.targets.wheel]
 include = [
