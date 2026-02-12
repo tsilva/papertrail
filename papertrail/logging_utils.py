@@ -222,6 +222,9 @@ class DocumentLogger:
     def log_llm_usage(self, model: str, prompt_tokens: int, completion_tokens: int) -> None:
         self._logger.debug(f"[LLM-USAGE] model={model} prompt_tokens={prompt_tokens} completion_tokens={completion_tokens}")
 
+    def log_multi_qr(self, count: int, filename: str) -> None:
+        self._logger.debug(f"[MULTI-QR] Found {count} Portuguese invoice QR codes in {filename}")
+
     def log_qr_extraction(self, qr_type: str, extracted_fields: dict, page_number: int = 0) -> None:
         field_parts = []
         for key, val in extracted_fields.items():

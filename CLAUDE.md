@@ -75,9 +75,12 @@ PDF → render pages at 300 DPI → pyzbar decode → detect QR type → parse �
 ```
 
 **Key components:**
-- `extract_metadata_from_qr(pdf_path)` - Main entry point, returns `(QRExtractedMetadata, raw_data_dict)` tuple
+- `extract_metadata_from_qr(pdf_path)` - Single-QR entry point, returns `(QRExtractedMetadata, raw_data_dict)` tuple
+- `extract_all_metadata_from_qr(pdf_path)` - Multi-QR entry point, returns `list[tuple[QRExtractedMetadata, dict]]` for ALL Portuguese invoice QR codes
 - `is_portuguese_invoice_qr(content)` - Detection function
 - `parse_portuguese_invoice_qr(qr_data)` - Parser for PT invoice QR codes
+
+**Multi-QR (sub-documents):** When 2+ Portuguese invoice QR codes are detected in a single PDF (e.g., Via Verde toll aggregator), each becomes a sub-document with independent metadata stored in `sub_documents`. The parent document gets LLM classification (aggregator info) without QR merge. Each sub-document gets NIF-enriched `issuing_party` during extraction. In reconciliation, sub-documents are expanded as independent candidates for matching.
 
 **Portuguese QR fields extracted:**
 - `issue_date` from F field (YYYYMMDD → YYYY-MM-DD, stored as `date_issued` in sidecar JSON)
@@ -186,7 +189,7 @@ Document types and issuing parties are loaded dynamically from existing metadata
 | File | Purpose | Key Lines |
 |------|---------|-----------|
 | `main.py` | Core app | Entry point, CLI tasks |
-| `papertrail/models.py` | Pydantic models | `DocumentMetadataRaw`, `DocumentMetadata` |
+| `papertrail/models.py` | Pydantic models | `DocumentMetadataRaw`, `DocumentMetadata`, `SubDocumentMetadata` |
 | `papertrail/llm.py` | LLM classification | `normalize_metadata` with LLM normalization |
 | `papertrail/logging_utils.py` | Logging infrastructure | `setup_task_logging`, `DocumentLogger`, `setup_logging` |
 | `papertrail/hashing.py` | File hashing | `HashCache`, `hash_file_fast`, `hash_file_text`, `hash_file_content` |
@@ -196,7 +199,7 @@ Document types and issuing parties are loaded dynamically from existing metadata
 | `scripts/deduplicate.py` | Text-hash deduplication | `plan` + `execute` two-phase workflow |
 | `papertrail/gmail.py` | Gmail API client | `GmailDownloader`, `download_gmail_attachments` |
 | `papertrail/mbox.py` | Mbox extraction | `extract_mbox_attachments` |
-| `papertrail/qr/` | QR code extraction | `extract_metadata_from_qr`, `parse_portuguese_invoice_qr` |
+| `papertrail/qr/` | QR code extraction | `extract_metadata_from_qr`, `extract_all_metadata_from_qr`, `parse_portuguese_invoice_qr` |
 | `papertrail/bank_statement/` | XLSX bank statement classification | `classify_bank_statement`, `detect_bank_format` |
 | `papertrail/image_convert.py` | Image-to-PDF conversion | `convert_image_to_pdf`, `convert_images_to_pdfs` |
 | `papertrail/tasks/qr_inventory.py` | QR inventory task | `task_qr_inventory` |
@@ -210,7 +213,7 @@ DocumentMetadataInput  # With enum validation
 DocumentMetadata       # Full: hashes, timestamps, raw values
 ```
 
-Fields: `bank_statement`, `class_confidence`, `class_reasoning`, `date_created`, `date_issued`, `date_updated`, `document_type`, `document_type_raw`, `document_title`, `file_size_kb`, `hash_content`, `hash_file`, `hash_text`, `issuer_tax_number`, `issuing_party`, `issuing_party_raw`, `locale`, `page_count`, `qrcode`, `source_extension`, `total_amount`, `total_amount_currency`
+Fields: `bank_statement`, `class_confidence`, `class_reasoning`, `date_created`, `date_issued`, `date_updated`, `document_type`, `document_type_raw`, `document_title`, `file_size_kb`, `hash_content`, `hash_file`, `hash_text`, `issuer_tax_number`, `issuing_party`, `issuing_party_raw`, `locale`, `page_count`, `qrcode`, `source_extension`, `sub_documents`, `total_amount`, `total_amount_currency`
 
 The `document_title` field stores the specific subject, product, service, or transaction described in the document (e.g., "YouTube Premium", "Claude API"). It is null when no specific subject beyond the document type is identifiable. The `document_type` / `document_type_raw` fields contain only the cleaned core type label (e.g., "Fatura").
 
@@ -247,6 +250,28 @@ The `hash_text` field stores the text-based hash of a PDF document (first 8 hex 
 
 The `file_size_kb` field stores the companion document file size in kilobytes (rounded integer). Set during extraction for both PDFs and XLSX files. When `null`, the file size hasn't been backfilled yet. Migration: `scripts/migrate_add_file_size.py <dir> [--dry-run]`.
 
+The `sub_documents` field stores metadata for individual invoices within a multi-invoice PDF (e.g., Via Verde toll aggregator PDFs with multiple QR codes from different issuers). When 2+ Portuguese invoice QR codes are detected, each is stored as a sub-document with independently NIF-enriched metadata. The parent document gets LLM-classified metadata (aggregator info) while `qrcode` is set to `null`. Each sub-document participates individually in reconciliation matching.
+```json
+{
+    "sub_documents": [
+        {
+            "date_issued": "2025-01-15",
+            "document_type": "receipt",
+            "total_amount": 18.00,
+            "total_amount_currency": "EUR",
+            "issuer_tax_number": "502790024",
+            "issuing_party": "brisa",
+            "issuing_party_raw": "Brisa - Concessão Rodoviária, S.A.",
+            "document_number": "FR BR2025/013408563",
+            "atcud": "...",
+            "locale": "pt-PT",
+            "qrcode": {"qr_type": "portuguese_invoice", "raw_content": "A:502790024*...", "page_number": 0}
+        }
+    ]
+}
+```
+Documents with 0-1 QR codes have `"sub_documents": null`. `SubDocumentMetadata` model used for construction, `.model_dump()` for storage. Backfill: `python main.py backfill_sub_documents <processed_path>` (QR-only, no NIF enrichment). Use `sync --pattern "*via-verde*"` afterward for full NIF-enriched sub-documents.
+
 ## File Naming Convention
 
 Pattern: `YYYY-MM-DD - document-type - issuing-party - [title] - [amount currency] - hash_file.{ext}`
@@ -270,6 +295,7 @@ The hash component is `hash_file` (SHA256 of raw bytes, 8 chars). This ensures e
 | `backfill_page_count` | Add page_count to existing metadata | - |
 | `backfill_file_size` | Add file_size_kb to existing metadata | - |
 | `backfill_text_hash` | Add hash_text to existing metadata | - |
+| `backfill_sub_documents` | Detect multi-QR PDFs and populate sub_documents | - |
 | `fix_unicode` | Fix escaped Unicode in metadata JSON files | - |
 | `sync` | Sync metadata (default: orphans only) | `--all`, `--pattern`, `--all_unknown`, `--dry_run` |
 | `validate_extraction` | Validate extraction quality, flag issues | `--pattern` (optional) |

@@ -60,6 +60,14 @@ class PDFCandidate:
     issuing_party: Optional[str]
     total_amount: Optional[float]
     total_amount_currency: Optional[str]
+    sub_doc_index: Optional[int] = None
+    is_sub_document: bool = False
+
+    @property
+    def candidate_id(self) -> str:
+        if self.sub_doc_index is not None:
+            return f"{self.json_path}#sub{self.sub_doc_index}"
+        return str(self.json_path)
 
 
 @dataclass
@@ -148,6 +156,8 @@ def _load_pdf_candidates(export_path: Path) -> list[PDFCandidate]:
     """Load document candidates from JSON sidecar metadata in export folder.
 
     Excludes bank-statement entries (they are the source, not candidates).
+    When a document has sub_documents (2+ entries), expands each sub-document
+    as an independent candidate (parent is skipped as a candidate).
     """
     candidates = []
     for json_path, data in iter_json_files(export_path):
@@ -157,6 +167,31 @@ def _load_pdf_candidates(export_path: Path) -> list[PDFCandidate]:
         doc_path = find_companion_file(json_path, data)
         if doc_path is None:
             continue
+
+        # Expand sub-documents as individual candidates
+        sub_docs = data.get("sub_documents")
+        if sub_docs and len(sub_docs) >= 2:
+            for i, sd in enumerate(sub_docs):
+                sd_amount = sd.get("total_amount")
+                if sd_amount is not None:
+                    try:
+                        sd_amount = float(sd_amount)
+                    except (ValueError, TypeError):
+                        sd_amount = None
+
+                candidates.append(PDFCandidate(
+                    json_path=json_path,
+                    pdf_filename=doc_path.name,
+                    date_issued=sd.get("date_issued"),
+                    document_type=sd.get("document_type"),
+                    document_title=None,
+                    issuing_party=sd.get("issuing_party"),
+                    total_amount=sd_amount,
+                    total_amount_currency=sd.get("total_amount_currency"),
+                    sub_doc_index=i,
+                    is_sub_document=True,
+                ))
+            continue  # Skip parent as candidate
 
         total_amount = data.get("total_amount")
         if total_amount is not None:
@@ -198,7 +233,7 @@ def _phase1_deterministic_match(
     """Match transactions to PDFs by amount + date proximity."""
     matches: list[MatchResult] = []
     unmatched: list[Transaction] = []
-    used_candidates: set[str] = set()  # json_path strings
+    used_candidates: set[str] = set()  # candidate_id strings
 
     for txn in transactions:
         abs_amount = abs(txn.amount)
@@ -222,7 +257,7 @@ def _phase1_deterministic_match(
         closest_days = amount_matches[0][1]
 
         for cand in matched_pdfs:
-            used_candidates.add(str(cand.json_path))
+            used_candidates.add(cand.candidate_id)
 
         reasoning = (
             f"Amount match: {abs_amount:.2f} "
@@ -241,7 +276,7 @@ def _phase1_deterministic_match(
             reasoning=reasoning,
         ))
 
-    remaining = [c for c in candidates if str(c.json_path) not in used_candidates]
+    remaining = [c for c in candidates if c.candidate_id not in used_candidates]
 
     return matches, unmatched, remaining
 
@@ -249,6 +284,8 @@ def _phase1_deterministic_match(
 def _format_candidate_for_llm(idx: int, cand: PDFCandidate) -> str:
     """Format a PDF candidate for the LLM prompt."""
     parts = [cand.pdf_filename]
+    if cand.sub_doc_index is not None:
+        parts.append(f"(sub-doc #{cand.sub_doc_index})")
     if cand.issuing_party and cand.issuing_party != "$UNKNOWN$":
         parts.append(cand.issuing_party)
     if cand.document_title:
@@ -565,12 +602,26 @@ def _reconcile_single(
     p2_matched_rows = {m.transaction.row_number for m in p2_matches}
     final_unmatched = [txn for txn in unmatched_txns if txn.row_number not in p2_matched_rows]
 
-    # Build set of all matched PDF json_paths
-    matched_pdf_paths = set()
+    # Redundancy detection: warn if a non-sub-doc candidate matches multiple transactions
+    candidate_match_counts: dict[str, int] = {}
+    for m in all_matches:
+        for cand in m.pdf_candidates:
+            candidate_match_counts[cand.candidate_id] = candidate_match_counts.get(cand.candidate_id, 0) + 1
+    for cid, count in candidate_match_counts.items():
+        if count > 1:
+            is_sub_doc = any(
+                c.candidate_id == cid and c.is_sub_document
+                for m in all_matches for c in m.pdf_candidates
+            )
+            if not is_sub_doc:
+                logger.warning(f"[REDUNDANT-MATCH] {cid} matched {count} transactions")
+
+    # Build set of all matched PDF candidate_ids
+    matched_candidate_ids = set()
     for m in all_matches:
         for c in m.pdf_candidates:
-            matched_pdf_paths.add(str(c.json_path))
-    unmatched_files = [c for c in candidates if str(c.json_path) not in matched_pdf_paths]
+            matched_candidate_ids.add(c.candidate_id)
+    unmatched_files = [c for c in candidates if c.candidate_id not in matched_candidate_ids]
 
     # Validate required document types per transaction category
     profile = get_current_profile()
