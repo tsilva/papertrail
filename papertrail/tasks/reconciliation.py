@@ -353,6 +353,20 @@ Respond in JSON:
         if not matched_pdfs:
             continue
 
+        # Require at least one matched PDF to have a matching amount
+        abs_amount = abs(txn.amount)
+        has_amount_match = any(
+            c.total_amount is not None
+            and abs(abs_amount - c.total_amount) <= _AMOUNT_TOLERANCE
+            for c in matched_pdfs
+        )
+        if not has_amount_match:
+            logger.debug(
+                f"[PHASE-2] Row {txn.row_number}: rejected LLM match — "
+                f"no PDF has matching amount ({abs_amount:.2f})"
+            )
+            continue
+
         confidence = m.get("confidence", 0.5)
         reasoning = m.get("reasoning", "")
 
