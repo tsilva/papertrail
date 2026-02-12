@@ -45,6 +45,7 @@ from papertrail.tasks.validation import (
     task_backfill_page_count,
     task_backfill_file_size,
     task_backfill_text_hash,
+    task_backfill_sub_documents,
     task_fix_unicode,
 )
 from papertrail.tasks.export import (
