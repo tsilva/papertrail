@@ -239,6 +239,10 @@ Thumbs.db
 .claude-sandbox.json
 *.code-workspace
 
+# find_similar.py artifacts
+.hf-cache/
+*.embeddings.json
+
 
 *cache*
 # Re-allow .cache/ dir and its example templates (overrides *cache* above)
