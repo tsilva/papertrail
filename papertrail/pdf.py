@@ -64,7 +64,8 @@ def find_pdf_files(folder_paths) -> list[Path]:
         folder_path = Path(folder_path)
         if not folder_path.exists():
             continue
-        for root, _, files in os.walk(folder_path):
+        for root, dirs, files in os.walk(folder_path):
+            dirs[:] = [d for d in dirs if not d.startswith("_dupes") and d != "logs"]
             for file in files:
                 if (
                     file.lower().endswith('.pdf')
@@ -86,7 +87,8 @@ def find_document_files(folder_paths, extensions=('.pdf', '.xlsx')) -> list[Path
         folder_path = Path(folder_path)
         if not folder_path.exists():
             continue
-        for root, _, files in os.walk(folder_path):
+        for root, dirs, files in os.walk(folder_path):
+            dirs[:] = [d for d in dirs if not d.startswith("_dupes") and d != "logs"]
             for file in files:
                 if (
                     file.startswith('.')

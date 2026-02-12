@@ -22,6 +22,19 @@ except ImportError:
             return json.load(f)
 
 
+def _is_internal_path(path: Path) -> bool:
+    """Check if a path is inside an internal directory that should be skipped.
+
+    Skips: logs/, _dupes*/ folders, and files starting with _.
+    """
+    parts = path.parts
+    return (
+        any(part.startswith("_dupes") for part in parts)
+        or "logs" in parts
+        or path.name.startswith("_")
+    )
+
+
 def find_companion_file(json_path: Path, metadata: dict = None) -> Path | None:
     """Find the companion document file for a JSON sidecar.
 
@@ -54,7 +67,7 @@ def iter_json_files(
     validate: bool = False
 ) -> Iterator[tuple[Path, DocumentMetadata | dict]]:
     """Iterate over JSON files in a directory, yielding (path, data). Invalid files are skipped."""
-    json_files = list(directory.rglob("*.json"))
+    json_files = [f for f in directory.rglob("*.json") if not _is_internal_path(f)]
 
     iterator = get_console().track(json_files, progress_desc) if show_progress else json_files
 
@@ -86,7 +99,7 @@ def load_json_files_parallel(
     progress_desc: str = "Loading metadata"
 ) -> list[tuple[Path, DocumentMetadata | dict]]:
     """Load all JSON files in parallel (I/O phase) then validate sequentially (CPU phase)."""
-    json_files = list(directory.rglob("*.json"))
+    json_files = [f for f in directory.rglob("*.json") if not _is_internal_path(f)]
     if not json_files:
         return []
 
@@ -169,7 +182,7 @@ def load_validated_metadata(
     progress_desc: str = "Loading metadata"
 ) -> Iterator[tuple[Path, Path, DocumentMetadata | dict]]:
     """Iterate metadata files, yielding (json_path, pdf_path, data). Skips orphans if require_pdf."""
-    json_files = list(directory.rglob("*.json"))
+    json_files = [f for f in directory.rglob("*.json") if not _is_internal_path(f)]
     if not json_files:
         return
 

@@ -61,6 +61,8 @@ def _scan_json_field(processed_dir: str, field: str) -> set[str]:
     for json_file in path.rglob("*.json"):
         if json_file.name.endswith(".reconciliation.json"):
             continue
+        if any(part.startswith("_dupes") for part in json_file.parts):
+            continue
         try:
             with open(json_file, "r", encoding="utf-8") as f:
                 value = json.load(f).get(field)
