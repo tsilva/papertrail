@@ -171,7 +171,7 @@ def load_export_folder(folder_path):
         if doc_path:
             file_index[doc_path.name] = entry
 
-        if metadata.get("document_type") == "bank-statement":
+        if metadata.get("bank_statement"):
             recon = None
             if doc_path:
                 rp = doc_path.with_suffix(".reconciliation.json")
