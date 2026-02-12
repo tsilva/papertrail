@@ -152,7 +152,7 @@ def load_export_folder(folder_path):
     if not folder.is_dir():
         return {}, f"**Error:** `{folder_path}` is not a valid directory."
 
-    documents, bank_statements, file_index = [], [], {}
+    bank_statements, file_index = [], {}
 
     for json_path in sorted(folder.rglob("*.json")):
         if json_path.name.endswith(".reconciliation.json"):
@@ -184,12 +184,7 @@ def load_export_folder(folder_path):
                         pass
             entry["reconciliation"] = recon
             bank_statements.append(entry)
-        else:
-            if doc_path and doc_path.name.startswith("merged_"):
-                continue
-            documents.append(entry)
 
-    documents.sort(key=lambda d: Path(d["doc_path"]).name if d.get("doc_path") else "")
     bank_statements.sort(key=lambda b: Path(b["doc_path"]).name if b.get("doc_path") else "")
 
     # Collect bank-related filenames for the bank tab dropdown
@@ -203,12 +198,12 @@ def load_export_folder(folder_path):
                         bank_files.add(f)
 
     n_recon = sum(1 for b in bank_statements if b.get("reconciliation"))
-    status = f"Loaded **{len(documents)}** documents, **{len(bank_statements)}** bank statements"
+    status = f"Loaded **{len(bank_statements)}** bank statements"
     if n_recon:
         status += f" ({n_recon} with reconciliation)"
+    status += f", **{len(file_index)}** files indexed"
 
     return {
-        "documents": documents,
         "bank_statements": bank_statements,
         "bank_files": sorted(bank_files),
         "file_index": file_index,
@@ -454,7 +449,6 @@ def build_ui():
         export_base_state = gr.State(str(export_base) if export_base else "")
         bank_page = gr.State(0)
         bank_file = gr.State("")
-        doc_page = gr.State(0)
 
         # Header
         gr.Markdown("## Papertrail Document Review")
@@ -472,51 +466,28 @@ def build_ui():
             elem_id="selected_file_bridge", label="", container=False,
         )
 
-        with gr.Tabs():
-            # ── Bank Statements Tab ──────────────────────────────
-            with gr.Tab("Bank Statements"):
-                with gr.Row(equal_height=False):
-                    with gr.Column(scale=1, min_width=400):
-                        bank_html = gr.HTML(
-                            '<p class="placeholder">Load a folder to view bank statements.</p>'
+        with gr.Row(equal_height=False):
+            with gr.Column(scale=1, min_width=400):
+                bank_html = gr.HTML(
+                    '<p class="placeholder">Load a folder to view bank statements.</p>'
+                )
+            with gr.Column(scale=1, min_width=400):
+                bank_file_dd = gr.Dropdown(
+                    label="Preview File",
+                    choices=[],
+                    interactive=True,
+                )
+                with gr.Tabs():
+                    with gr.Tab("Preview"):
+                        bank_preview = gr.HTML(
+                            '<p class="placeholder">Select a file to preview.</p>'
                         )
-                    with gr.Column(scale=1, min_width=400):
-                        bank_file_dd = gr.Dropdown(
-                            label="Preview File",
-                            choices=[],
-                            interactive=True,
-                        )
-                        with gr.Tabs():
-                            with gr.Tab("Preview"):
-                                bank_preview = gr.HTML(
-                                    '<p class="placeholder">Select a file to preview.</p>'
-                                )
-                                with gr.Row():
-                                    b_prev = gr.Button("< Prev", size="sm")
-                                    b_page = gr.Markdown("Page -/-")
-                                    b_next = gr.Button("Next >", size="sm")
-                            with gr.Tab("Raw JSON"):
-                                bank_json = gr.Code(language="json", label="")
-
-            # ── Documents Tab ────────────────────────────────────
-            with gr.Tab("Documents") as documents_tab:
-                with gr.Row(equal_height=False):
-                    with gr.Column(scale=1, min_width=300):
-                        doc_dd = gr.Dropdown(
-                            label="Select Document", choices=[], interactive=True,
-                        )
-                    with gr.Column(scale=2, min_width=400):
-                        with gr.Tabs():
-                            with gr.Tab("Preview"):
-                                doc_preview = gr.HTML(
-                                    '<p class="placeholder">Select a document to preview.</p>'
-                                )
-                                with gr.Row():
-                                    d_prev = gr.Button("< Prev", size="sm")
-                                    d_page = gr.Markdown("Page -/-")
-                                    d_next = gr.Button("Next >", size="sm")
-                            with gr.Tab("Raw JSON"):
-                                doc_json = gr.Code(language="json", label="")
+                        with gr.Row():
+                            b_prev = gr.Button("< Prev", size="sm")
+                            b_page = gr.Markdown("Page -/-")
+                            b_next = gr.Button("Next >", size="sm")
+                    with gr.Tab("Raw JSON"):
+                        bank_json = gr.Code(language="json", label="")
 
         # ── Load folder handler ──────────────────────────────────
 
@@ -527,8 +498,6 @@ def build_ui():
                     "Select an export folder.",
                     '<p class="placeholder">No data loaded.</p>',
                     gr.update(choices=[], value=None),
-                    gr.update(choices=[], value=None),
-                    *_EMPTY_PREVIEW,
                 )
             folder_path = str(Path(base_dir) / folder_name)
             data, status = load_export_folder(folder_path)
@@ -538,32 +507,20 @@ def build_ui():
                     status,
                     '<p class="placeholder">No data loaded.</p>',
                     gr.update(choices=[], value=None),
-                    gr.update(choices=[], value=None),
-                    *_EMPTY_PREVIEW,
                 )
 
             _CACHE["data"] = data
 
             bank_content = render_bank_statements_html(data.get("bank_statements", []))
-            doc_choices = [
-                Path(d["doc_path"]).name
-                for d in data.get("documents", [])
-                if d.get("doc_path")
-            ]
             bank_file_choices = data.get("bank_files", [])
-            first_doc = doc_choices[0] if doc_choices else None
-            doc_result = _do_preview(first_doc, 0) if first_doc else _EMPTY_PREVIEW
             return (
                 status, bank_content,
                 gr.update(choices=bank_file_choices, value=bank_file_choices[0] if bank_file_choices else None),
-                gr.update(choices=doc_choices, value=first_doc),
-                *doc_result,
             )
 
         folder_dd.change(
             on_load, [folder_dd, export_base_state],
-            [status_bar, bank_html, bank_file_dd, doc_dd,
-             doc_preview, doc_json, d_page, doc_page],
+            [status_bar, bank_html, bank_file_dd],
         )
 
         # ── Bank: file selection via Dropdown ────────────────────
@@ -611,52 +568,12 @@ def build_ui():
             [bank_preview, b_page, bank_page],
         )
 
-        # ── Documents: selection ─────────────────────────────────
-
-        def on_doc_select(filename):
-            if not filename:
-                return _EMPTY_PREVIEW
-            return _do_preview(filename, 0)
-
-        doc_dd.change(
-            on_doc_select, [doc_dd],
-            [doc_preview, doc_json, d_page, doc_page],
-        )
-
-        # ── Documents: page navigation ──────────────────────────
-
-        def on_doc_prev(pg, fn):
-            preview, _j, pl, p = _do_preview(fn, max(0, pg - 1))
-            return preview, pl, p
-
-        def on_doc_next(pg, fn):
-            preview, _j, pl, p = _do_preview(fn, pg + 1)
-            return preview, pl, p
-
-        d_prev.click(
-            on_doc_prev, [doc_page, doc_dd],
-            [doc_preview, d_page, doc_page],
-        )
-        d_next.click(
-            on_doc_next, [doc_page, doc_dd],
-            [doc_preview, d_page, doc_page],
-        )
-
-        # ── Documents: re-apply preview on tab select ─────────
-        # Gradio 6.x doesn't apply updates to hidden tab components,
-        # so re-trigger the preview when the Documents tab becomes visible.
-        documents_tab.select(
-            on_doc_select, [doc_dd],
-            [doc_preview, doc_json, d_page, doc_page],
-        )
-
         # ── Auto-load most recent folder on startup ──────────────
 
         if default_folder:
             app.load(
                 on_load, [folder_dd, export_base_state],
-                [status_bar, bank_html, bank_file_dd, doc_dd,
-                 doc_preview, doc_json, d_page, doc_page],
+                [status_bar, bank_html, bank_file_dd],
             )
 
     return app
