@@ -4,7 +4,7 @@ from datetime import datetime
 from pathlib import Path
 
 from papertrail.console import get_console
-from papertrail.hashing import hash_file_fast, hash_file_content, HashCache
+from papertrail.hashing import hash_file_fast, hash_file_content, hash_file_text, HashCache
 from papertrail.logging_utils import get_logger, setup_task_logging
 from papertrail.metadata import load_validated_metadata, save_json_data
 from papertrail.models import DocumentMetadata
@@ -239,4 +239,32 @@ def task_fix_unicode(processed_path: Path):
         should_skip=_should_skip,
         update_fn=lambda _mp, _pp, _data: None,  # re-saving with ensure_ascii=False is the fix
         skip_label="already UTF-8",
+    )
+
+
+def task_backfill_text_hash(processed_path: Path):
+    """Backfill hash_text for existing metadata files that don't have it."""
+    from papertrail.metadata import find_companion_file
+
+    def _should_skip(_mp, _pp, data):
+        return "hash_text" in data
+
+    def _update(metadata_path, _pdf_path, data):
+        companion = find_companion_file(metadata_path, data)
+        if companion is None:
+            return
+        if companion.suffix.lower() != ".pdf":
+            data["hash_text"] = None
+        else:
+            data["hash_text"] = hash_file_text(companion)
+        data["date_updated"] = datetime.now().strftime("%Y-%m-%d")
+
+    _batch_update_metadata(
+        processed_path,
+        task_name="backfill_text_hash",
+        progress_desc="Backfilling hash_text",
+        require_pdf=False,
+        should_skip=_should_skip,
+        update_fn=_update,
+        skip_label="already had hash_text",
     )
