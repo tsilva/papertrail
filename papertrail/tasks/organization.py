@@ -57,6 +57,7 @@ def rename_single_pdf(pdf_path: Path, content_hash: str, processed_path: Path,
         file_hash = hash_file_fast(pdf_path)
         metadata = classify_pdf_document(pdf_path, content_hash, failure_logger, doc_logger=doc_logger)
         metadata.hash_file = file_hash
+        metadata.file_size_kb = round(pdf_path.stat().st_size / 1024)
 
         filename = file_name_from_metadata(metadata, content_hash)
         new_pdf_path = processed_path / filename
