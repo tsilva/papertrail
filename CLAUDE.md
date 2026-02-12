@@ -1,6 +1,6 @@
 # papertrail - Claude Code Context
 
-AI-powered document classification and organization tool using vision LLMs via OpenRouter. Supports PDF documents (LLM-classified) and XLSX bank statements (deterministically classified).
+AI-powered document classification and organization tool using vision LLMs via OpenRouter. Supports PDF documents (LLM-classified), XLSX bank statements (deterministically classified), and image files (PNG, JPG, TIFF, BMP, WebP — converted to PDF on-the-fly).
 
 ## Quick Reference
 
@@ -123,6 +123,22 @@ XLSX → openpyxl open → detect format (check row 8 headers) → parse metadat
 
 **Adding a new bank format:** Create a parser module in `papertrail/bank_statement/` with `can_parse(ws)` and `parse(xlsx_path)` functions, add it to `_PARSERS` registry in `extractor.py`.
 
+### Image File Conversion (`papertrail/image_convert.py`)
+Image files (PNG, JPG, JPEG, TIFF, TIF, BMP, WebP) in raw folders are automatically converted to PDF during extraction, then processed through the standard PDF classification pipeline.
+
+**How it works:**
+```
+Image (PNG/JPG/...) → Pillow convert to RGB → save as PDF → temp dir → classify as PDF → copy to processed
+```
+
+**Key details:**
+- Conversion happens in a `TemporaryDirectory` that is cleaned up after extraction completes
+- Output filenames use `{stem}_{path_hash}.pdf` to avoid collisions from same-named images in different raw directories
+- Multi-frame TIFF files are saved as multi-page PDFs (`save_all`/`append_images`)
+- The converted PDF is the artifact that gets hashed, classified, and stored — no special handling downstream
+- Supported extensions defined in `IMAGE_EXTENSIONS` constant in `papertrail/pdf.py`
+- Log marker: `[IMG-CONVERT]`
+
 ### Reconciliation Output
 Reconciliation writes a `.reconciliation.json` sidecar alongside each bank statement XLSX (non-destructive — original XLSX is never modified):
 ```
@@ -182,6 +198,7 @@ Document types and issuing parties are loaded dynamically from existing metadata
 | `papertrail/mbox.py` | Mbox extraction | `extract_mbox_attachments` |
 | `papertrail/qr/` | QR code extraction | `extract_metadata_from_qr`, `parse_portuguese_invoice_qr` |
 | `papertrail/bank_statement/` | XLSX bank statement classification | `classify_bank_statement`, `detect_bank_format` |
+| `papertrail/image_convert.py` | Image-to-PDF conversion | `convert_image_to_pdf`, `convert_images_to_pdfs` |
 | `papertrail/tasks/qr_inventory.py` | QR inventory task | `task_qr_inventory` |
 | `papertrail/tasks/reconciliation.py` | Bank reconciliation | `task_reconcile`, `_discover_bank_statements` |
 
