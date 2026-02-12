@@ -2,6 +2,7 @@
 
 import hashlib
 import time
+import unicodedata
 from pathlib import Path
 from typing import Optional
 
@@ -14,13 +15,14 @@ logger = get_logger('hashing')
 
 
 class HashCache:
-    """Cache file_hash -> content_hash mappings to avoid recomputation."""
+    """Cache file_hash -> content_hash and file_hash -> text_hash mappings."""
 
     def __init__(self, cache_path: Optional[Path] = None):
         if cache_path is None:
             cache_path = Path(__file__).parent.parent / ".cache" / "hash_cache.yaml"
         self.path = cache_path
         self._cache: dict[str, str] = {}
+        self._text_cache: dict[str, str] = {}
         self._dirty = False
         self._load()
 
@@ -28,13 +30,15 @@ class HashCache:
         try:
             data = load_yaml(self.path)
             self._cache = data.get("cache", {})
+            self._text_cache = data.get("text_cache", {})
         except Exception:
             self._cache = {}
+            self._text_cache = {}
 
     def save(self) -> None:
         if not self._dirty:
             return
-        save_yaml(self.path, {"cache": self._cache})
+        save_yaml(self.path, {"cache": self._cache, "text_cache": self._text_cache})
         self._dirty = False
 
     def get(self, key: str) -> Optional[str]:
@@ -43,6 +47,14 @@ class HashCache:
     def set(self, key: str, value: str) -> None:
         if self._cache.get(key) != value:
             self._cache[key] = value
+            self._dirty = True
+
+    def get_text(self, key: str) -> Optional[str]:
+        return self._text_cache.get(key)
+
+    def set_text(self, key: str, value: str) -> None:
+        if self._text_cache.get(key) != value:
+            self._text_cache[key] = value
             self._dirty = True
 
     def __len__(self) -> int:
@@ -89,3 +101,51 @@ def hash_file_content(path: Path) -> str:
     except Exception as e:
         logger.warning(f"Content hashing failed for {path.name} ({e}), falling back to file hash")
         return hash_file_fast(path)
+
+
+def _page_has_text(page) -> bool:
+    """Check if a PDF page has meaningful extractable text (>= 50 chars)."""
+    text = page.get_text().strip()
+    return len(text) >= 50
+
+
+def _normalize_text_for_hash(pages_text: list[str]) -> str:
+    """Aggressively normalize text for hashing: lowercase, ASCII-only, no whitespace."""
+    combined = "".join(pages_text)
+    combined = combined.lower()
+    nfkd = unicodedata.normalize("NFKD", combined)
+    ascii_text = nfkd.encode("ascii", "ignore").decode("ascii")
+    return "".join(ascii_text.split())
+
+
+def hash_file_text(path: Path) -> Optional[str]:
+    """Text-based hash: extracts text from all pages, normalizes, SHA256 (first 8 hex chars).
+
+    Returns None if any page lacks extractable text (e.g., scanned/image-only PDFs).
+    """
+    t0 = time.monotonic()
+    try:
+        with fitz.open(str(path)) as doc:
+            num_pages = len(doc)
+            if num_pages == 0:
+                return None
+
+            pages_text = []
+            for page in doc:
+                if not _page_has_text(page):
+                    logger.debug(f"[HASH-TEXT] {path.name}: page {page.number} has insufficient text, skipping")
+                    return None
+                pages_text.append(page.get_text())
+
+        normalized = _normalize_text_for_hash(pages_text)
+        if not normalized:
+            return None
+
+        result = hashlib.sha256(normalized.encode()).hexdigest()[:8]
+        elapsed = time.monotonic() - t0
+        logger.debug(f"[HASH-TEXT] {path.name}: {num_pages} pages in {elapsed:.3f}s -> {result}")
+        return result
+
+    except Exception as e:
+        logger.debug(f"[HASH-TEXT] Failed for {path.name}: {e}")
+        return None
