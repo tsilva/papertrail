@@ -40,6 +40,7 @@ window.selectReviewFile = function(filename) {
 """
 
 _CSS = """
+.gradio-container { max-width: 100% !important; padding-left: 4px !important; padding-right: 4px !important; }
 .file-link {
     color: #58a6ff; text-decoration: underline; cursor: pointer;
     background: none; border: none; font: inherit; padding: 0;
