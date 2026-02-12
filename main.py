@@ -36,6 +36,7 @@ from papertrail.tasks import (
     copy_matching_files,
     task_export_all_dates,
     task_backfill_page_count,
+    task_backfill_file_size,
     task_fix_unicode,
     task_gmail_download,
     pipeline,
@@ -143,8 +144,8 @@ def main():
     parser.add_argument("task", type=str, nargs='?', default='pipeline', choices=[
         'extract_new', 'rename_files', 'validate_metadata', 'export_excel',
         'copy_matching', 'export_all_dates', 'pipeline',
-        'gmail_download', 'backfill_page_count', 'fix_unicode', 'sync',
-        'validate_extraction', 'qr_inventory', 'reconcile',
+        'gmail_download', 'backfill_page_count', 'backfill_file_size',
+        'fix_unicode', 'sync', 'validate_extraction', 'qr_inventory', 'reconcile',
     ], help="Task to perform (default: pipeline).")
     parser.add_argument("processed_path", type=str, nargs='?', help="Path to output folder.")
     parser.add_argument("--raw_path", type=str, help="Path to documents folder(s). Use ';' to separate multiple.")
@@ -257,6 +258,9 @@ def main():
 
     elif task == "backfill_page_count":
         task_backfill_page_count(processed_path)
+
+    elif task == "backfill_file_size":
+        task_backfill_file_size(processed_path)
 
     elif task == "fix_unicode":
         task_fix_unicode(processed_path)

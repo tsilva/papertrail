@@ -69,6 +69,7 @@ class DocumentMetadata(BaseModel):
     document_title: Optional[str] = Field(default=None, description="Specific subject/product/service described in the document.")
     issuing_party_raw: Optional[str] = Field(default=None)
     page_count: Optional[int] = Field(default=None)
+    file_size_kb: Optional[int] = Field(default=None)
     issuer_tax_number: Optional[str] = Field(default=None)
     locale: Optional[str] = Field(default=None)
     qrcode: Optional[dict] = Field(default=None)

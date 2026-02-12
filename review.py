@@ -20,7 +20,23 @@ _CACHE = {"data": {}}
 # ── JS: clickable file links in transaction table → update dropdown ──
 
 _JS = """
+window.togglePreviewPanel = function() {
+    var panel = document.getElementById('preview_panel');
+    if (!panel) return;
+    var expanded = panel.classList.toggle('expanded');
+    var btn = document.getElementById('toggle_preview_btn');
+    if (btn) btn.innerText = expanded ? 'Hide Preview' : 'Show Preview';
+};
+
 window.selectReviewFile = function(filename) {
+    // Auto-expand preview panel
+    var panel = document.getElementById('preview_panel');
+    if (panel && !panel.classList.contains('expanded')) {
+        panel.classList.add('expanded');
+        var btn = document.getElementById('toggle_preview_btn');
+        if (btn) btn.innerText = 'Hide Preview';
+    }
+
     var el = document.getElementById('selected_file_bridge');
     if (!el) return;
     var input = el.querySelector('textarea') || el.querySelector('input');
@@ -82,6 +98,12 @@ _CSS = """
 #selected_file_bridge {
     position: fixed !important; left: -9999px !important;
     width: 1px !important; height: 1px !important;
+}
+#preview_panel { display: none !important; }
+#preview_panel.expanded { display: flex !important; }
+#toggle_preview_btn {
+    max-width: 160px !important;
+    margin-left: auto !important;
 }
 """
 
@@ -362,15 +384,18 @@ def _render_txn_table(recon):
             tip_parts.append(", ".join(r["warnings"]))
         tip = html_lib.escape(" | ".join(tip_parts))
 
-        # Clickable file links
-        fs = ""
-        for f in r.get("files", []):
-            sf = f.replace("'", "\\'")
-            fs += (
-                f'<button class="file-link" onclick="selectReviewFile(\'{sf}\');'
-                f'return false;">{html_lib.escape(f)}</button><br>'
-            )
-        if not fs:
+        # Clickable file links as bullet list
+        file_list = r.get("files", [])
+        if file_list:
+            fs = '<ul style="margin:0;padding-left:16px;list-style:disc;">'
+            for f in file_list:
+                sf = f.replace("'", "\\'")
+                fs += (
+                    f'<li><button class="file-link" onclick="selectReviewFile(\'{sf}\');'
+                    f'return false;">{html_lib.escape(f)}</button></li>'
+                )
+            fs += "</ul>"
+        else:
             fs = '<span style="color:var(--body-text-color-subdued,#555);">-</span>'
 
         lines.append(f'<tr style="background:{bg};" title="{tip}">')
@@ -466,12 +491,17 @@ def build_ui():
             elem_id="selected_file_bridge", label="", container=False,
         )
 
+        toggle_btn = gr.Button(
+            "Show Preview", size="sm",
+            elem_id="toggle_preview_btn",
+        )
+
         with gr.Row(equal_height=False):
             with gr.Column(scale=1, min_width=400):
                 bank_html = gr.HTML(
                     '<p class="placeholder">Load a folder to view bank statements.</p>'
                 )
-            with gr.Column(scale=1, min_width=400):
+            with gr.Column(scale=1, min_width=400, elem_id="preview_panel"):
                 bank_file_dd = gr.Dropdown(
                     label="Preview File",
                     choices=[],
@@ -567,6 +597,7 @@ def build_ui():
             on_bank_next, [bank_page, bank_file],
             [bank_preview, b_page, bank_page],
         )
+        toggle_btn.click(fn=None, js="() => togglePreviewPanel()")
 
         # ── Auto-load most recent folder on startup ──────────────
 
