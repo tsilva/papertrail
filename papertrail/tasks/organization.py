@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Optional
 
 from papertrail.console import get_console
-from papertrail.hashing import hash_file_fast
+from papertrail.hashing import hash_file_fast, hash_file_text
 from papertrail.logging_utils import get_logger, log_failure, DocumentLogger
 from papertrail.metadata import save_metadata_json, save_json_data, load_json_data, find_companion_file
 from papertrail.models import DocumentMetadata
@@ -57,6 +57,7 @@ def rename_single_pdf(pdf_path: Path, content_hash: str, processed_path: Path,
         file_hash = hash_file_fast(pdf_path)
         metadata = classify_pdf_document(pdf_path, content_hash, failure_logger, doc_logger=doc_logger)
         metadata.hash_file = file_hash
+        metadata.hash_text = hash_file_text(pdf_path)
         metadata.file_size_kb = round(pdf_path.stat().st_size / 1024)
 
         filename = file_name_from_metadata(metadata, content_hash)

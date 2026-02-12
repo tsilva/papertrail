@@ -65,6 +65,7 @@ class DocumentMetadata(BaseModel):
     total_amount_currency: Optional[str] = Field(default=None)
     hash_content: str = Field(description="Content-based hash (first 8 hex chars).")
     hash_file: Optional[str] = Field(default=None)
+    hash_text: Optional[str] = Field(default=None)
     document_type_raw: Optional[str] = Field(default=None)
     document_title: Optional[str] = Field(default=None, description="Specific subject/product/service described in the document.")
     issuing_party_raw: Optional[str] = Field(default=None)

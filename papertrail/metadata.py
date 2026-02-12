@@ -111,10 +111,11 @@ def load_json_files_parallel(
     return results
 
 
-def build_hash_index(directory: Path) -> tuple[dict[str, Path], dict[str, Path], set[str]]:
-    """Build (content_hash_index, file_hash_index, known_issuers) from metadata files."""
+def build_hash_index(directory: Path) -> tuple[dict[str, Path], dict[str, Path], dict[str, Path], set[str]]:
+    """Build (content_hash_index, file_hash_index, text_hash_index, known_issuers) from metadata files."""
     content_hash_index = {}
     file_hash_index = {}
+    text_hash_index = {}
     known_issuers: set[str] = set()
 
     for json_path, data in iter_json_files(directory):
@@ -125,11 +126,14 @@ def build_hash_index(directory: Path) -> tuple[dict[str, Path], dict[str, Path],
         file_hash = data.get('hash_file')
         if file_hash:
             file_hash_index[file_hash] = doc_path
+        text_hash = data.get('hash_text')
+        if text_hash:
+            text_hash_index[text_hash] = doc_path
         ip = data.get("issuing_party")
         if ip and ip != "$UNKNOWN$":
             known_issuers.add(ip)
 
-    return content_hash_index, file_hash_index, known_issuers
+    return content_hash_index, file_hash_index, text_hash_index, known_issuers
 
 
 def get_unique_dates(directory: Path) -> list[str]:

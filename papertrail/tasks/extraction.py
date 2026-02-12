@@ -32,7 +32,7 @@ from papertrail.enums import (
 from papertrail.interactive import confirm_classification, set_interactive
 from papertrail.pdf import render_pdf_to_images, find_pdf_files, find_document_files, get_page_count
 from papertrail.metadata import build_hash_index, save_metadata_json, load_json_data, iter_json_files
-from papertrail.hashing import hash_file_fast, hash_file_content
+from papertrail.hashing import hash_file_fast, hash_file_content, hash_file_text
 
 def enum_value(v):
     """Extract value from enum or return as-is."""
@@ -390,9 +390,10 @@ def _task_extract_new_locked(processed_path: Path, raw_paths: list[Path], quiet:
         run_start = _time.monotonic()
 
         logger.debug("Building hash index from metadata files...")
-        known_content_hashes_idx, known_file_hashes_idx, known_issuers_before = build_hash_index(processed_path)
+        known_content_hashes_idx, known_file_hashes_idx, known_text_hashes_idx, known_issuers_before = build_hash_index(processed_path)
         known_content_hashes = set(known_content_hashes_idx.keys())
         known_file_hashes = set(known_file_hashes_idx.keys())
+        known_text_hashes = set(known_text_hashes_idx.keys())
         hashes_before = set(known_content_hashes)
 
         # Discover all document files (PDF + XLSX)
@@ -424,10 +425,10 @@ def _task_extract_new_locked(processed_path: Path, raw_paths: list[Path], quiet:
         potentially_new = [pdf for pdf in pdf_paths if fast_hash_map[pdf] not in known_file_hashes]
 
         already_processed = len(pdf_paths) - len(potentially_new)
-        logger.debug(f"Skipped {already_processed} already-processed files")
-        logger.debug(f"{len(potentially_new)} files need content-based hashing")
+        logger.debug(f"Stage 1: Skipped {already_processed} already-processed files (file hash match)")
+        logger.debug(f"{len(potentially_new)} files need further dedup checks")
 
-        pdf_duplicates = len(pdf_paths) - len(potentially_new)
+        file_hash_duplicates = len(pdf_paths) - len(potentially_new)
 
         if not potentially_new:
             if not quiet:
@@ -437,7 +438,7 @@ def _task_extract_new_locked(processed_path: Path, raw_paths: list[Path], quiet:
                 "pdf_scanned": len(pdf_paths),
                 "xlsx_scanned": len(xlsx_paths),
                 "new": xlsx_processed,
-                "duplicates": pdf_duplicates + xlsx_skipped,
+                "duplicates": file_hash_duplicates + xlsx_skipped,
                 "failed": 0,
                 "xlsx_new": xlsx_processed,
                 "pdf_new": 0,
@@ -446,19 +447,33 @@ def _task_extract_new_locked(processed_path: Path, raw_paths: list[Path], quiet:
                 "unknown_issuing_party": 0,
             }
 
-        logger.debug(f"Stage 2: Content-based hashing for {len(potentially_new)} new files...")
+        # Stage 2: Text-based hashing (fast, catches compression duplicates)
+        logger.debug(f"Stage 2: Text-based hashing for {len(potentially_new)} files...")
+        text_hash_map = {}
+        for pdf in console.track(potentially_new, "Text hashing"):
+            th = hash_file_text(pdf)
+            if th is not None:
+                text_hash_map[pdf] = th
+
+        after_text = [pdf for pdf in potentially_new
+                      if pdf not in text_hash_map or text_hash_map[pdf] not in known_text_hashes]
+        text_duplicates = len(potentially_new) - len(after_text)
+        if text_duplicates > 0:
+            logger.debug(f"Stage 2: Skipped {text_duplicates} text-hash duplicates")
+
+        logger.debug(f"Stage 3: Content-based hashing for {len(after_text)} files...")
         content_hash_map = {}
 
-        # Stage 2: Content hashing with Rich progress
-        for pdf in console.track(potentially_new, "Content hashing"):
+        # Stage 3: Content hashing with Rich progress
+        for pdf in console.track(after_text, "Content hashing"):
             try:
                 content_hash = hash_file_content(pdf)
                 content_hash_map[pdf] = content_hash
             except Exception as e:
                 logger.error(f"Error hashing {pdf.name}: {e}")
 
-        files_to_process = [pdf for pdf in potentially_new if content_hash_map.get(pdf) not in known_content_hashes]
-        content_duplicates = len(potentially_new) - len(files_to_process)
+        files_to_process = [pdf for pdf in after_text if content_hash_map.get(pdf) not in known_content_hashes]
+        content_duplicates = len(after_text) - len(files_to_process)
         logger.debug(f"Found {len(files_to_process)} truly new PDFs to process.")
 
         success_count = len(known_content_hashes)
@@ -505,7 +520,7 @@ def _task_extract_new_locked(processed_path: Path, raw_paths: list[Path], quiet:
             "pdf_scanned": len(pdf_paths),
             "xlsx_scanned": len(xlsx_paths),
             "new": new_processed + xlsx_processed,
-            "duplicates": pdf_duplicates + content_duplicates + xlsx_skipped,
+            "duplicates": file_hash_duplicates + text_duplicates + content_duplicates + xlsx_skipped,
             "failed": failed,
             "xlsx_new": xlsx_processed,
             "pdf_new": new_processed,
@@ -623,6 +638,7 @@ def task_sync(processed_path: Path, dry_run: bool = False,
 
                 new_metadata = classify_pdf_document(pdf_path, content_hash, doc_logger=thread_doc_logger)
                 new_metadata.hash_file = file_hash
+                new_metadata.hash_text = hash_file_text(pdf_path)
                 new_metadata.date_created = create_date
                 new_metadata.date_updated = datetime.now().strftime("%Y-%m-%d")
                 return (metadata_path, old_data, new_metadata, None)

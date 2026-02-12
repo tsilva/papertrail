@@ -44,12 +44,13 @@ Raw: "Unknown Corp" → LLM → "unknown-corp" (new) → user picks [s]kip → "
 
 The LLM receives all known document types and issuing parties (scanned from processed JSON files). No fixed canonical list — processed files are the sole source of truth. Session-confirmed values are remembered within a run to avoid repeated prompts.
 
-### Two-Tier Hashing
-- **Fast hash** (`hash_file_fast`): SHA256 of raw bytes, 8 chars - for quick duplicate filtering
-- **Content hash** (`hash_file_content`): Renders all pages at 150 DPI, hashes pixel data - detects true duplicates even if PDF metadata differs
+### Three-Tier Hashing
+- **Fast hash** (`hash_file_fast`): SHA256 of raw bytes, 8 chars - for quick duplicate filtering (Stage 1)
+- **Text hash** (`hash_file_text`): Extracts text from all PDF pages, aggressively normalizes (lowercase, ASCII-only, no whitespace), SHA256 8 chars - catches compression duplicates where bytes and pixels differ but text is identical (~10-50ms per file). Returns `None` for scanned/image-only PDFs (Stage 2)
+- **Content hash** (`hash_file_content`): Renders all pages at 150 DPI, hashes pixel data - detects true duplicates even if PDF metadata differs (~1-2s per file). Fallback for PDFs without extractable text (Stage 3)
 
 ### Hash Caching (`HashCache`)
-Content hashing is expensive (~1-2s per file). The `HashCache` class caches hash_file → hash_content mappings in `.cache/hash_cache.yaml`:
+Content hashing is expensive (~1-2s per file). The `HashCache` class caches hash_file → hash_content and hash_file → hash_text mappings in `.cache/hash_cache.yaml`:
 
 1. Compute fast file hash (cheap, ~0.05s)
 2. Check cache for existing mapping
@@ -172,10 +173,11 @@ Document types and issuing parties are loaded dynamically from existing metadata
 | `papertrail/models.py` | Pydantic models | `DocumentMetadataRaw`, `DocumentMetadata` |
 | `papertrail/llm.py` | LLM classification | `normalize_metadata` with LLM normalization |
 | `papertrail/logging_utils.py` | Logging infrastructure | `setup_task_logging`, `DocumentLogger`, `setup_logging` |
-| `papertrail/hashing.py` | File hashing | `HashCache`, `hash_file_fast`, `hash_file_content` |
+| `papertrail/hashing.py` | File hashing | `HashCache`, `hash_file_fast`, `hash_file_text`, `hash_file_content` |
 | `papertrail/interactive.py` | Interactive classification prompts | `confirm_classification`, `set_interactive` |
 | `papertrail/nif_lookup.py` | NIF → issuer lookup | `NIFLookupCache` class |
 | `scripts/check_hash.py` | Verify hashes | CLI: `check-hash` |
+| `scripts/deduplicate.py` | Text-hash deduplication | `plan` + `execute` two-phase workflow |
 | `papertrail/gmail.py` | Gmail API client | `GmailDownloader`, `download_gmail_attachments` |
 | `papertrail/mbox.py` | Mbox extraction | `extract_mbox_attachments` |
 | `papertrail/qr/` | QR code extraction | `extract_metadata_from_qr`, `parse_portuguese_invoice_qr` |
@@ -191,7 +193,7 @@ DocumentMetadataInput  # With enum validation
 DocumentMetadata       # Full: hashes, timestamps, raw values
 ```
 
-Fields: `bank_statement`, `class_confidence`, `class_reasoning`, `date_created`, `date_issued`, `date_updated`, `document_type`, `document_type_raw`, `document_title`, `file_size_kb`, `hash_content`, `hash_file`, `issuer_tax_number`, `issuing_party`, `issuing_party_raw`, `locale`, `page_count`, `qrcode`, `source_extension`, `total_amount`, `total_amount_currency`
+Fields: `bank_statement`, `class_confidence`, `class_reasoning`, `date_created`, `date_issued`, `date_updated`, `document_type`, `document_type_raw`, `document_title`, `file_size_kb`, `hash_content`, `hash_file`, `hash_text`, `issuer_tax_number`, `issuing_party`, `issuing_party_raw`, `locale`, `page_count`, `qrcode`, `source_extension`, `total_amount`, `total_amount_currency`
 
 The `document_title` field stores the specific subject, product, service, or transaction described in the document (e.g., "YouTube Premium", "Claude API"). It is null when no specific subject beyond the document type is identifiable. The `document_type` / `document_type_raw` fields contain only the cleaned core type label (e.g., "Fatura").
 
@@ -224,6 +226,8 @@ Non-bank-statement documents have `"bank_statement": null`.
 
 The `source_extension` field stores the original file extension when it's not `.pdf` (e.g., `".xlsx"` for bank statements). When `null`, defaults to `.pdf`. Used by `file_name_from_metadata()` and `find_companion_file()` to resolve the correct document file.
 
+The `hash_text` field stores the text-based hash of a PDF document (first 8 hex chars of SHA256 of normalized text). `null` for scanned/image-only PDFs and XLSX files. Used as an intermediate dedup tier between `hash_file` (byte-level) and `hash_content` (pixel-level) to catch compression duplicates cheaply. Backfill: `python main.py backfill_text_hash <processed_path>`.
+
 The `file_size_kb` field stores the companion document file size in kilobytes (rounded integer). Set during extraction for both PDFs and XLSX files. When `null`, the file size hasn't been backfilled yet. Migration: `scripts/migrate_add_file_size.py <dir> [--dry-run]`.
 
 ## File Naming Convention
@@ -248,6 +252,7 @@ Generated by `file_name_from_metadata()` (line 447). All components lowercase, s
 | `gmail_download` | Download email attachments from Gmail | None (uses profile) |
 | `backfill_page_count` | Add page_count to existing metadata | - |
 | `backfill_file_size` | Add file_size_kb to existing metadata | - |
+| `backfill_text_hash` | Add hash_text to existing metadata | - |
 | `fix_unicode` | Fix escaped Unicode in metadata JSON files | - |
 | `sync` | Sync metadata (default: orphans only) | `--all`, `--pattern`, `--all_unknown`, `--dry_run` |
 | `validate_extraction` | Validate extraction quality, flag issues | `--pattern` (optional) |
@@ -353,6 +358,7 @@ Task runs create timestamped log files in `{processed_path}/logs/`:
 **Verify duplicate detection**: `check-hash <pdf>` shows both fast and content hashes
 **Add new QR format**: Add detection function and parser in `papertrail/qr/extractor.py`, add model in `papertrail/qr/models.py`
 **Add new bank format**: Create parser module in `papertrail/bank_statement/`, implement `can_parse(ws)` and `parse(xlsx_path)`, add to `_PARSERS` in `extractor.py`
+**Deduplicate files**: `python scripts/deduplicate.py plan <dir>` to generate plan, review `_dupes_plan.json`, then `python scripts/deduplicate.py execute <dir>` to move dupes to `_dupes/` subfolder. Use `--dry-run` on execute to preview.
 
 ## Testing
 
