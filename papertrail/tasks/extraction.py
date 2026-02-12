@@ -30,7 +30,7 @@ from papertrail.enums import (
     add_session_party,
 )
 from papertrail.interactive import confirm_classification, set_interactive
-from papertrail.pdf import render_pdf_to_images, find_pdf_files, find_document_files, get_page_count
+from papertrail.pdf import render_pdf_to_images, find_pdf_files, find_document_files, get_page_count, is_image_file
 from papertrail.metadata import build_hash_index, save_metadata_json, load_json_data, iter_json_files
 from papertrail.hashing import hash_file_fast, hash_file_content, hash_file_text
 
@@ -396,12 +396,26 @@ def _task_extract_new_locked(processed_path: Path, raw_paths: list[Path], quiet:
         known_text_hashes = set(known_text_hashes_idx.keys())
         hashes_before = set(known_content_hashes)
 
-        # Discover all document files (PDF + XLSX)
+        # Discover all document files (PDF + XLSX + images)
         all_doc_paths = find_document_files(raw_paths)
         pdf_paths = [p for p in all_doc_paths if p.suffix.lower() == '.pdf']
         xlsx_paths = [p for p in all_doc_paths if p.suffix.lower() == '.xlsx']
+        image_paths = [p for p in all_doc_paths if is_image_file(p)]
 
-        logger.debug(f"Found {len(pdf_paths)} PDFs and {len(xlsx_paths)} XLSX files in raw directories")
+        logger.debug(f"Found {len(pdf_paths)} PDFs, {len(xlsx_paths)} XLSX, and {len(image_paths)} images in raw directories")
+
+        # Convert images to PDFs in a temp directory
+        temp_dir = None
+        images_converted = 0
+        if image_paths:
+            import tempfile
+            from papertrail.image_convert import convert_images_to_pdfs
+            temp_dir = tempfile.TemporaryDirectory()
+            converted_pdfs = convert_images_to_pdfs(image_paths, Path(temp_dir.name), console)
+            images_converted = len(converted_pdfs)
+            pdf_paths.extend(converted_pdfs)
+            if images_converted > 0:
+                logger.debug(f"Converted {images_converted} images to PDF")
 
         # Process XLSX files first (deterministic, fast)
         xlsx_processed = 0
@@ -434,6 +448,8 @@ def _task_extract_new_locked(processed_path: Path, raw_paths: list[Path], quiet:
             if not quiet:
                 console.success(f"{len(pdf_paths)} PDFs scanned, 0 new to process", indent=False)
             logger.debug("No new PDFs to process.")
+            if temp_dir is not None:
+                temp_dir.cleanup()
             return {
                 "pdf_scanned": len(pdf_paths),
                 "xlsx_scanned": len(xlsx_paths),
@@ -442,6 +458,7 @@ def _task_extract_new_locked(processed_path: Path, raw_paths: list[Path], quiet:
                 "failed": 0,
                 "xlsx_new": xlsx_processed,
                 "pdf_new": 0,
+                "images_converted": images_converted,
                 "new_issuers": [],
                 "unknown_document_type": 0,
                 "unknown_issuing_party": 0,
@@ -516,6 +533,9 @@ def _task_extract_new_locked(processed_path: Path, raw_paths: list[Path], quiet:
 
         logger.debug(f"=== SUMMARY: {len(files_to_process)} attempted, {new_processed} success, {failed} failed, {elapsed:.1f}s total ===")
 
+        if temp_dir is not None:
+            temp_dir.cleanup()
+
         return {
             "pdf_scanned": len(pdf_paths),
             "xlsx_scanned": len(xlsx_paths),
@@ -524,6 +544,7 @@ def _task_extract_new_locked(processed_path: Path, raw_paths: list[Path], quiet:
             "failed": failed,
             "xlsx_new": xlsx_processed,
             "pdf_new": new_processed,
+            "images_converted": images_converted,
             "new_issuers": sorted(new_issuers),
             "unknown_document_type": unknown_dt_count,
             "unknown_issuing_party": unknown_ip_count,
