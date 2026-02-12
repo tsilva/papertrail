@@ -186,7 +186,10 @@ def pipeline(export_date_arg=None, processed_path_override=None):
 
         # Update summary
         if extract_stats["new"] > 0 or extract_stats["duplicates"] > 0:
-            summary["Classified"] = f"{extract_stats['new']} new, {extract_stats['duplicates']} duplicates"
+            classified_parts = [f"{extract_stats['new']} new", f"{extract_stats['duplicates']} duplicates"]
+            if extract_stats.get("batch_duplicates", 0) > 0:
+                classified_parts.append(f"{extract_stats['batch_duplicates']} batch dupes")
+            summary["Classified"] = ", ".join(classified_parts)
 
     # ── Stage 3: Sync orphans ──
 
@@ -266,8 +269,12 @@ def pipeline(export_date_arg=None, processed_path_override=None):
                     quiet=True,
                 )
                 copied = copy_stats.get('copied', 0)
+                deduped = copy_stats.get('deduped', 0)
                 if copied:
-                    step.success(f"{copied} files")
+                    msg = f"{copied} files"
+                    if deduped > 0:
+                        msg += f" ({deduped} content dupes skipped)"
+                    step.success(msg)
                 else:
                     step.success("0 files")
             except Exception as e:

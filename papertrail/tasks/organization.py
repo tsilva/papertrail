@@ -237,7 +237,8 @@ def copy_matching_files(
     dest_folder.mkdir(parents=True, exist_ok=True)
     # Use search mode for partial matching
     matcher = make_matcher(pattern, use_search=True)
-    stats = {'copied': 0, 'skipped': 0, 'total': 0}
+    stats = {'copied': 0, 'skipped': 0, 'deduped': 0, 'total': 0}
+    seen_content_hashes = set()
 
     file_mappings = export_config.file_mappings if export_config is not None else None
     max_file_size_mb = export_config.max_file_size_mb if export_config is not None else None
@@ -261,6 +262,15 @@ def copy_matching_files(
             metadata = {}
             if json_file.exists():
                 metadata = load_json_data(json_file)
+
+            # Export-time dedup: skip content-duplicate files
+            ch = metadata.get("hash_content")
+            if ch and ch in seen_content_hashes:
+                stats['deduped'] += 1
+                logger.debug(f"[EXPORT-DEDUP] Skipping {pdf_file.name} (content hash {ch} already exported)")
+                continue
+            if ch:
+                seen_content_hashes.add(ch)
 
             prefix = _evaluate_export_prefix(metadata, file_mappings, profile_context)
 
@@ -302,9 +312,27 @@ def copy_matching_files(
                 continue
             matching_files.append(file)
 
+        deduped_stems = set()
         for file in console.track(matching_files, "Copying files"):
             stats['total'] += 1
             dest_file = dest_folder / file.name
+
+            # Export-time dedup for document files (not JSON)
+            if file.suffix.lower() in (".pdf", ".xlsx"):
+                json_sidecar = file.with_suffix(".json")
+                if json_sidecar.exists():
+                    sidecar_data = load_json_data(json_sidecar)
+                    ch = sidecar_data.get("hash_content")
+                    if ch and ch in seen_content_hashes:
+                        stats['deduped'] += 1
+                        deduped_stems.add(file.stem)
+                        logger.debug(f"[EXPORT-DEDUP] Skipping {file.name} (content hash {ch} already exported)")
+                        continue
+                    if ch:
+                        seen_content_hashes.add(ch)
+            elif file.suffix.lower() == ".json" and file.stem in deduped_stems:
+                stats['total'] -= 1  # Don't count companion JSON of deduped doc
+                continue
 
             if incremental and _should_skip_copy(file, dest_file):
                 stats['skipped'] += 1

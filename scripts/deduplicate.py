@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Deduplicate files by text hash — plan then execute.
+"""Deduplicate files by content/text hash — plan then execute.
 
 Usage:
     python scripts/deduplicate.py plan <directory>
@@ -8,7 +8,7 @@ Usage:
 Plan phase:
   - Scans all JSON sidecars in <directory>
   - For PDFs without hash_text, computes it on-the-fly (does NOT write back)
-  - Groups files by hash_text, identifies duplicates
+  - Groups files by hash_content (primary) or hash_text (fallback)
   - Keeps the smallest file per group (most compressed)
   - Writes _dupes_plan.json to <directory>
 
@@ -81,13 +81,15 @@ def scan_directory(directory: Path) -> dict:
 
     Returns a plan dict with groups, summary, and scan_stats.
     Each group has a `decision` field (initially None).
+    Groups use hash_content (primary) or hash_text (fallback).
     """
+    from papertrail.dedup import group_duplicates
+
     json_files = sorted(directory.rglob("*.json"))
 
-    # Group by text hash
-    text_groups: dict[str, list[dict]] = {}
+    file_records: list[dict] = []
     scanned = 0
-    skipped = 0
+    skipped_no_hash = 0
 
     for json_path in json_files:
         # Skip logs, internal files, sidecars, and _dupes* folders
@@ -107,47 +109,48 @@ def scan_directory(directory: Path) -> dict:
             continue
 
         scanned += 1
+
+        content_hash = data.get("hash_content")
         text_hash = _get_text_hash(json_path, data)
-        if text_hash is None:
-            skipped += 1
+
+        if not content_hash and not text_hash:
+            skipped_no_hash += 1
             continue
 
-        entry = {
+        file_records.append({
             "json": json_path.name,
             "json_path": str(json_path),
             "size_kb": _get_file_size(json_path, data),
-            "hash_content": data.get("hash_content"),
+            "hash_content": content_hash,
             "hash_text": text_hash,
-        }
-        text_groups.setdefault(text_hash, []).append(entry)
+        })
 
-    # Filter to groups with duplicates
+    # Use shared three-tier grouping
+    raw_groups = group_duplicates(file_records)
+
     dupe_groups = []
     total_files_to_move = 0
     space_savings_kb = 0
 
-    for text_hash, entries in sorted(text_groups.items()):
-        if len(entries) < 2:
-            continue
-
-        # Sort by file size ascending — keep the smallest
-        entries.sort(key=lambda e: e["size_kb"] or 0)
+    for g in raw_groups:
+        entries = g["entries"]
         keep = entries[0]
         move = entries[1:]
 
         group = {
-            "hash_text": text_hash,
+            "group_hash": g["group_hash"],
+            "group_hash_type": g["group_hash_type"],
             "decision": None,
             "keep": {
                 "json": keep["json"],
                 "size_kb": keep["size_kb"],
-                "hash_content": keep["hash_content"],
+                "hash_content": keep.get("hash_content"),
             },
             "move": [
                 {
                     "json": m["json"],
                     "size_kb": m["size_kb"],
-                    "hash_content": m["hash_content"],
+                    "hash_content": m.get("hash_content"),
                 }
                 for m in move
             ],
@@ -161,7 +164,7 @@ def scan_directory(directory: Path) -> dict:
         "directory": str(directory),
         "scan_stats": {
             "scanned": scanned,
-            "skipped_no_text_hash": skipped,
+            "skipped_no_hash": skipped_no_hash,
         },
         "summary": {
             "total_groups": len(dupe_groups),
@@ -188,13 +191,13 @@ def plan(directory: Path):
     groups = plan_data["groups"]
     summary = plan_data["summary"]
 
-    print(f"\nScanned {stats['scanned']} files ({stats['skipped_no_text_hash']} without text hash)")
+    print(f"\nScanned {stats['scanned']} files ({stats['skipped_no_hash']} without any hash)")
     print(f"Found {len(groups)} duplicate groups:")
     print()
 
     for group in groups:
         keep = group["keep"]
-        print(f"  hash_text={group['hash_text']}:")
+        print(f"  {group['group_hash_type']}={group['group_hash']}:")
         print(f"    KEEP: {keep['json']} ({keep['size_kb']} KB)")
         for m in group["move"]:
             print(f"    MOVE: {m['json']} ({m['size_kb']} KB)")
@@ -246,12 +249,13 @@ def execute(directory: Path, dry_run: bool = False, dupes_dir: Path | None = Non
     for group_idx, group in enumerate(groups):
         if has_decisions:
             decision = group.get("decision")
+            group_label = f"{group.get('group_hash_type', 'hash_text')}={group.get('group_hash', group.get('hash_text', '?'))}"
             if decision == "rejected":
-                print(f"  [SKIP-REJECTED] hash_text={group['hash_text']}")
+                print(f"  [SKIP-REJECTED] {group_label}")
                 skipped_count += 1
                 continue
             elif decision != "approved":
-                print(f"  [SKIP-PENDING] hash_text={group['hash_text']}")
+                print(f"  [SKIP-PENDING] {group_label}")
                 skipped_count += 1
                 continue
 

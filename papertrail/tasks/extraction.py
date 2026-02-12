@@ -33,6 +33,7 @@ from papertrail.interactive import confirm_classification, set_interactive
 from papertrail.pdf import render_pdf_to_images, find_pdf_files, find_document_files, get_page_count, is_image_file
 from papertrail.metadata import build_hash_index, save_metadata_json, load_json_data, iter_json_files
 from papertrail.hashing import hash_file_fast, hash_file_content, hash_file_text
+from papertrail.dedup import dedup_batch
 
 def enum_value(v):
     """Extract value from enum or return as-is."""
@@ -438,11 +439,18 @@ def _task_extract_new_locked(processed_path: Path, raw_paths: list[Path], quiet:
 
         potentially_new = [pdf for pdf in pdf_paths if fast_hash_map[pdf] not in known_file_hashes]
 
-        already_processed = len(pdf_paths) - len(potentially_new)
+        # Intra-batch dedup by file hash
+        potentially_new, batch_dedup_stage1 = dedup_batch(
+            potentially_new, hash_fn=lambda pdf: fast_hash_map[pdf], label="Stage 1",
+        )
+
+        already_processed = len(pdf_paths) - len(potentially_new) - batch_dedup_stage1
         logger.debug(f"Stage 1: Skipped {already_processed} already-processed files (file hash match)")
+        if batch_dedup_stage1 > 0:
+            logger.debug(f"Stage 1: Skipped {batch_dedup_stage1} intra-batch duplicates (file hash)")
         logger.debug(f"{len(potentially_new)} files need further dedup checks")
 
-        file_hash_duplicates = len(pdf_paths) - len(potentially_new)
+        file_hash_duplicates = len(pdf_paths) - len(potentially_new) - batch_dedup_stage1
 
         if not potentially_new:
             if not quiet:
@@ -455,6 +463,7 @@ def _task_extract_new_locked(processed_path: Path, raw_paths: list[Path], quiet:
                 "xlsx_scanned": len(xlsx_paths),
                 "new": xlsx_processed,
                 "duplicates": file_hash_duplicates + xlsx_skipped,
+                "batch_duplicates": 0,
                 "failed": 0,
                 "xlsx_new": xlsx_processed,
                 "pdf_new": 0,
@@ -478,6 +487,13 @@ def _task_extract_new_locked(processed_path: Path, raw_paths: list[Path], quiet:
         if text_duplicates > 0:
             logger.debug(f"Stage 2: Skipped {text_duplicates} text-hash duplicates")
 
+        # Intra-batch dedup by text hash
+        after_text, batch_dedup_stage2 = dedup_batch(
+            after_text, hash_fn=lambda pdf: text_hash_map.get(pdf), label="Stage 2",
+        )
+        if batch_dedup_stage2 > 0:
+            logger.debug(f"Stage 2: Skipped {batch_dedup_stage2} intra-batch duplicates (text hash)")
+
         logger.debug(f"Stage 3: Content-based hashing for {len(after_text)} files...")
         content_hash_map = {}
 
@@ -491,6 +507,15 @@ def _task_extract_new_locked(processed_path: Path, raw_paths: list[Path], quiet:
 
         files_to_process = [pdf for pdf in after_text if content_hash_map.get(pdf) not in known_content_hashes]
         content_duplicates = len(after_text) - len(files_to_process)
+
+        # Intra-batch dedup by content hash
+        files_to_process, batch_dedup_stage3 = dedup_batch(
+            files_to_process, hash_fn=lambda pdf: content_hash_map.get(pdf), label="Stage 3",
+        )
+        if batch_dedup_stage3 > 0:
+            logger.debug(f"Stage 3: Skipped {batch_dedup_stage3} intra-batch duplicates (content hash)")
+
+        batch_duplicates = batch_dedup_stage1 + batch_dedup_stage2 + batch_dedup_stage3
         logger.debug(f"Found {len(files_to_process)} truly new PDFs to process.")
 
         success_count = len(known_content_hashes)
@@ -540,7 +565,8 @@ def _task_extract_new_locked(processed_path: Path, raw_paths: list[Path], quiet:
             "pdf_scanned": len(pdf_paths),
             "xlsx_scanned": len(xlsx_paths),
             "new": new_processed + xlsx_processed,
-            "duplicates": file_hash_duplicates + text_duplicates + content_duplicates + xlsx_skipped,
+            "duplicates": file_hash_duplicates + text_duplicates + content_duplicates + xlsx_skipped + batch_duplicates,
+            "batch_duplicates": batch_duplicates,
             "failed": failed,
             "xlsx_new": xlsx_processed,
             "pdf_new": new_processed,

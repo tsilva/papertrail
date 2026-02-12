@@ -192,10 +192,12 @@ def _render_group(index):
     for entry in group.get("move", []):
         cards.append(_render_file_card(entry, "DUPE", directory))
 
+    hash_type = group.get("group_hash_type", "hash_text")
+    hash_val = group.get("group_hash", group.get("hash_text", "?"))
     header = (
         f'<div style="margin-bottom:8px;font-size:13px;'
         f'color:var(--body-text-color-subdued,#aaa);">'
-        f'Text hash: <code>{html_lib.escape(group.get("hash_text", "?"))}</code> '
+        f'{html_lib.escape(hash_type)}: <code>{html_lib.escape(hash_val)}</code> '
         f'&middot; {1 + len(group.get("move", []))} files in group</div>'
     )
 
@@ -215,10 +217,10 @@ def _status_text():
 
     stats = _CACHE["plan"].get("scan_stats", {})
     scanned = stats.get("scanned", "?")
-    skipped = stats.get("skipped_no_text_hash", "?")
+    skipped = stats.get("skipped_no_hash", stats.get("skipped_no_text_hash", "?"))
 
     return (
-        f"Scanned {scanned} files ({skipped} without text hash) &mdash; "
+        f"Scanned {scanned} files ({skipped} without any hash) &mdash; "
         f"**{total}** groups &mdash; "
         f'<span class="status-approved">{approved} approved</span>, '
         f'<span class="status-rejected">{rejected} rejected</span>, '
@@ -303,7 +305,7 @@ def on_scan(directory_path):
             gr.update(visible=False),
         )
 
-    # Preserve old decisions by hash_text
+    # Preserve old decisions keyed by group_hash (with hash_text fallback for old plans)
     old_decisions = {}
     old_plan_path = directory / PLAN_FILENAME
     if old_plan_path.exists():
@@ -312,7 +314,9 @@ def on_scan(directory_path):
                 old_plan = json.load(f)
             for group in old_plan.get("groups", []):
                 if group.get("decision"):
-                    old_decisions[group["hash_text"]] = group["decision"]
+                    key = group.get("group_hash", group.get("hash_text"))
+                    if key:
+                        old_decisions[key] = group["decision"]
         except Exception:
             pass
 
@@ -321,7 +325,7 @@ def on_scan(directory_path):
 
     # Restore old decisions
     for group in plan_data["groups"]:
-        group["decision"] = old_decisions.get(group["hash_text"])
+        group["decision"] = old_decisions.get(group["group_hash"])
 
     _CACHE["plan"] = plan_data
     _CACHE["directory"] = str(directory)
