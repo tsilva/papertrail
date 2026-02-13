@@ -69,6 +69,7 @@ _CSS = """
 .bank-section {
     border: 1px solid var(--border-color-primary, #444);
     border-radius: 8px; overflow: hidden;
+    margin-bottom: 16px;
 }
 .bank-info {
     padding: 6px 16px; font-size: 13px;
@@ -101,7 +102,8 @@ _CSS = """
     width: 1px !important; height: 1px !important;
 }
 #preview_panel { display: none !important; }
-#preview_panel.expanded { display: flex !important; }
+#preview_panel.expanded { display: flex !important; align-self: flex-start !important; }
+#preview_panel > div { position: sticky; top: 20px; max-height: calc(100vh - 40px); overflow-y: auto; }
 #toggle_preview_btn {
     max-width: 160px !important;
     margin-left: auto !important;
@@ -259,7 +261,7 @@ def render_xlsx_as_html(xlsx_path, max_rows=100):
         wb = openpyxl.load_workbook(str(xlsx_path), data_only=True)
         ws = wb.active
         lines = [
-            '<div style="max-height:600px;overflow:auto;">',
+            '<div>',
             '<table style="border-collapse:collapse;font-size:13px;width:100%;">',
         ]
         n = 0
@@ -341,6 +343,13 @@ def render_single_bank_html(bs):
 
     parts.append("</div>")
     return "\n".join(parts)
+
+
+def render_all_banks_html(bs_list):
+    """Render all bank statements as concatenated HTML sections."""
+    if not bs_list:
+        return '<p class="placeholder">No bank statements found in this folder.</p>'
+    return "\n".join(render_single_bank_html(bs) for bs in bs_list)
 
 
 def _render_txn_table(recon):
@@ -509,11 +518,6 @@ def build_ui():
 
         with gr.Row(equal_height=False):
             with gr.Column(scale=1, min_width=400):
-                bank_stmt_dd = gr.Dropdown(
-                    label="Bank Statement",
-                    choices=[],
-                    interactive=True,
-                )
                 bank_html = gr.HTML(
                     '<p class="placeholder">Load a folder to view bank statements.</p>'
                 )
@@ -542,7 +546,6 @@ def build_ui():
                 "Select an export folder.",
                 '<p class="placeholder">No data loaded.</p>',
                 gr.update(choices=[], value=None),
-                gr.update(choices=[], value=None),
             )
             if not folder_name or not base_dir:
                 _CACHE["data"] = {}
@@ -551,47 +554,22 @@ def build_ui():
             data, status = load_export_folder(folder_path)
             if not data:
                 _CACHE["data"] = {}
-                return (status, empty[1], empty[2], empty[3])
+                return (status, empty[1], empty[2])
 
             _CACHE["data"] = data
 
-            # Build bank statement dropdown choices keyed by filename
             bs_list = data.get("bank_statements", [])
-            bs_choices = [
-                Path(b["doc_path"]).name if b.get("doc_path") else f"Statement {i}"
-                for i, b in enumerate(bs_list)
-            ]
-            first_bs = bs_choices[0] if bs_choices else None
-            bank_content = render_single_bank_html(bs_list[0]) if bs_list else (
-                '<p class="placeholder">No bank statements found in this folder.</p>'
-            )
+            bank_content = render_all_banks_html(bs_list)
 
             bank_file_choices = data.get("bank_files", [])
             return (
                 status, bank_content,
-                gr.update(choices=bs_choices, value=first_bs),
                 gr.update(choices=bank_file_choices, value=bank_file_choices[0] if bank_file_choices else None),
             )
 
         folder_dd.change(
             on_load, [folder_dd, export_base_state],
-            [status_bar, bank_html, bank_stmt_dd, bank_file_dd],
-        )
-
-        # ── Bank: statement dropdown ─────────────────────────────
-
-        def on_bank_stmt_select(stmt_name):
-            data = _CACHE["data"]
-            if not stmt_name or not data:
-                return '<p class="placeholder">Select a bank statement.</p>'
-            for bs in data.get("bank_statements", []):
-                name = Path(bs["doc_path"]).name if bs.get("doc_path") else ""
-                if name == stmt_name:
-                    return render_single_bank_html(bs)
-            return '<p class="placeholder">Bank statement not found.</p>'
-
-        bank_stmt_dd.change(
-            on_bank_stmt_select, [bank_stmt_dd], [bank_html],
+            [status_bar, bank_html, bank_file_dd],
         )
 
         # ── Bank: file selection via Dropdown ────────────────────
@@ -646,7 +624,7 @@ def build_ui():
         if default_folder:
             app.load(
                 on_load, [folder_dd, export_base_state],
-                [status_bar, bank_html, bank_stmt_dd, bank_file_dd],
+                [status_bar, bank_html, bank_file_dd],
             )
 
     return app
