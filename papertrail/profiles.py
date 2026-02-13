@@ -97,19 +97,18 @@ class NifApiConfig:
 
 
 @dataclass
+class ReconciliationRule:
+    """A single reconciliation validation rule."""
+    name: str
+    match_description: List[str] = field(default_factory=list)
+    direction: Optional[str] = None  # "credit" or "debit"
+    required_types: Dict[str, Any] = field(default_factory=dict)  # pattern → cardinality
+
+
+@dataclass
 class ReconciliationConfig:
     """Reconciliation validation configuration."""
-    bank_fee_keywords: List[str] = field(default_factory=lambda: [
-        "COMISSAO", "IMPOSTO SELO", "IMP.SELO", "JUROS",
-        "ANUIDADE", "MANUTENCAO", "DESPESAS", "PORTES",
-    ])
-    vendor_document_types: List[str] = field(default_factory=lambda: [
-        "invoice", "invoice-credit", "invoice-debit", "invoice-receipt",
-        "invoice-order", "receipt", "receipt-reference", "receipt-delivery",
-    ])
-    credit_document_types: List[str] = field(default_factory=lambda: [
-        "bank-note", "invoice-credit",
-    ])
+    rules: List[ReconciliationRule] = field(default_factory=list)
 
 
 @dataclass
@@ -247,6 +246,55 @@ def load_profile(name: str) -> Profile:
     return profile
 
 
+def _default_reconciliation_rules() -> List[ReconciliationRule]:
+    """Return default rules equivalent to the old hardcoded behavior."""
+    return [
+        ReconciliationRule(
+            name="bank-fee",
+            match_description=[
+                "COMISSAO", "IMPOSTO SELO", "IMP.SELO", "JUROS",
+                "ANUIDADE", "MANUTENCAO", "DESPESAS", "PORTES",
+            ],
+            required_types={"bank-note": 1},
+        ),
+        ReconciliationRule(
+            name="default-credit",
+            direction="credit",
+            required_types={
+                "bank-note|invoice-credit": 1,
+            },
+        ),
+        ReconciliationRule(
+            name="default-debit",
+            direction="debit",
+            required_types={
+                "bank-note": 1,
+                "invoice|receipt|invoice-receipt|invoice-credit|invoice-debit|invoice-order|receipt-reference|receipt-delivery": [1, None],
+            },
+        ),
+    ]
+
+
+def _parse_reconciliation_config(recon_data: Dict[str, Any]) -> ReconciliationConfig:
+    """Parse reconciliation config from YAML data."""
+    rules_data = recon_data.get("rules")
+    if rules_data is None:
+        # No rules configured — use defaults
+        return ReconciliationConfig(rules=_default_reconciliation_rules())
+
+    rules = []
+    for rd in rules_data:
+        if not isinstance(rd, dict) or "name" not in rd:
+            continue
+        rules.append(ReconciliationRule(
+            name=rd["name"],
+            match_description=rd.get("match_description", []),
+            direction=rd.get("direction"),
+            required_types=rd.get("required_types", {}),
+        ))
+    return ReconciliationConfig(rules=rules)
+
+
 def _parse_profile_dict(data: Dict[str, Any], profile_path: Path) -> Profile:
     """Parse a profile dictionary into Profile dataclass."""
     if "profile" not in data:
@@ -311,12 +359,7 @@ def _parse_profile_dict(data: Dict[str, Any], profile_path: Path) -> Profile:
     )
 
     recon_data = data.get("reconciliation", {})
-    recon_defaults = ReconciliationConfig()
-    reconciliation = ReconciliationConfig(
-        bank_fee_keywords=recon_data.get("bank_fee_keywords", recon_defaults.bank_fee_keywords),
-        vendor_document_types=recon_data.get("vendor_document_types", recon_defaults.vendor_document_types),
-        credit_document_types=recon_data.get("credit_document_types", recon_defaults.credit_document_types),
-    )
+    reconciliation = _parse_reconciliation_config(recon_data)
 
     export_data = data.get("export", {})
     fm_data = export_data.get("file_mappings", {})
