@@ -16,7 +16,7 @@ from pathlib import Path
 # Old canonical → New canonical mapping
 MIGRATION_MAP = {
     "bank-credit-card-statement": "bank-card",
-    "bank-fees-statement": "bank-fees",
+    "bank-fees-statement": "bank-note",
     "bank-iban-statement": "bank-iban",
     "bank-investment-statement": "bank-investment",
     "bank-stock-purchase": "bank-stock-buy",
