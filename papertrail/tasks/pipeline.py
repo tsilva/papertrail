@@ -84,13 +84,14 @@ def pipeline(months=2, export_date_arg=None, processed_path_override=None):
                 from papertrail.dates import month_to_date_range
 
                 raw_path = Path(raw_dirs[0])
+                gmail_dir = raw_path / "gmail"
 
                 totals = {
                     "messages_found": 0, "messages_processed": 0, "messages_skipped": 0,
                     "attachments_downloaded": 0, "attachments_failed": 0, "bytes_downloaded": 0,
                 }
                 for month in export_dates:
-                    month_dir = raw_path / "gmail" / month
+                    month_dir = gmail_dir / month
                     month_dir.mkdir(parents=True, exist_ok=True)
 
                     gmail_start, gmail_end = month_to_date_range([month])
@@ -101,6 +102,7 @@ def pipeline(months=2, export_date_arg=None, processed_path_override=None):
                         start_date=gmail_start,
                         end_date=gmail_end,
                         quiet=True,
+                        tracking_dir=gmail_dir,
                     )
                     for key in totals:
                         totals[key] += month_stats[key]

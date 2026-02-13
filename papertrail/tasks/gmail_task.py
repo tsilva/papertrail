@@ -46,8 +46,10 @@ def task_gmail_download(months: int = 2):
         "attachments_downloaded": 0, "attachments_failed": 0, "bytes_downloaded": 0,
     }
 
+    gmail_dir = raw_path / "gmail"
+
     for month in export_dates:
-        month_dir = raw_path / "gmail" / month
+        month_dir = gmail_dir / month
         month_dir.mkdir(parents=True, exist_ok=True)
 
         start_date, end_date = month_to_date_range([month])
@@ -58,6 +60,7 @@ def task_gmail_download(months: int = 2):
                 output_dir=month_dir,
                 start_date=start_date,
                 end_date=end_date,
+                tracking_dir=gmail_dir,
             )
         except FileNotFoundError as e:
             console.error(f"Gmail credentials not found: {e}", indent=False)
