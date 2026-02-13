@@ -103,3 +103,57 @@ def parse(xlsx_path: Path) -> Optional[BankStatementData]:
         issuing_party="millennium-bcp",
         issuing_party_raw="Millennium BCP",
     )
+
+
+def _parse_date_cell(value) -> Optional[str]:
+    """Parse a date cell value (datetime object or string) to YYYY-MM-DD."""
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value.strftime("%Y-%m-%d")
+    return _parse_date_str(str(value))
+
+
+def load_transactions(xlsx_path: Path) -> Optional[list[dict]]:
+    """Load transactions from a Millennium BCP bank statement.
+
+    Returns list of transaction dicts, or None if not a recognized format.
+    """
+    wb = openpyxl.load_workbook(xlsx_path, data_only=True)
+    ws = wb.active
+
+    if not can_parse(ws):
+        wb.close()
+        return None
+
+    transactions = []
+    for row in ws.iter_rows(min_row=_DATA_START_ROW, max_col=7):
+        if row[2].value is None:  # description column C
+            continue
+
+        treated_val = str(row[6].value or "").strip()
+        if treated_val.lower() not in ("nao", "não", ""):
+            continue
+
+        amount_raw = row[3].value
+        if amount_raw is None:
+            continue
+
+        try:
+            amount = float(amount_raw)
+        except (ValueError, TypeError):
+            continue
+
+        transactions.append({
+            "row_number": row[0].row,
+            "date_posting": _parse_date_cell(row[0].value),
+            "date_value": _parse_date_cell(row[1].value),
+            "description": str(row[2].value or "").strip(),
+            "amount": amount,
+            "currency": str(row[4].value or "EUR").strip(),
+            "notes": str(row[5].value or "").strip(),
+            "treated": treated_val,
+        })
+
+    wb.close()
+    return transactions

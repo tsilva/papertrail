@@ -7,7 +7,7 @@ from typing import Optional
 import openpyxl
 
 from papertrail.bank_statement.models import BankFormat, BankStatementData
-from papertrail.bank_statement import millennium_bcp
+from papertrail.bank_statement import millennium_bcp, bpi
 from papertrail.hashing import hash_file_fast
 from papertrail.logging_utils import get_logger
 from papertrail.models import DocumentMetadata
@@ -15,7 +15,7 @@ from papertrail.models import DocumentMetadata
 logger = get_logger("bank_statement")
 
 # Registry of parsers: each must have can_parse(ws) and parse(xlsx_path)
-_PARSERS = [millennium_bcp]
+_PARSERS = [millennium_bcp, bpi]
 
 
 def detect_bank_format(xlsx_path: Path) -> Optional[BankFormat]:

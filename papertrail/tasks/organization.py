@@ -169,16 +169,16 @@ def _match_value(actual, pattern: str) -> bool:
                 }[op]
             except (ValueError, TypeError):
                 return False
-    actual_str = str(actual)
+    actual_str = str(actual).lower()
     if pattern.endswith("*"):
-        return actual_str.startswith(pattern[:-1])
+        return actual_str.startswith(pattern.lower()[:-1])
     # Numeric equality for numeric values (handles float repr: 0.0 vs "0")
     if isinstance(actual, (int, float)):
         try:
             return float(actual) == float(pattern)
         except (ValueError, TypeError):
             pass
-    return actual_str == pattern
+    return actual_str == pattern.lower()
 
 
 def _resolve_match_value(pattern: str, profile_context: Optional[dict]) -> str:
