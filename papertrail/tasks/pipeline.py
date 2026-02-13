@@ -81,28 +81,37 @@ def pipeline(months=2, export_date_arg=None, processed_path_override=None):
         with console.step_progress("Download Gmail attachments") as step:
             try:
                 from papertrail.gmail import download_gmail_attachments
-
                 from papertrail.dates import month_to_date_range
 
                 raw_path = Path(raw_dirs[0])
-                raw_path.mkdir(parents=True, exist_ok=True)
 
-                gmail_start, end_date = month_to_date_range(export_dates)
-                logger.debug(f"Gmail date range: {gmail_start.date()} to {end_date.date()}")
+                totals = {
+                    "messages_found": 0, "messages_processed": 0, "messages_skipped": 0,
+                    "attachments_downloaded": 0, "attachments_failed": 0, "bytes_downloaded": 0,
+                }
+                for month in export_dates:
+                    month_dir = raw_path / "gmail" / month
+                    month_dir.mkdir(parents=True, exist_ok=True)
 
-                stats = download_gmail_attachments(
-                    output_dir=raw_path,
-                    start_date=gmail_start,
-                    end_date=end_date,
-                    quiet=True,
-                )
-                if stats['attachments_downloaded'] > 0:
-                    step.success(
-                        f"{stats['messages_processed']} messages, "
-                        f"{stats['attachments_downloaded']} new attachments"
+                    gmail_start, gmail_end = month_to_date_range([month])
+                    logger.debug(f"Gmail {month}: {gmail_start.date()} to {gmail_end.date()}")
+
+                    month_stats = download_gmail_attachments(
+                        output_dir=month_dir,
+                        start_date=gmail_start,
+                        end_date=gmail_end,
+                        quiet=True,
                     )
-                elif stats['messages_processed'] > 0:
-                    step.success(f"{stats['messages_processed']} messages, 0 new attachments")
+                    for key in totals:
+                        totals[key] += month_stats[key]
+
+                if totals['attachments_downloaded'] > 0:
+                    step.success(
+                        f"{totals['messages_processed']} messages, "
+                        f"{totals['attachments_downloaded']} new attachments"
+                    )
+                elif totals['messages_processed'] > 0:
+                    step.success(f"{totals['messages_processed']} messages, 0 new attachments")
                 else:
                     step.warning("No messages found")
             except Exception as e:
