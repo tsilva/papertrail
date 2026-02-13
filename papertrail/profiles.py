@@ -129,10 +129,18 @@ class ExportFileMappingsConfig:
 
 
 @dataclass
+class ExportMergeRule:
+    """A rule for merging attachment documents into target documents."""
+    target_type: str   # Type pattern for primary document (e.g., "at-irs*")
+    attach_type: str   # Type pattern for document to append (e.g., "bank-note")
+
+
+@dataclass
 class ExportConfig:
     """Export configuration."""
     max_file_size_mb: Optional[float] = None
     file_mappings: ExportFileMappingsConfig = field(default_factory=ExportFileMappingsConfig)
+    merge_rules: List[ExportMergeRule] = field(default_factory=list)
 
 
 @dataclass
@@ -378,9 +386,17 @@ def _parse_profile_dict(data: Dict[str, Any], profile_path: Path) -> Profile:
         filename_fields=fm_data.get("filename_fields"),
         rules=export_rules,
     )
+    merge_rules = []
+    for mr_data in export_data.get("merge_rules", []):
+        if isinstance(mr_data, dict) and "target_type" in mr_data and "attach_type" in mr_data:
+            merge_rules.append(ExportMergeRule(
+                target_type=mr_data["target_type"],
+                attach_type=mr_data["attach_type"],
+            ))
     export_config = ExportConfig(
         max_file_size_mb=export_data.get("max_file_size_mb"),
         file_mappings=export_file_mappings,
+        merge_rules=merge_rules,
     )
 
     return Profile(

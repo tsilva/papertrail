@@ -189,26 +189,34 @@ def _phase4_nif_enrich(merged, raw_metadata, normalized_issuing_party, ctx, doc_
             elif lookup_source == "web":
                 doc_logger.log_nif_web_lookup(tax_number, official_issuer)
 
-        # Re-normalize the official name to canonical form
-        nif_raw = DocumentMetadataRaw(
-            issue_date=merged["issue_date"],
-            document_type=raw_metadata.document_type,
-            issuing_party=official_issuer,
-            total_amount=merged["total_amount"],
-            total_amount_currency=merged["total_amount_currency"],
-            confidence=1.0,
-            reasoning="NIF lookup override",
-        )
-        _, nif_normalized_issuer = normalize_metadata(
-            nif_raw, ctx.openai_client, ctx.model_id,
-        )
-
-        if nif_normalized_issuer != "$UNKNOWN$":
+        # Check if we already have a cached normalized form
+        cached_normalized = ctx.nif_cache.get_normalized(tax_number)
+        if cached_normalized:
             if doc_logger:
-                doc_logger.log_nif_enrichment(tax_number, official_issuer, nif_normalized_issuer)
-            normalized_issuing_party = nif_normalized_issuer
+                doc_logger.log_nif_enrichment(tax_number, official_issuer, cached_normalized)
+            normalized_issuing_party = cached_normalized
         else:
-            logger.debug(f"[NIF-ENRICH] Keeping original issuer (NIF name didn't normalize): {official_issuer}")
+            # Re-normalize the official name to canonical form via LLM
+            nif_raw = DocumentMetadataRaw(
+                issue_date=merged["issue_date"],
+                document_type=raw_metadata.document_type,
+                issuing_party=official_issuer,
+                total_amount=merged["total_amount"],
+                total_amount_currency=merged["total_amount_currency"],
+                confidence=1.0,
+                reasoning="NIF lookup override",
+            )
+            _, nif_normalized_issuer = normalize_metadata(
+                nif_raw, ctx.openai_client, ctx.model_id,
+            )
+
+            if nif_normalized_issuer != "$UNKNOWN$":
+                ctx.nif_cache.set_normalized(tax_number, nif_normalized_issuer)
+                if doc_logger:
+                    doc_logger.log_nif_enrichment(tax_number, official_issuer, nif_normalized_issuer)
+                normalized_issuing_party = nif_normalized_issuer
+            else:
+                logger.debug(f"[NIF-ENRICH] Keeping original issuer (NIF name didn't normalize): {official_issuer}")
     elif doc_logger:
         if lookup_source == "web_error" and lookup_error:
             doc_logger.log_nif_web_error(tax_number, lookup_error)
@@ -246,22 +254,31 @@ def _build_sub_documents(all_qr_results, ctx, doc_logger):
                     elif lookup_source == "web":
                         doc_logger.log_nif_web_lookup(tax_number, official_issuer)
 
-                # Normalize the official name
-                nif_raw = DocumentMetadataRaw(
-                    issue_date=qr_metadata.issue_date or "$UNKNOWN$",
-                    document_type=qr_metadata.document_type or "$UNKNOWN$",
-                    issuing_party=official_issuer,
-                    confidence=1.0,
-                    reasoning="NIF lookup for sub-document",
-                )
-                _, nif_normalized = normalize_metadata(
-                    nif_raw, ctx.openai_client, ctx.model_id,
-                )
-                if nif_normalized != "$UNKNOWN$":
-                    issuing_party = nif_normalized
+                # Check if we already have a cached normalized form
+                cached_normalized = ctx.nif_cache.get_normalized(tax_number)
+                if cached_normalized:
+                    issuing_party = cached_normalized
                     add_session_party(issuing_party)
                     if doc_logger:
-                        doc_logger.log_nif_enrichment(tax_number, official_issuer, nif_normalized)
+                        doc_logger.log_nif_enrichment(tax_number, official_issuer, cached_normalized)
+                else:
+                    # Normalize the official name via LLM
+                    nif_raw = DocumentMetadataRaw(
+                        issue_date=qr_metadata.issue_date or "$UNKNOWN$",
+                        document_type=qr_metadata.document_type or "$UNKNOWN$",
+                        issuing_party=official_issuer,
+                        confidence=1.0,
+                        reasoning="NIF lookup for sub-document",
+                    )
+                    _, nif_normalized = normalize_metadata(
+                        nif_raw, ctx.openai_client, ctx.model_id,
+                    )
+                    if nif_normalized != "$UNKNOWN$":
+                        ctx.nif_cache.set_normalized(tax_number, nif_normalized)
+                        issuing_party = nif_normalized
+                        add_session_party(issuing_party)
+                        if doc_logger:
+                            doc_logger.log_nif_enrichment(tax_number, official_issuer, nif_normalized)
 
         sub_doc = SubDocumentMetadata(
             date_issued=qr_metadata.issue_date,
@@ -512,6 +529,24 @@ def _task_extract_new_locked(processed_path: Path, raw_paths: list[Path], quiet:
             if images_converted > 0:
                 logger.debug(f"Converted {images_converted} images to PDF")
 
+        # Split multi-note PDF bundles into individual pages
+        split_temp_dir = None
+        bundles_split = 0
+        split_pages_count = 0
+        if pdf_paths:
+            import tempfile
+            from papertrail.pdf_split import split_pdf_bundles
+            split_temp_dir = tempfile.TemporaryDirectory()
+            non_split, split_pages, bundles_split = split_pdf_bundles(
+                pdf_paths, Path(split_temp_dir.name), console,
+            )
+            if bundles_split > 0:
+                split_pages_count = len(split_pages)
+                pdf_paths = non_split + split_pages
+                logger.debug(f"[PDF-SPLIT] Split {bundles_split} bundles into {split_pages_count} individual pages")
+            else:
+                logger.debug("[PDF-SPLIT] No splittable bundles found")
+
         # Process XLSX files first (deterministic, fast)
         xlsx_processed = 0
         xlsx_skipped = 0
@@ -552,6 +587,8 @@ def _task_extract_new_locked(processed_path: Path, raw_paths: list[Path], quiet:
             logger.debug("No new PDFs to process.")
             if temp_dir is not None:
                 temp_dir.cleanup()
+            if split_temp_dir is not None:
+                split_temp_dir.cleanup()
             return {
                 "pdf_scanned": len(pdf_paths),
                 "xlsx_scanned": len(xlsx_paths),
@@ -562,6 +599,8 @@ def _task_extract_new_locked(processed_path: Path, raw_paths: list[Path], quiet:
                 "xlsx_new": xlsx_processed,
                 "pdf_new": 0,
                 "images_converted": images_converted,
+                "bundles_split": bundles_split,
+                "split_pages": split_pages_count,
                 "new_issuers": [],
                 "unknown_document_type": 0,
                 "unknown_issuing_party": 0,
@@ -654,6 +693,8 @@ def _task_extract_new_locked(processed_path: Path, raw_paths: list[Path], quiet:
 
         if temp_dir is not None:
             temp_dir.cleanup()
+        if split_temp_dir is not None:
+            split_temp_dir.cleanup()
 
         return {
             "pdf_scanned": len(pdf_paths),
@@ -665,6 +706,8 @@ def _task_extract_new_locked(processed_path: Path, raw_paths: list[Path], quiet:
             "xlsx_new": xlsx_processed,
             "pdf_new": new_processed,
             "images_converted": images_converted,
+            "bundles_split": bundles_split,
+            "split_pages": split_pages_count,
             "new_issuers": sorted(new_issuers),
             "unknown_document_type": unknown_dt_count,
             "unknown_issuing_party": unknown_ip_count,

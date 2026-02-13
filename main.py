@@ -40,6 +40,7 @@ from papertrail.tasks import (
     task_backfill_text_hash,
     task_backfill_sub_documents,
     task_fix_unicode,
+    task_split_bundles,
     task_gmail_download,
     pipeline,
     task_qr_inventory,
@@ -148,7 +149,7 @@ def main():
         'copy_matching', 'export_all_dates', 'pipeline',
         'gmail_download', 'backfill_page_count', 'backfill_file_size',
         'backfill_text_hash', 'backfill_sub_documents', 'fix_unicode',
-        'sync', 'validate_extraction', 'qr_inventory', 'reconcile',
+        'split_bundles', 'sync', 'validate_extraction', 'qr_inventory', 'reconcile',
     ], help="Task to perform (default: pipeline).")
     parser.add_argument("processed_path", type=str, nargs='?', help="Path to output folder.")
     parser.add_argument("--raw_path", type=str, help="Path to documents folder(s). Use ';' to separate multiple.")
@@ -278,6 +279,9 @@ def main():
 
     elif task == "fix_unicode":
         task_fix_unicode(processed_path)
+
+    elif task == "split_bundles":
+        task_split_bundles(processed_path, dry_run=args.dry_run)
 
 
 if __name__ == "__main__":
