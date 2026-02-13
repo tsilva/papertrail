@@ -231,6 +231,11 @@ def pipeline(months=2, export_date_arg=None, processed_path_override=None):
             step.success(f"{rename_stats['validated']} validated, {rename_stats['renamed']} renamed")
             if rename_stats['renamed'] > 0:
                 summary["Renamed"] = f"{rename_stats['renamed']} files"
+            orphans = rename_stats.get('orphans', 0)
+            if orphans > 0:
+                msg = f"{orphans} orphaned JSON sidecar(s) (companion file missing)"
+                console.notable(msg)
+                warnings.append(msg)
         except Exception as e:
             step.error(str(e))
             sys.exit(1)
