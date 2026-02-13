@@ -49,6 +49,7 @@ class PDFCandidate:
     issuing_party: Optional[str]
     total_amount: Optional[float]
     total_amount_currency: Optional[str]
+    page_count: Optional[int] = None
     sub_doc_index: Optional[int] = None
     is_sub_document: bool = False
 
@@ -188,6 +189,7 @@ def _load_pdf_candidates(export_path: Path) -> list[PDFCandidate]:
             issuing_party=data.get("issuing_party"),
             total_amount=total_amount,
             total_amount_currency=data.get("total_amount_currency"),
+            page_count=data.get("page_count"),
         ))
 
     return candidates
@@ -482,6 +484,14 @@ def _validate_required_documents(
                 row_errors.append(f"missing {display_pattern} (expected {min_count}, found {count})")
             elif max_count is not None and count > max_count:
                 row_errors.append(f"too many {display_pattern} (expected max {max_count}, found {count})")
+
+        # Page count validation per document type
+        if rule.expected_page_count:
+            for c in m.pdf_candidates:
+                if c.document_type and c.page_count is not None:
+                    for type_pattern, expected in rule.expected_page_count.items():
+                        if _match_type_pattern(c.document_type, type_pattern) and c.page_count != expected:
+                            row_errors.append(f"{c.document_type} has {c.page_count} pages (expected {expected})")
 
         if row_errors:
             errors[m.transaction.row_number] = row_errors
