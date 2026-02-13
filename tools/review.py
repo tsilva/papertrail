@@ -30,13 +30,21 @@ window.togglePreviewPanel = function() {
     var expanded = panel.classList.toggle('expanded');
     var btn = document.getElementById('toggle_preview_btn');
     if (btn) btn.innerText = expanded ? 'Hide Preview' : 'Show Preview';
+    if (expanded) _ensureDragHandle(panel);
+};
+
+window.closePreviewPanel = function() {
+    var panel = document.getElementById('preview_panel');
+    if (panel) panel.classList.remove('expanded');
+    var btn = document.getElementById('toggle_preview_btn');
+    if (btn) btn.innerText = 'Show Preview';
 };
 
 window.selectReviewFile = function(filename) {
-    // Auto-expand preview panel
     var panel = document.getElementById('preview_panel');
     if (panel && !panel.classList.contains('expanded')) {
         panel.classList.add('expanded');
+        _ensureDragHandle(panel);
         var btn = document.getElementById('toggle_preview_btn');
         if (btn) btn.innerText = 'Hide Preview';
     }
@@ -57,10 +65,47 @@ window.selectReviewFile = function(filename) {
     input.dispatchEvent(new Event('input', { bubbles: true }));
     input.dispatchEvent(new Event('change', { bubbles: true }));
 };
+
+/* ── Drag support ── */
+function _ensureDragHandle(panel) {
+    if (panel.querySelector('.preview-drag-bar')) return;
+    var bar = document.createElement('div');
+    bar.className = 'preview-drag-bar';
+    var grip = document.createElement('span');
+    grip.className = 'drag-grip';
+    grip.textContent = '\\u2261\\u2261';
+    var closeBtn = document.createElement('button');
+    closeBtn.className = 'preview-close-btn';
+    closeBtn.textContent = '\\u2715';
+    closeBtn.onclick = function(e) { e.stopPropagation(); closePreviewPanel(); };
+    bar.appendChild(grip);
+    bar.appendChild(closeBtn);
+    panel.insertBefore(bar, panel.firstChild);
+
+    var ox, oy, sx, sy;
+    bar.addEventListener('mousedown', function(e) {
+        if (e.target === closeBtn) return;
+        e.preventDefault();
+        ox = e.clientX; oy = e.clientY;
+        var rect = panel.getBoundingClientRect();
+        sx = rect.left; sy = rect.top;
+        function onMove(ev) {
+            panel.style.left = (sx + ev.clientX - ox) + 'px';
+            panel.style.top = (sy + ev.clientY - oy) + 'px';
+            panel.style.right = 'auto';
+        }
+        function onUp() {
+            document.removeEventListener('mousemove', onMove);
+            document.removeEventListener('mouseup', onUp);
+        }
+        document.addEventListener('mousemove', onMove);
+        document.addEventListener('mouseup', onUp);
+    });
+}
 """
 
 _CSS = """
-.gradio-container { max-width: 100% !important; padding-left: 4px !important; padding-right: 4px !important; }
+.gradio-container, .gradio-container[class*="gradio-container-"] { max-width: 100% !important; padding-left: 4px !important; padding-right: 4px !important; overflow: visible !important; }
 .file-link {
     color: #58a6ff; text-decoration: underline; cursor: pointer;
     background: none; border: none; font: inherit; padding: 0;
@@ -102,11 +147,41 @@ _CSS = """
     width: 1px !important; height: 1px !important;
 }
 #preview_panel { display: none !important; }
-#preview_panel.expanded { display: flex !important; align-self: flex-start !important; }
-#preview_panel > div { position: sticky; top: 20px; max-height: calc(100vh - 40px); overflow-y: auto; }
+#preview_panel.expanded {
+    display: flex !important;
+    position: fixed !important;
+    top: 20px; right: 20px;
+    width: 520px;
+    max-height: calc(100vh - 40px);
+    overflow-y: auto;
+    z-index: 1000;
+    background: var(--background-fill-primary, #1a1a1a);
+    border: 1px solid var(--border-color-primary, #444);
+    border-radius: 8px;
+    box-shadow: 0 8px 32px rgba(0,0,0,0.4);
+    padding: 12px;
+}
 #toggle_preview_btn {
     max-width: 160px !important;
     margin-left: auto !important;
+}
+.preview-drag-bar {
+    display: flex; align-items: center; justify-content: space-between;
+    cursor: grab; padding: 4px 0 8px; user-select: none;
+    border-bottom: 1px solid var(--border-color-primary, #444);
+    margin: -4px -4px 8px; padding: 6px 8px;
+}
+.preview-drag-bar:active { cursor: grabbing; }
+.drag-grip {
+    color: var(--body-text-color-subdued, #666); font-size: 14px; letter-spacing: 2px;
+}
+.preview-close-btn {
+    background: none; border: none; cursor: pointer;
+    color: var(--body-text-color-subdued, #888); font-size: 16px;
+    padding: 2px 6px; border-radius: 4px; line-height: 1;
+}
+.preview-close-btn:hover {
+    background: rgba(220, 53, 69, 0.3); color: #ff6b6b;
 }
 """
 
