@@ -335,11 +335,13 @@ def task_backfill_sub_documents(processed_path: Path):
     )
 
 
-def task_split_bundles(processed_path: Path, dry_run: bool = False):
+def task_split_bundles(processed_path: Path, dry_run: bool = False, quiet: bool = False):
     """Find multi-page PDFs that are bundles of independent single-page documents and split them.
 
     Splits each bundle into individual pages, processes them through the extraction pipeline,
     and archives the original bundles to _dupes/split_bundles/.
+
+    Returns a stats dict: {"split": N, "pages": M, "archived": K}
     """
     import shutil
     import tempfile
@@ -348,13 +350,16 @@ def task_split_bundles(processed_path: Path, dry_run: bool = False):
     from papertrail.pdf_split import is_splittable_bundle, split_pdf_bundle
 
     console = get_console()
-    setup_task_logging(processed_path, "split_bundles")
+    if not quiet:
+        setup_task_logging(processed_path, "split_bundles")
+
+    stats = {"split": 0, "pages": 0, "archived": 0}
 
     # Scan for multi-page PDFs
     candidates = []
     for metadata_path, pdf_path, data in load_validated_metadata(
         processed_path, require_pdf=False, validate=False,
-        show_progress=True, progress_desc="Scanning for bundles",
+        show_progress=not quiet, progress_desc="Scanning for bundles",
     ):
         page_count = data.get("page_count")
         if page_count is not None and page_count <= 1:
@@ -365,8 +370,9 @@ def task_split_bundles(processed_path: Path, dry_run: bool = False):
         candidates.append((metadata_path, companion, data))
 
     if not candidates:
-        console.warning("No multi-page PDFs found", indent=False)
-        return
+        if not quiet:
+            console.warning("No multi-page PDFs found", indent=False)
+        return stats
 
     logger.debug(f"Found {len(candidates)} multi-page PDFs to check")
 
@@ -377,20 +383,22 @@ def task_split_bundles(processed_path: Path, dry_run: bool = False):
             splittable.append((metadata_path, pdf_path, data))
 
     not_splittable = len(candidates) - len(splittable)
-    console.info(
-        f"{len(splittable)} splittable bundles, {not_splittable} genuine multi-page",
-        indent=False,
-    )
+    if not quiet:
+        console.info(
+            f"{len(splittable)} splittable bundles, {not_splittable} genuine multi-page",
+            indent=False,
+        )
 
     if not splittable:
-        return
+        return stats
 
     if dry_run:
         total_pages = sum(d.get("page_count", 0) for _, _, d in splittable)
-        console.detail(f"Would split into ~{total_pages} individual pages (dry run)", indent=False)
+        if not quiet:
+            console.detail(f"Would split into ~{total_pages} individual pages (dry run)", indent=False)
         for _, pdf_path, data in splittable:
             logger.debug(f"[PDF-SPLIT] Would split: {pdf_path.name} ({data.get('page_count', '?')} pages)")
-        return
+        return stats
 
     # Split and process
     from papertrail.tasks.extraction import task_extract_new
@@ -408,21 +416,25 @@ def task_split_bundles(processed_path: Path, dry_run: bool = False):
         except Exception as e:
             logger.error(f"[PDF-SPLIT] Failed to split {pdf_path.name}: {e}")
 
-    console.success(f"Split {split_count} bundles into {pages_created} pages", indent=False)
+    if not quiet:
+        console.success(f"Split {split_count} bundles into {pages_created} pages", indent=False)
 
     # Process split pages through extraction pipeline
-    console.step("Classifying split pages")
-    extract_stats = task_extract_new(processed_path, [temp_path], quiet=False)
+    if not quiet:
+        console.step("Classifying split pages")
+    extract_stats = task_extract_new(processed_path, [temp_path], quiet=quiet)
     temp_dir.cleanup()
 
     if extract_stats is None:
-        console.warning("Extraction locked by another process, originals preserved", indent=False)
-        return
+        if not quiet:
+            console.warning("Extraction locked by another process, originals preserved", indent=False)
+        return stats
 
     new = extract_stats.get("new", 0)
     if new == 0:
-        console.warning("No split pages were successfully extracted, originals preserved", indent=False)
-        return
+        if not quiet:
+            console.warning("No split pages were successfully extracted, originals preserved", indent=False)
+        return stats
 
     # Archive original bundles
     archive_dir = processed_path / "_dupes" / "split_bundles"
@@ -437,10 +449,12 @@ def task_split_bundles(processed_path: Path, dry_run: bool = False):
         except Exception as e:
             logger.error(f"Failed to archive {pdf_path.name}: {e}")
 
-    console.success(
-        f"{archived} bundles archived to _dupes/split_bundles/",
-        indent=False,
-    )
-    new = extract_stats.get("new", 0)
-    dupes = extract_stats.get("duplicates", 0)
-    logger.debug(f"split_bundles complete: {split_count} split, {pages_created} pages, {new} new, {dupes} deduped, {archived} archived")
+    if not quiet:
+        console.success(
+            f"{archived} bundles archived to _dupes/split_bundles/",
+            indent=False,
+        )
+
+    stats = {"split": split_count, "pages": pages_created, "archived": archived}
+    logger.debug(f"split_bundles complete: {split_count} split, {pages_created} pages, {new} new, {archived} archived")
+    return stats
