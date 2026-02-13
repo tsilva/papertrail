@@ -105,10 +105,12 @@ def task_rename_files(processed_path: Path, quiet: bool = False) -> dict:
         logger.debug("Renaming existing PDF files and metadata based on metadata...")
 
         valid_entries = []
+        orphan_count = 0
 
         for metadata_path, metadata in load_json_files_parallel(processed_path, validate=True, show_progress=not quiet, progress_desc="Validating metadata"):
             doc_path = find_companion_file(metadata_path, metadata.model_dump())
             if doc_path is None:
+                orphan_count += 1
                 logger.warning(f"Skipping {metadata_path.name}: companion file not found")
                 continue
 
@@ -138,7 +140,7 @@ def task_rename_files(processed_path: Path, quiet: bool = False) -> dict:
             console.success(f"{len(valid_entries)} files validated, {renamed_count} renamed", indent=False)
         logger.debug(f"Renaming complete. Renamed {renamed_count} files.")
 
-    return {'validated': len(valid_entries), 'renamed': renamed_count}
+    return {'validated': len(valid_entries), 'renamed': renamed_count, 'orphans': orphan_count}
 
 
 def _get_nested_value(metadata: dict, key: str):
