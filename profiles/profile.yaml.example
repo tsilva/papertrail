@@ -96,32 +96,52 @@ export:
           document_type: "bank-*"
         prefix: "BNC_"
 
-# Reconciliation validation — controls which documents are required per transaction type
+# Reconciliation validation — configurable rules for required documents per transaction type
+# Rules are evaluated top-to-bottom, first match wins.
+# Each rule can filter by description keywords and/or transaction direction.
 reconciliation:
-  # Keywords that identify bank fee transactions (matched case-insensitively, diacritics-stripped)
-  bank_fee_keywords:
-    - "COMISSAO"
-    - "IMPOSTO SELO"
-    - "IMP.SELO"
-    - "JUROS"
-    - "ANUIDADE"
-    - "MANUTENCAO"
-    - "DESPESAS"
-    - "PORTES"
-  # Document types that satisfy vendor payment validation
-  vendor_document_types:
-    - "invoice"
-    - "invoice-credit"
-    - "invoice-debit"
-    - "invoice-receipt"
-    - "invoice-order"
-    - "receipt"
-    - "receipt-reference"
-    - "receipt-delivery"
-  # Document types that satisfy credit (positive amount) validation
-  credit_document_types:
-    - "bank-note"
-    - "invoice-credit"
+  rules:
+    # Bank fees: identified by description keywords, only need a bank-note
+    - name: bank-fee
+      match_description: ["COMISSAO", "IMPOSTO SELO", "IMP.SELO", "JUROS", "ANUIDADE", "MANUTENCAO", "DESPESAS", "PORTES"]
+      required_types:
+        bank-note: 1
+
+    # Salary: needs bank-note + payroll document
+    # - name: salary
+    #   match_description: ["SALARIO"]
+    #   required_types:
+    #     bank-note: 1
+    #     payroll-salary: 1
+
+    # Insurance: needs bank-note, optionally an insurance notice
+    # - name: insurance
+    #   match_description: ["FIDELIDADE", "INSURANCE PROVIDER"]
+    #   required_types:
+    #     bank-note: 1
+    #     "insurance-notice|insurance-auto": [0, 1]
+
+    # Default credit: any incoming payment needs a bank-note or credit note
+    - name: default-credit
+      direction: credit  # amount > 0
+      required_types:
+        "bank-note|invoice-credit": 1
+
+    # Default debit: any outgoing payment needs bank-note + vendor document
+    - name: default-debit
+      direction: debit  # amount <= 0
+      required_types:
+        bank-note: 1
+        "invoice|receipt|invoice-receipt|invoice-credit|invoice-debit|invoice-order|receipt-reference|receipt-delivery": [1, null]
+
+  # Rule syntax reference:
+  #   name (str, required): Rule identifier, becomes transaction_category in output
+  #   match_description (list[str], optional): Keywords matched case-insensitively against
+  #     diacritics-stripped description. Any keyword match = rule matches.
+  #   direction (str, optional): "credit" (amount > 0) or "debit" (amount <= 0)
+  #   required_types (dict, required): Document type patterns → cardinality constraints
+  #     Key: document type or "|"-separated alternatives (e.g., "invoice|receipt")
+  #     Value: N (exactly N) or [min, max] (range, null = unbounded)
 
 # Task-specific defaults (optional)
 task_defaults: {}

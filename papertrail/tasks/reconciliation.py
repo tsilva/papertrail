@@ -433,46 +433,75 @@ def _strip_diacritics(s: str) -> str:
     )
 
 
-def _classify_transaction(txn: Transaction, bank_fee_keywords: list[str]) -> str:
-    """Classify a transaction: 'credit', 'bank-fee', or 'vendor-payment'."""
-    if txn.amount > 0:
-        return "credit"
+def _match_type_pattern(doc_type: str, pattern: str) -> bool:
+    """Check if doc_type matches a pipe-separated pattern (case-insensitive)."""
+    doc_lower = doc_type.lower()
+    return any(alt.strip().lower() == doc_lower for alt in pattern.split("|"))
+
+
+def _parse_cardinality(value) -> tuple[int, int | None]:
+    """Parse cardinality spec into (min, max). None max means unbounded.
+
+    Examples: 1 → (1,1), [0,1] → (0,1), [1,null] → (1,None)
+    """
+    if isinstance(value, int):
+        return (value, value)
+    if isinstance(value, list) and len(value) == 2:
+        lo = value[0] if value[0] is not None else 0
+        hi = value[1]  # None means unbounded
+        return (int(lo), int(hi) if hi is not None else None)
+    return (0, None)
+
+
+def _classify_transaction(
+    txn: Transaction,
+    rules: list,
+) -> tuple[str, object | None]:
+    """Classify transaction by first-match-wins rules. Returns (category_name, rule)."""
     normalized = _strip_diacritics(txn.description).upper()
-    for keyword in bank_fee_keywords:
-        if keyword in normalized:
-            return "bank-fee"
-    return "vendor-payment"
+    for rule in rules:
+        # Check direction filter
+        if rule.direction is not None:
+            if rule.direction == "credit" and txn.amount <= 0:
+                continue
+            if rule.direction == "debit" and txn.amount > 0:
+                continue
+        # Check description keywords
+        if rule.match_description:
+            if not any(kw.upper() in normalized for kw in rule.match_description):
+                continue
+        return (rule.name, rule)
+    return ("unclassified", None)
 
 
 def _validate_required_documents(
     matches: list[MatchResult],
-    bank_fee_keywords: list[str],
-    vendor_document_types: set[str],
-    credit_document_types: set[str],
+    rules: list,
 ) -> dict[int, list[str]]:
-    """Check each match has the correct document types based on transaction category."""
-    warnings = {}
+    """Validate matched documents against rule requirements. Returns {row: [errors]}."""
+    errors: dict[int, list[str]] = {}
     for m in matches:
-        matched_types = {c.document_type for c in m.pdf_candidates if c.document_type}
-        row_warnings = []
-        category = _classify_transaction(m.transaction, bank_fee_keywords)
+        category, rule = _classify_transaction(m.transaction, rules)
+        if rule is None:
+            errors[m.transaction.row_number] = [f"unclassified transaction"]
+            continue
 
-        if category == "credit":
-            if not matched_types & credit_document_types:
-                row_warnings.append("missing bank-note or credit note")
-        elif category == "bank-fee":
-            if "bank-note" not in matched_types:
-                row_warnings.append("missing bank-note")
-            bank_note_count = sum(1 for c in m.pdf_candidates if c.document_type == "bank-note")
-            if bank_note_count > 1:
-                row_warnings.append(f"multiple bank-notes ({bank_note_count})")
-        else:  # vendor-payment
-            if not matched_types & vendor_document_types:
-                row_warnings.append("missing vendor document (invoice/receipt)")
+        row_errors: list[str] = []
+        for pattern, cardinality in rule.required_types.items():
+            min_count, max_count = _parse_cardinality(cardinality)
+            count = sum(
+                1 for c in m.pdf_candidates
+                if c.document_type and _match_type_pattern(c.document_type, pattern)
+            )
+            display_pattern = pattern.replace("|", "/")
+            if count < min_count:
+                row_errors.append(f"missing {display_pattern} (expected {min_count}, found {count})")
+            elif max_count is not None and count > max_count:
+                row_errors.append(f"too many {display_pattern} (expected max {max_count}, found {count})")
 
-        if row_warnings:
-            warnings[m.transaction.row_number] = row_warnings
-    return warnings
+        if row_errors:
+            errors[m.transaction.row_number] = row_errors
+    return errors
 
 
 def _write_reconciliation_file(
@@ -480,52 +509,54 @@ def _write_reconciliation_file(
     matches: list[MatchResult],
     unmatched_transactions: list[Transaction],
     total_transactions: int,
-    warnings: dict[int, list[str]] | None = None,
+    errors: dict[int, list[str]] | None = None,
     unmatched_files: list[PDFCandidate] | None = None,
-    bank_fee_keywords: list[str] | None = None,
+    rules: list | None = None,
 ) -> Path:
     """Write a .reconciliation JSON sidecar alongside the XLSX. Returns the output path."""
-    if warnings is None:
-        warnings = {}
+    if errors is None:
+        errors = {}
     if unmatched_files is None:
         unmatched_files = []
-    if bank_fee_keywords is None:
-        bank_fee_keywords = []
+    if rules is None:
+        rules = []
 
     output_path = excel_path.with_suffix(".reconciliation.json")
 
-    total_matched = len(matches)
-    total_unmatched = total_transactions - total_matched
-    total_incomplete = sum(1 for m in matches if m.transaction.row_number in warnings)
-    match_rate = (total_matched / total_transactions * 100) if total_transactions > 0 else 0
+    total_reconciled = sum(1 for m in matches if m.transaction.row_number not in errors)
+    total_incomplete = sum(1 for m in matches if m.transaction.row_number in errors)
+    total_unmatched = total_transactions - len(matches)
+    reconciliation_rate = (total_reconciled / total_transactions * 100) if total_transactions > 0 else 0
 
     match_entries = []
     for m in matches:
         txn = m.transaction
-        row_warnings = warnings.get(txn.row_number, [])
+        row_errors = errors.get(txn.row_number, [])
+        category, _ = _classify_transaction(txn, rules)
         match_entries.append({
             "row": txn.row_number,
             "date": txn.date_posting or txn.date_value,
             "description": txn.description,
             "amount": txn.amount,
             "currency": txn.currency,
-            "transaction_category": _classify_transaction(txn, bank_fee_keywords),
+            "transaction_category": category,
             "method": m.method,
             "confidence": m.confidence,
             "reasoning": m.reasoning,
             "files": [c.pdf_filename for c in m.pdf_candidates],
-            "warnings": row_warnings,
+            "errors": row_errors,
         })
 
     unmatched_entries = []
     for txn in unmatched_transactions:
+        category, _ = _classify_transaction(txn, rules)
         unmatched_entries.append({
             "row": txn.row_number,
             "date": txn.date_posting or txn.date_value,
             "description": txn.description,
             "amount": txn.amount,
             "currency": txn.currency,
-            "transaction_category": _classify_transaction(txn, bank_fee_keywords),
+            "transaction_category": category,
         })
 
     unmatched_file_entries = []
@@ -544,11 +575,11 @@ def _write_reconciliation_file(
         "generated": datetime.now().isoformat(timespec="seconds"),
         "summary": {
             "total": total_transactions,
-            "matched": total_matched,
-            "unmatched": total_unmatched,
+            "reconciled": total_reconciled,
             "incomplete": total_incomplete,
+            "unmatched": total_unmatched,
             "unmatched_files": len(unmatched_files),
-            "match_rate": round(match_rate, 1),
+            "reconciliation_rate": round(reconciliation_rate, 1),
         },
         "matches": match_entries,
         "unmatched": unmatched_entries,
@@ -567,7 +598,7 @@ def _reconcile_single(
     quiet: bool = False,
 ) -> dict:
     """Reconcile a single bank statement against PDF documents in export_path."""
-    empty_stats = {"total": 0, "matched": 0, "unmatched": 0, "incomplete": 0, "unmatched_files": 0, "match_rate": 0.0}
+    empty_stats = {"total": 0, "reconciled": 0, "unmatched": 0, "incomplete": 0, "unmatched_files": 0, "reconciliation_rate": 0.0}
 
     transactions = _load_transactions(excel_path)
 
@@ -625,26 +656,21 @@ def _reconcile_single(
 
     # Validate required document types per transaction category
     profile = get_current_profile()
-    recon_config = profile.reconciliation
-    incomplete_warnings = _validate_required_documents(
-        all_matches,
-        bank_fee_keywords=recon_config.bank_fee_keywords,
-        vendor_document_types=set(recon_config.vendor_document_types),
-        credit_document_types=set(recon_config.credit_document_types),
-    )
-    for row_num, row_warnings in incomplete_warnings.items():
+    rules = profile.reconciliation.rules
+    validation_errors = _validate_required_documents(all_matches, rules)
+    for row_num, row_errors in validation_errors.items():
         txn = next(m.transaction for m in all_matches if m.transaction.row_number == row_num)
-        category = _classify_transaction(txn, recon_config.bank_fee_keywords)
+        category, _ = _classify_transaction(txn, rules)
         logger.debug(
-            f"[INCOMPLETE] Row {row_num} ({category}): {', '.join(row_warnings)}"
+            f"[INCOMPLETE] Row {row_num} ({category}): {', '.join(row_errors)}"
         )
 
     if all_matches and not dry_run:
         _write_reconciliation_file(
             excel_path, all_matches, final_unmatched, len(transactions),
-            warnings=incomplete_warnings,
+            errors=validation_errors,
             unmatched_files=unmatched_files,
-            bank_fee_keywords=recon_config.bank_fee_keywords,
+            rules=rules,
         )
     elif dry_run and all_matches:
         if not quiet:
@@ -653,30 +679,31 @@ def _reconcile_single(
     total_txns = len(transactions)
     total_matched = len(all_matches)
     total_unmatched = len(final_unmatched)
-    total_incomplete = len(incomplete_warnings)
+    total_incomplete = len(validation_errors)
+    total_reconciled = total_matched - total_incomplete
     total_unmatched_files = len(unmatched_files)
-    pct = (total_matched / total_txns * 100) if total_txns > 0 else 0
+    pct = (total_reconciled / total_txns * 100) if total_txns > 0 else 0
 
     logger.debug(
-        f"[SUMMARY] {total_matched}/{total_txns} matched ({pct:.1f}%), "
-        f"{total_unmatched} unmatched, {total_incomplete} incomplete, "
+        f"[SUMMARY] {total_reconciled}/{total_txns} reconciled ({pct:.1f}%), "
+        f"{total_incomplete} incomplete, {total_unmatched} unmatched, "
         f"{total_unmatched_files} unmatched files"
     )
 
     if not quiet:
         console.info("")
         console.success(
-            f"{total_matched}/{total_txns} transactions matched ({pct:.1f}%)",
+            f"{total_reconciled}/{total_txns} transactions reconciled ({pct:.1f}%)",
             indent=False,
         )
         if total_incomplete > 0:
             console.warning(
-                f"{total_incomplete} matched transactions with warnings",
+                f"{total_incomplete} matched transactions with errors",
                 indent=False,
             )
-            for row_num, row_warnings in incomplete_warnings.items():
+            for row_num, row_errors in validation_errors.items():
                 console.detail(
-                    f"Row {row_num}: {', '.join(row_warnings)}"
+                    f"Row {row_num}: {', '.join(row_errors)}"
                 )
         if total_unmatched > 0:
             console.warning(
@@ -689,7 +716,7 @@ def _reconcile_single(
                 )
 
     for txn in final_unmatched:
-        category = _classify_transaction(txn, recon_config.bank_fee_keywords)
+        category, _ = _classify_transaction(txn, rules)
         logger.debug(
             f"[NO-MATCH] Row {txn.row_number} ({category}): {txn.description[:50]} "
             f"({txn.amount:.2f} {txn.currency})"
@@ -714,11 +741,11 @@ def _reconcile_single(
 
     return {
         "total": total_txns,
-        "matched": total_matched,
+        "reconciled": total_reconciled,
         "unmatched": total_unmatched,
         "incomplete": total_incomplete,
         "unmatched_files": total_unmatched_files,
-        "match_rate": pct,
+        "reconciliation_rate": pct,
     }
 
 

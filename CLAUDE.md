@@ -148,7 +148,35 @@ Reconciliation writes a `.reconciliation.json` sidecar alongside each bank state
 2026-01-01 - bank-statement - millennium-bcp - TEST-ACCOUNT-ALPHA - a1b2c3d4.xlsx
 2026-01-01 - bank-statement - millennium-bcp - TEST-ACCOUNT-ALPHA - a1b2c3d4.reconciliation.json
 ```
-The `.reconciliation.json` file contains: `source` (XLSX filename), `generated` (ISO timestamp), `summary` (total/matched/unmatched/match_rate), `matches` (array with row, date, description, amount, currency, method, confidence, reasoning, files), `unmatched` (array with row, date, description, amount, currency).
+The `.reconciliation.json` file contains: `source` (XLSX filename), `generated` (ISO timestamp), `summary` (total/reconciled/incomplete/unmatched/unmatched_files/reconciliation_rate), `matches` (array with row, date, description, amount, currency, transaction_category, method, confidence, reasoning, files, errors), `unmatched` (array with row, date, description, amount, currency, transaction_category), `unmatched_files` (array with file, date_issued, document_type, issuing_party, total_amount, currency).
+
+**Three-tier output:** `reconciled` (matched + valid), `incomplete` (matched but failed validation), `unmatched` (no document match found).
+
+### Reconciliation Validation Rules
+Configurable in `profile.yaml` under `reconciliation.rules`. Rules are evaluated top-to-bottom, **first-match-wins**. Each rule classifies a transaction category and defines required document types with cardinality constraints.
+
+**Rule fields:**
+- `name` (str): Rule identifier, becomes `transaction_category` in output
+- `match_description` (list[str], optional): Keywords matched case-insensitively (diacritics-stripped) against bank description
+- `direction` (str, optional): `"credit"` (amount > 0) or `"debit"` (amount <= 0)
+- `required_types` (dict): Document type patterns → cardinality. Key is `|`-separated type alternatives, value is `N` (exactly N) or `[min, max]` (`null` = unbounded)
+
+**Example:**
+```yaml
+reconciliation:
+  rules:
+    - name: bank-fee
+      match_description: ["COMISSAO", "IMPOSTO SELO"]
+      required_types:
+        bank-note: 1
+    - name: default-debit
+      direction: debit
+      required_types:
+        bank-note: 1
+        "invoice|receipt": [1, null]
+```
+
+Transactions matching no rule are classified as `"unclassified"` (validation error). Sub-documents are transparent to validation (treated as regular documents). Default rules (if none configured) replicate the previous 3-category behavior (bank-fee, default-credit, default-debit).
 
 In the pipeline, reconciliation runs as the **last step** (Stage 8) — after all validation is complete.
 
