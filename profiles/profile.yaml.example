@@ -2,8 +2,6 @@
 # To create a new profile, create a directory and copy this file:
 #   mkdir profiles/myprofile
 #   cp profiles/profile.yaml.example profiles/myprofile/profile.yaml
-# Optionally copy mappings template:
-#   cp profiles/mappings.yaml.example profiles/myprofile/mappings.yaml
 
 profile:
   name: "default"
@@ -27,19 +25,6 @@ openrouter:
   api_key: "${OPENROUTER_API_KEY}"
   base_url: "https://openrouter.ai/api/v1"
 
-# Document type configuration
-document_types:
-  # Set to null for dynamic loading from processed metadata (recommended)
-  predefined: null
-  # Inline fallback list (recommended - no external files needed)
-  fallback_list:
-    - "invoice"
-    - "receipt"
-    - "statement"
-    - "contract"
-    - "notice"
-    - "unknown"
-
 # Gmail integration (optional)
 gmail:
   enabled: true
@@ -60,11 +45,6 @@ passwords:
     - "password2"
   # Or use external file
   # passwords_file: "../config/passwords.txt"
-
-# Pipeline task configuration
-pipeline:
-  tools_required: ["archive-extractor"]
-  default_export_date: "last_month"
 
 # Export settings
 export:
@@ -151,6 +131,3 @@ reconciliation:
   #   required_types (dict, required): Document type patterns → cardinality constraints
   #     Key: document type or "|"-separated alternatives (e.g., "invoice|receipt")
   #     Value: N (exactly N) or [min, max] (range, null = unbounded)
-
-# Task-specific defaults (optional)
-task_defaults: {}

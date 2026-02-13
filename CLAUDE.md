@@ -350,9 +350,6 @@ paths:
 openrouter:
   model_id: "google/gemini-2.5-flash"
   api_key: "YOUR_KEY_HERE"
-
-document_types:
-  predefined: null  # Dynamic loading from processed metadata
 ```
 
 **Usage**:

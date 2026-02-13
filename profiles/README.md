@@ -82,12 +82,6 @@ openrouter:
   api_key: "${OPENROUTER_API_KEY}"
   base_url: "https://openrouter.ai/api/v1"
 
-document_types:
-  predefined: null
-
-issuing_parties:
-  predefined: null
-
 gmail:
   enabled: true
   credentials_file: null
@@ -102,11 +96,6 @@ passwords:
   passwords:
     - "password1"
 
-pipeline:
-  tools_required: []
-  default_export_date: "last_month"
-
-task_defaults: {}
 ```
 
 ## Field Reference
@@ -149,33 +138,6 @@ OpenRouter API configuration for LLM-based classification.
 api_key: "${OPENROUTER_API_KEY}"  # References $OPENROUTER_API_KEY from .env or environment
 ```
 
-### `document_types` (Optional)
-
-Configuration for document type classification.
-
-- **`predefined`** (list or null): Predefined list of document types to use
-  - Set to `null` (recommended) to dynamically load from processed metadata
-  - Set to a list to use only specific types:
-    ```yaml
-    predefined:
-      - "invoice"
-      - "receipt"
-      - "statement"
-      - "$UNKNOWN$"
-    ```
-
-- **`fallback_file`** (string): Path to JSON file with fallback document types
-- **`fallback_list`** (list): Hardcoded fallback list (alternative to fallback_file)
-
-### `issuing_parties` (Optional)
-
-Configuration for issuing party (vendor/organization) classification.
-
-- **`predefined`** (list or null): Predefined list of issuing parties
-  - Set to `null` (recommended) to dynamically load from processed metadata
-
-- **`fallback_list`** (list): Hardcoded fallback list
-
 ### `gmail` (Optional)
 
 Gmail API integration for downloading email attachments.
@@ -202,17 +164,6 @@ passwords:
     - "password1"
     - "password2"
 ```
-
-### `pipeline` (Optional)
-
-Pipeline task configuration.
-
-- **`tools_required`** (list): List of required external tools
-- **`default_export_date`** (string): Default export date for pipeline (e.g., `"last_month"`)
-
-### `task_defaults` (Optional)
-
-Task-specific default settings (reserved for future use).
 
 ## Using Profiles
 
