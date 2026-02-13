@@ -57,11 +57,6 @@ class OpenRouterConfig:
     base_url: str = "https://openrouter.ai/api/v1"
 
 
-@dataclass
-class DocumentTypesConfig:
-    """Document types configuration."""
-    predefined: Optional[List[str]] = None
-
 
 @dataclass
 class GmailConfig:
@@ -82,12 +77,6 @@ class PasswordsConfig:
     passwords: Optional[List[str]] = None
     passwords_file: Optional[str] = None
 
-
-@dataclass
-class PipelineConfig:
-    """Pipeline task configuration."""
-    tools_required: List[str] = field(default_factory=list)
-    default_export_date: str = "last_month"
 
 
 @dataclass
@@ -149,14 +138,11 @@ class Profile:
     profile: ProfileMetadata
     paths: PathsConfig = field(default_factory=PathsConfig)
     openrouter: OpenRouterConfig = field(default_factory=OpenRouterConfig)
-    document_types: DocumentTypesConfig = field(default_factory=DocumentTypesConfig)
     gmail: GmailConfig = field(default_factory=GmailConfig)
     passwords: PasswordsConfig = field(default_factory=PasswordsConfig)
-    pipeline: PipelineConfig = field(default_factory=PipelineConfig)
     nif_api: NifApiConfig = field(default_factory=NifApiConfig)
     reconciliation: ReconciliationConfig = field(default_factory=ReconciliationConfig)
     export: ExportConfig = field(default_factory=ExportConfig)
-    task_defaults: Dict[str, Any] = field(default_factory=dict)
     _profile_path: Optional[Path] = field(default=None, repr=False)
 
     @property
@@ -334,11 +320,6 @@ def _parse_profile_dict(data: Dict[str, Any], profile_path: Path) -> Profile:
         base_url=openrouter_data.get("base_url") or "https://openrouter.ai/api/v1"
     )
 
-    doc_types_data = data.get("document_types", {})
-    document_types = DocumentTypesConfig(
-        predefined=doc_types_data.get("predefined") or doc_types_data.get("canonical"),
-    )
-
     gmail_data = data.get("gmail", {})
     gmail_settings = gmail_data.get("settings", {})
     gmail = GmailConfig(
@@ -355,12 +336,6 @@ def _parse_profile_dict(data: Dict[str, Any], profile_path: Path) -> Profile:
     passwords = PasswordsConfig(
         passwords=passwords_data.get("passwords"),
         passwords_file=passwords_data.get("passwords_file")
-    )
-
-    pipeline_data = data.get("pipeline", {})
-    pipeline = PipelineConfig(
-        tools_required=pipeline_data.get("tools_required", []),
-        default_export_date=pipeline_data.get("default_export_date", "last_month")
     )
 
     nif_api_data = data.get("nif_api", {})
@@ -403,14 +378,11 @@ def _parse_profile_dict(data: Dict[str, Any], profile_path: Path) -> Profile:
         profile=profile_meta,
         paths=paths,
         openrouter=openrouter,
-        document_types=document_types,
         gmail=gmail,
         passwords=passwords,
-        pipeline=pipeline,
         nif_api=nif_api,
         reconciliation=reconciliation,
         export=export_config,
-        task_defaults=data.get("task_defaults", {}),
         _profile_path=profile_path
     )
 
