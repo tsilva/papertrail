@@ -373,7 +373,11 @@ def _render_txn_table(recon):
 
     for r in rows:
         bg = _COLORS.get(r["_st"], "transparent")
-        lab = _LABELS.get(r["_st"], "")
+        if r["_st"] == "incomplete":
+            errs = r.get("errors", [])
+            lab = "; ".join(errs) if errs else _LABELS["incomplete"]
+        else:
+            lab = _LABELS.get(r["_st"], "")
         conf = r.get("confidence", 0)
         cs = f"{conf:.0%}" if conf > 0 else "-"
         amt = f'{r.get("amount", 0):.2f}'

@@ -84,7 +84,7 @@ PDF → render pages at 300 DPI → pyzbar decode → detect QR type → parse �
 
 **Portuguese QR fields extracted:**
 - `issue_date` from F field (YYYYMMDD → YYYY-MM-DD, stored as `date_issued` in sidecar JSON)
-- `document_type` from D field (FT → invoice, NC → invoice-credit, ND → invoice-debit, etc.)
+- `document_type` from D field (FT → invoice, FR → invoice-receipt, NC → invoice-credit, ND → invoice-debit, RC/RG → receipt, etc.)
 - `total_amount` from O field (gross total)
 - `issuer_tax_number` from A field (raw NIF without country prefix)
 - `atcud` from H field (unique document code)
@@ -370,7 +370,7 @@ python main.py extract_new /path/to/processed  # Auto-uses default profile if av
 
 ### Export Prefix Rules with Profile Variables
 
-Export match rules support `${profile.*}` variable syntax to reference profile-level configuration. This enables distinguishing vendor invoices (VND — you issued them) from company invoices (CMP — you received them) by comparing `issuer_tax_number` against the profile owner's tax number. Rules are **first-match-wins**.
+Export match rules support `${profile.*}` variable syntax to reference profile-level configuration. This enables distinguishing vendor invoices (VND — you issued them) from company invoices (CMP — you received them) by comparing `issuer_tax_number` against the profile owner's tax number. Rules are **first-match-wins**. Match patterns support trailing wildcards (`bank-*`), numeric comparison operators (`>1`, `>=10`, `<5`, `<=100`, `!=0`), and `${profile.*}` variable substitution.
 
 ```yaml
 profile:
@@ -385,6 +385,11 @@ export:
           document_type: "invoice"
           issuer_tax_number: "${profile.tax_number}"
         prefix: "VND_"      # My tax number = I issued it
+      - match:
+          document_type: "invoice"
+          issuing_party: "utility-provider"
+          page_count: ">1"
+        prefix: "EXC_"      # Multi-page Utility Provider invoices
       - match:
           document_type: "invoice"
         prefix: "CMP_"      # Someone else issued it
