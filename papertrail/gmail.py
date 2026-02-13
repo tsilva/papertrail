@@ -36,11 +36,13 @@ class GmailDownloader:
         token_path: Path,
         settings_path: Path,
         output_dir: Path,
+        tracking_dir: Optional[Path] = None,
     ):
         self.credentials_path = Path(credentials_path)
         self.token_path = Path(token_path)
         self.settings_path = Path(settings_path)
         self.output_dir = Path(output_dir)
+        self.tracking_dir = Path(tracking_dir) if tracking_dir else self.output_dir
         self.settings = self._load_settings()
         self.service = None
         self.failure_logger = None
@@ -213,7 +215,7 @@ class GmailDownloader:
         return self.output_dir / f"{stem}_{timestamp}{suffix}"
 
     def _get_processed_messages_path(self) -> Path:
-        return self.output_dir / "gmail_processed_messages.json"
+        return self.tracking_dir / "gmail_processed_messages.json"
 
     def load_processed_messages(self) -> set[str]:
         processed_file = self._get_processed_messages_path()
@@ -240,7 +242,7 @@ class GmailDownloader:
             "bytes_downloaded": 0,
         }
 
-        log_path = self.output_dir / "gmail_download_failures.log"
+        log_path = self.tracking_dir / "gmail_download_failures.log"
         self.failure_logger = setup_failure_logger(log_path)
 
         query = self.build_search_query(start_date, end_date)
@@ -300,6 +302,7 @@ def download_gmail_attachments(
     start_date: datetime,
     end_date: datetime,
     quiet: bool = False,
+    tracking_dir: Optional[Path] = None,
 ) -> dict:
     """Download Gmail attachments for the specified date range."""
     paths = get_gmail_config_paths()
@@ -309,6 +312,7 @@ def download_gmail_attachments(
         token_path=paths["token"],
         settings_path=paths["settings"],
         output_dir=output_dir,
+        tracking_dir=tracking_dir,
     )
 
     logger.info("Authenticating with Gmail API...")
