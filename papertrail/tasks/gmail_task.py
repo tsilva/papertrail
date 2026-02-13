@@ -1,16 +1,16 @@
 """Gmail download task."""
 
-from datetime import datetime, timedelta
 from pathlib import Path
 
 from papertrail.config import get_current_profile
 from papertrail.console import get_console
+from papertrail.dates import compute_month_range, month_to_date_range
 from papertrail.logging_utils import get_logger, setup_task_logging
 
 logger = get_logger('cli')
 
 
-def task_gmail_download():
+def task_gmail_download(months: int = 2):
     """Download email attachments from Gmail."""
     from papertrail.gmail import download_gmail_attachments
 
@@ -41,9 +41,8 @@ def task_gmail_download():
 
     raw_path.mkdir(parents=True, exist_ok=True)
 
-    end_date = datetime.now()
-
-    start_date = (end_date.replace(day=1) - timedelta(days=1)).replace(day=1)
+    export_dates = compute_month_range(months)
+    start_date, end_date = month_to_date_range(export_dates)
     logger.debug(f"Date range: {start_date.date()} to {end_date.date()}")
 
     logger.debug(f"Downloading attachments to: {raw_path}")
