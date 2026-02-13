@@ -24,6 +24,7 @@ class NIFLookupCache:
             cache_path = Path(__file__).parent.parent / ".cache" / "nif_cache.yaml"
         self.path = cache_path
         self._cache: dict[str, str] = {}
+        self._normalized: dict[str, str] = {}
         self._dirty = False
         self._load()
 
@@ -31,8 +32,10 @@ class NIFLookupCache:
         try:
             data = load_yaml(self.path)
             self._cache = data.get("nif_to_issuer", {})
+            self._normalized = data.get("nif_to_normalized", {})
         except Exception:
             self._cache = {}
+            self._normalized = {}
 
     @staticmethod
     def normalize_nif(nif: str) -> str:
@@ -72,7 +75,10 @@ class NIFLookupCache:
         with self._lock:
             if not self._dirty:
                 return
-            save_yaml(self.path, {"nif_to_issuer": self._cache})
+            data = {"nif_to_issuer": self._cache}
+            if self._normalized:
+                data["nif_to_normalized"] = self._normalized
+            save_yaml(self.path, data)
             self._dirty = False
 
     def __len__(self) -> int:
@@ -87,6 +93,17 @@ class NIFLookupCache:
         with self._lock:
             if self._cache.get(nif) != issuer:
                 self._cache[nif] = issuer
+                self._dirty = True
+
+    def get_normalized(self, nif: str) -> Optional[str]:
+        nif = self.normalize_nif(nif)
+        return self._normalized.get(nif)
+
+    def set_normalized(self, nif: str, normalized: str) -> None:
+        nif = self.normalize_nif(nif)
+        with self._lock:
+            if self._normalized.get(nif) != normalized:
+                self._normalized[nif] = normalized
                 self._dirty = True
 
     def lookup(self, nif: str) -> tuple[Optional[str], str, Optional[str]]:

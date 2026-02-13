@@ -180,6 +180,10 @@ def pipeline(months=2, export_date_arg=None, processed_path_override=None):
         sys.exit(1)
 
     # Notable items below extraction step
+    if extract_stats and extract_stats.get("bundles_split", 0) > 0:
+        console.notable(
+            f"Split {extract_stats['bundles_split']} PDF bundles into {extract_stats['split_pages']} pages"
+        )
     if extract_stats:
         if extract_stats.get("new_issuers"):
             console.notable(f"New issuers: {', '.join(extract_stats['new_issuers'])}")
@@ -257,15 +261,21 @@ def pipeline(months=2, export_date_arg=None, processed_path_override=None):
     if profile.profile.tax_number:
         profile_context = {"tax_number": profile.profile.tax_number}
 
-    # ── Stage 6-7: Copy & Merge per export month ──
+    # ── Stage 6-8: Export, Reconcile, Merge per export month ──
+
+    from papertrail.tasks.reconciliation import _discover_bank_statements, _reconcile_single
+    from papertrail.tasks.merge_attachments import merge_reconciled_attachments
 
     recon_stats_all: list[dict] = []
+    merge_rules = export_file_config.merge_rules
 
     for export_date in export_dates:
         export_date_dir = os.path.join(EXPORT_FILES_DIR, export_date)
 
         if os.path.exists(export_date_dir):
             shutil.rmtree(export_date_dir)
+
+        # ── Stage 6: Export documents ──
 
         with console.step_progress(f"Export documents ({export_date})") as step:
             try:
@@ -289,6 +299,65 @@ def pipeline(months=2, export_date_arg=None, processed_path_override=None):
             except Exception as e:
                 step.error(str(e))
                 sys.exit(1)
+
+        # ── Stage 7: Reconcile bank statements ──
+
+        all_recon_matches = []
+        bank_statements = _discover_bank_statements(Path(export_date_dir))
+        for bs_path in bank_statements:
+            bs_json = bs_path.with_suffix(".json")
+            bs_info = {}
+            if bs_json.exists():
+                try:
+                    bs_data = load_json_data(bs_json)
+                    bs_info = bs_data.get("bank_statement", {}) or {}
+                except Exception:
+                    pass
+            account = bs_info.get("account_number", bs_path.stem)
+            period = bs_info.get("period_start", export_date)
+            if period and len(period) >= 7:
+                period = period[:7]
+
+            with console.step_progress(f"Match bank transactions: {account} ({period})") as step:
+                try:
+                    recon_stats = _reconcile_single(
+                        Path(export_date_dir), bs_path, dry_run=False,
+                        console=console, quiet=True,
+                    )
+                    recon_stats_all.append(recon_stats)
+                    all_recon_matches.extend(recon_stats.get("matches", []))
+                    reconciled = recon_stats["reconciled"]
+                    total = recon_stats["total"]
+                    pct = recon_stats["reconciliation_rate"]
+                    if total > 0:
+                        step.success(f"{reconciled}/{total} reconciled ({pct:.0f}%)")
+                    else:
+                        step.warning("No transactions found")
+                except Exception as e:
+                    step.warning(f"Reconciliation failed: {e}")
+                    logger.warning(f"Reconciliation failed for {bs_path.name}: {e}")
+
+        # ── Stage 7b: Merge attachments (e.g., bank-note → at-irs) ──
+
+        if merge_rules and all_recon_matches:
+            with console.step_progress(f"Merge attachments ({export_date})") as step:
+                try:
+                    merge_stats = merge_reconciled_attachments(
+                        Path(export_date_dir), all_recon_matches, merge_rules,
+                    )
+                    merged = merge_stats["merged"]
+                    errors = merge_stats["errors"]
+                    if merged > 0:
+                        step.success(f"{merged} document(s) merged")
+                    elif errors > 0:
+                        step.warning(f"{errors} merge error(s)")
+                    else:
+                        step.success("No merges needed")
+                except Exception as e:
+                    step.warning(f"Merge attachments failed: {e}")
+                    logger.warning(f"Merge attachments failed: {e}")
+
+        # ── Stage 8: Merge all PDFs (final combined files) ──
 
         with console.step_progress(f"Merge PDFs ({export_date})") as step:
             logger.debug("### Merge PDFs...")
@@ -317,48 +386,6 @@ def pipeline(months=2, export_date_arg=None, processed_path_override=None):
             validate_merged_pdf(Path(export_date_dir))
 
         output_paths.append(("Export", str(export_date_dir)))
-
-    # ── Stage 8: Reconcile bank statements (runs last) ──
-
-    from papertrail.tasks.reconciliation import _discover_bank_statements, _reconcile_single
-
-    for export_date in export_dates:
-        export_date_dir = os.path.join(EXPORT_FILES_DIR, export_date)
-        if not os.path.exists(export_date_dir):
-            continue
-        bank_statements = _discover_bank_statements(Path(export_date_dir))
-        for bs_path in bank_statements:
-            # Read bank statement metadata for a better label
-            bs_json = bs_path.with_suffix(".json")
-            bs_info = {}
-            if bs_json.exists():
-                try:
-                    bs_data = load_json_data(bs_json)
-                    bs_info = bs_data.get("bank_statement", {}) or {}
-                except Exception:
-                    pass
-            account = bs_info.get("account_number", bs_path.stem)
-            period = bs_info.get("period_start", export_date)
-            if period and len(period) >= 7:
-                period = period[:7]
-
-            with console.step_progress(f"Match bank transactions: {account} ({period})") as step:
-                try:
-                    recon_stats = _reconcile_single(
-                        Path(export_date_dir), bs_path, dry_run=False,
-                        console=console, quiet=True,
-                    )
-                    recon_stats_all.append(recon_stats)
-                    reconciled = recon_stats["reconciled"]
-                    total = recon_stats["total"]
-                    pct = recon_stats["reconciliation_rate"]
-                    if total > 0:
-                        step.success(f"{reconciled}/{total} reconciled ({pct:.0f}%)")
-                    else:
-                        step.warning("No transactions found")
-                except Exception as e:
-                    step.warning(f"Reconciliation failed: {e}")
-                    logger.warning(f"Reconciliation failed for {bs_path.name}: {e}")
 
     # Build reconciliation summary
     if recon_stats_all:

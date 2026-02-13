@@ -811,6 +811,7 @@ def _reconcile_single(
         "incomplete": total_incomplete,
         "unmatched_files": total_unmatched_files,
         "reconciliation_rate": pct,
+        "matches": all_matches,
     }
 
 

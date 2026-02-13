@@ -96,6 +96,15 @@ export:
           document_type: "bank-*"
         prefix: "BNC_"
 
+  # Merge rules: append attachment document pages into target document PDFs.
+  # Only applies to documents matched to the same bank transaction via reconciliation.
+  # Target PDF is modified in-place (attachment pages appended). Standalone attachment PDF is kept.
+  merge_rules:
+    - target_type: "at-irs*"       # Portuguese tax payment proof
+      attach_type: "bank-note"     # Bank transfer confirmation
+    - target_type: "at-ss*"        # Social security payment proof
+      attach_type: "bank-note"
+
 # Reconciliation validation — configurable rules for required documents per transaction type
 # Rules are evaluated top-to-bottom, first match wins.
 # Each rule can filter by description keywords and/or transaction direction.
