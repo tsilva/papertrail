@@ -45,48 +45,52 @@ def confirm_classification(
         logger.debug(f"Non-interactive: auto-accepting {field_name}={suggested_value}")
         return suggested_value
 
-    console = get_console().console
+    try:
+        console = get_console().console
 
-    # Build info table
-    info = Table.grid(padding=(0, 1))
-    info.add_column(style="bold")
-    info.add_column()
-    info.add_row("File:", f"[dim]{file_name}[/dim]")
-    info.add_row("Raw:", f'[yellow]"{raw_value}"[/yellow]')
-    info.add_row("LLM:", f"[cyan]{suggested_value}[/cyan]")
+        # Build info table
+        info = Table.grid(padding=(0, 1))
+        info.add_column(style="bold")
+        info.add_column()
+        info.add_row("File:", f"[dim]{file_name}[/dim]")
+        info.add_row("Raw:", f'[yellow]"{raw_value}"[/yellow]')
+        info.add_row("LLM:", f"[cyan]{suggested_value}[/cyan]")
 
-    console.print()
-    console.print(Panel(
-        info,
-        title=f"[bold]New {field_name}[/bold]",
-        border_style="cyan",
-        padding=(0, 1),
-    ))
+        console.print()
+        console.print(Panel(
+            info,
+            title=f"[bold]New {field_name}[/bold]",
+            border_style="cyan",
+            padding=(0, 1),
+        ))
 
-    # Show options
-    console.print(f"  [bold][1][/bold] Accept [cyan]{suggested_value}[/cyan]")
-    console.print(f"  [bold][2][/bold] Pick from existing {field_name}s")
-    console.print(f"  [bold][3][/bold] Enter custom name")
-    console.print(f"  [bold][s][/bold] Skip ([dim]$UNKNOWN$[/dim])")
-    console.print()
+        # Show options
+        console.print(f"  [bold][1][/bold] Accept [cyan]{suggested_value}[/cyan]")
+        console.print(f"  [bold][2][/bold] Pick from existing {field_name}s")
+        console.print(f"  [bold][3][/bold] Enter custom name")
+        console.print(f"  [bold][s][/bold] Skip ([dim]$UNKNOWN$[/dim])")
+        console.print()
 
-    choice = Prompt.ask("  Choice", choices=["1", "2", "3", "s"], default="1")
+        choice = Prompt.ask("  Choice", choices=["1", "2", "3", "s"], default="1")
 
-    if choice == "1":
-        logger.debug(f"User accepted LLM suggestion: {field_name}={suggested_value}")
-        return suggested_value
+        if choice == "1":
+            logger.debug(f"User accepted LLM suggestion: {field_name}={suggested_value}")
+            return suggested_value
 
-    if choice == "s":
-        logger.debug(f"User skipped: {field_name}=$UNKNOWN$")
+        if choice == "s":
+            logger.debug(f"User skipped: {field_name}=$UNKNOWN$")
+            return "$UNKNOWN$"
+
+        if choice == "2":
+            return _pick_from_existing(field_name, known_values, console)
+
+        if choice == "3":
+            return _enter_custom(field_name, console)
+
         return "$UNKNOWN$"
-
-    if choice == "2":
-        return _pick_from_existing(field_name, known_values, console)
-
-    if choice == "3":
-        return _enter_custom(field_name, console)
-
-    return "$UNKNOWN$"
+    except Exception:
+        logger.warning(f"Interactive prompt failed, auto-accepting {field_name}={suggested_value}")
+        return suggested_value
 
 
 def _pick_from_existing(field_name: str, known_values: set[str], console) -> str:

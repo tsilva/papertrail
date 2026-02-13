@@ -5,7 +5,6 @@ import re
 import shutil
 import sys
 import time
-from datetime import datetime, timedelta
 from pathlib import Path
 
 from archive_extractor import extract_archives
@@ -20,7 +19,7 @@ from papertrail.tasks.validation import validate_merged_pdf
 logger = get_logger('cli')
 
 
-def pipeline(export_date_arg=None, processed_path_override=None):
+def pipeline(months=2, export_date_arg=None, processed_path_override=None):
     """Run the full document processing pipeline."""
     from papertrail.config import get_passwords
 
@@ -57,10 +56,8 @@ def pipeline(export_date_arg=None, processed_path_override=None):
     if export_date_arg:
         export_dates = [export_date_arg]
     else:
-        today = datetime.now()
-        first_of_this_month = today.replace(day=1)
-        last_month = first_of_this_month - timedelta(days=1)
-        export_dates = [last_month.strftime("%Y-%m"), today.strftime("%Y-%m")]
+        from papertrail.dates import compute_month_range
+        export_dates = compute_month_range(months)
 
     for ed in export_dates:
         if not re.match(r"^\d{4}-\d{2}$", ed):
@@ -85,11 +82,12 @@ def pipeline(export_date_arg=None, processed_path_override=None):
             try:
                 from papertrail.gmail import download_gmail_attachments
 
+                from papertrail.dates import month_to_date_range
+
                 raw_path = Path(raw_dirs[0])
                 raw_path.mkdir(parents=True, exist_ok=True)
 
-                end_date = datetime.now()
-                gmail_start = (end_date.replace(day=1) - timedelta(days=1)).replace(day=1)
+                gmail_start, end_date = month_to_date_range(export_dates)
                 logger.debug(f"Gmail date range: {gmail_start.date()} to {end_date.date()}")
 
                 stats = download_gmail_attachments(
