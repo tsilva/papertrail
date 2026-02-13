@@ -81,10 +81,13 @@ _CSS = """
     text-align: left; position: sticky; top: 0; z-index: 1;
     color: var(--body-text-color, #ddd); font-weight: 600;
     border-bottom: 2px solid var(--border-color-primary, #555);
+    white-space: nowrap;
 }
 .txn-table td {
     padding: 5px 8px; border-bottom: 1px solid var(--border-color-primary, #333);
+    white-space: nowrap;
 }
+.txn-table td:last-child { white-space: normal; word-break: break-all; }
 .placeholder {
     color: var(--body-text-color-subdued, #888); font-size: 14px;
     padding: 32px; text-align: center;
@@ -113,6 +116,7 @@ _COLORS = {
     "llm_low": "rgba(255, 193, 7, 0.25)",
     "incomplete": "rgba(255, 152, 0, 0.25)",
     "unmatched": "rgba(220, 53, 69, 0.25)",
+    "unclassified": "rgba(220, 53, 69, 0.25)",
 }
 
 _LABELS = {
@@ -121,6 +125,7 @@ _LABELS = {
     "llm_low": "Low confidence",
     "incomplete": "Incomplete",
     "unmatched": "Unmatched",
+    "unclassified": "Unclassified",
 }
 
 
@@ -285,7 +290,7 @@ def render_xlsx_as_html(xlsx_path, max_rows=100):
 
 def _match_status(m):
     """Classify a reconciliation match into a status category."""
-    if m.get("warnings"):
+    if m.get("errors") or m.get("warnings"):
         return "incomplete"
     if m.get("method") == "exact":
         return "exact"
@@ -319,11 +324,13 @@ def render_single_bank_html(bs):
     # Reconciliation
     if recon:
         s = recon.get("summary", {})
+        reconciled = s.get("reconciled", s.get("matched", 0))
+        rate = s.get("reconciliation_rate", s.get("match_rate", 0))
         inc = f' &middot; {s.get("incomplete", 0)} incomplete' if s.get("incomplete") else ""
         parts.append(
             f'<div class="bank-info"><strong>Reconciliation:</strong> '
-            f'{s.get("matched", 0)}/{s.get("total", 0)} matched '
-            f'({s.get("match_rate", 0):.1f}%){inc}</div>'
+            f'{reconciled}/{s.get("total", 0)} reconciled '
+            f'({rate:.1f}%){inc}</div>'
         )
         parts.append(_render_txn_table(recon))
     else:
@@ -349,13 +356,17 @@ def _render_txn_table(recon):
             **u, "_st": "unmatched", "files": [], "confidence": 0,
             "method": "", "reasoning": "", "warnings": [],
         })
+    # Unclassified always takes priority — red regardless of match state
+    for r in rows:
+        if r.get("transaction_category") == "unclassified":
+            r["_st"] = "unclassified"
     rows.sort(key=lambda r: r.get("row", 0))
 
     lines = ['<div style="margin:0 16px 12px;">']
     lines.append("<table class='txn-table'><thead><tr>")
     for h, a in [
         ("Row", "left"), ("Date", "left"), ("Description", "left"),
-        ("Amount", "right"), ("Status", "left"), ("Conf.", "center"), ("Files", "left"),
+        ("Amount", "right"), ("Rule", "left"), ("Status", "left"), ("Conf.", "center"), ("Files", "left"),
     ]:
         lines.append(f'<th style="text-align:{a};">{h}</th>')
     lines.append("</tr></thead><tbody>")
@@ -365,16 +376,19 @@ def _render_txn_table(recon):
         lab = _LABELS.get(r["_st"], "")
         conf = r.get("confidence", 0)
         cs = f"{conf:.0%}" if conf > 0 else "-"
-        amt = f'{r.get("amount", 0):.2f} {r.get("currency", "EUR")}'
+        amt = f'{r.get("amount", 0):.2f}'
         desc = html_lib.escape(r.get("description", ""))
         date = r.get("date", "") or ""
 
-        # Tooltip with reasoning/warnings
+        rule = html_lib.escape(r.get("transaction_category", "") or "")
+
+        # Tooltip with reasoning/errors
         tip_parts = []
         if r.get("reasoning"):
             tip_parts.append(r["reasoning"])
-        if r.get("warnings"):
-            tip_parts.append(", ".join(r["warnings"]))
+        for key in ("errors", "warnings"):
+            if r.get(key):
+                tip_parts.append(", ".join(r[key]))
         tip = html_lib.escape(" | ".join(tip_parts))
 
         # Clickable file links as bullet list
@@ -400,7 +414,7 @@ def _render_txn_table(recon):
         lines.append(
             f'<td style="text-align:right;font-family:monospace;">{amt}</td>'
         )
-        lines.append(f"<td>{lab}</td><td style='text-align:center;'>{cs}</td><td>{fs}</td>")
+        lines.append(f"<td>{rule}</td><td>{lab}</td><td style='text-align:center;'>{cs}</td><td>{fs}</td>")
         lines.append("</tr>")
 
     lines.append("</tbody></table></div>")

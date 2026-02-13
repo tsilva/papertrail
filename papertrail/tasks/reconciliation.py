@@ -433,6 +433,11 @@ def _strip_diacritics(s: str) -> str:
     )
 
 
+def _normalize_for_match(s: str) -> str:
+    """Normalize a string for fuzzy matching: strip diacritics, lowercase, keep only alphanumeric."""
+    return "".join(c for c in _strip_diacritics(s).lower() if c.isalnum())
+
+
 def _match_type_pattern(doc_type: str, pattern: str) -> bool:
     """Check if doc_type matches a pipe-separated pattern (case-insensitive)."""
     doc_lower = doc_type.lower()
@@ -502,6 +507,87 @@ def _validate_required_documents(
         if row_errors:
             errors[m.transaction.row_number] = row_errors
     return errors
+
+
+def _link_shared_documents(
+    all_matches: list[MatchResult],
+    final_unmatched: list[Transaction],
+    all_candidates: list[PDFCandidate],
+    rules: list,
+) -> tuple[list[MatchResult], list[Transaction], set[str]]:
+    """Link shared documents to all transactions matching a rule with shared_types.
+
+    Returns updated (all_matches, final_unmatched, shared_candidate_ids).
+    """
+    shared_candidate_ids: set[str] = set()
+
+    # Combine matched + unmatched transactions for processing
+    matched_by_row = {m.transaction.row_number: m for m in all_matches}
+    all_txns = [m.transaction for m in all_matches] + final_unmatched
+
+    newly_matched: list[MatchResult] = []
+    still_unmatched_rows: set[int] = {txn.row_number for txn in final_unmatched}
+
+    for txn in all_txns:
+        category, rule = _classify_transaction(txn, rules)
+        if rule is None or not rule.shared_types:
+            continue
+
+        txn_date = txn.date_posting or txn.date_value
+
+        for type_pattern, issuing_party_filter in rule.shared_types.items():
+            shared_cands = []
+            for cand in all_candidates:
+                if not cand.document_type or not _match_type_pattern(cand.document_type, type_pattern):
+                    continue
+                if issuing_party_filter is not None and cand.issuing_party:
+                    if _normalize_for_match(cand.issuing_party) != _normalize_for_match(issuing_party_filter):
+                        continue
+                days = _days_between(txn_date, cand.date_issued)
+                if days is not None and days <= _DATE_WINDOW_DAYS:
+                    shared_cands.append(cand)
+
+            if not shared_cands:
+                continue
+
+            # Track shared candidate IDs
+            for cand in shared_cands:
+                shared_candidate_ids.add(cand.candidate_id)
+
+            if txn.row_number in matched_by_row:
+                # Already matched — append shared candidates (skip duplicates)
+                match = matched_by_row[txn.row_number]
+                existing_ids = {c.candidate_id for c in match.pdf_candidates}
+                for cand in shared_cands:
+                    if cand.candidate_id not in existing_ids:
+                        match.pdf_candidates.append(cand)
+                        existing_ids.add(cand.candidate_id)
+            elif txn.row_number in still_unmatched_rows:
+                # Previously unmatched — create a new match with shared docs
+                newly_matched.append(MatchResult(
+                    transaction=txn,
+                    pdf_candidates=list(shared_cands),
+                    method="shared",
+                    confidence=1.0,
+                    reasoning=f"Shared {type_pattern} document(s)",
+                ))
+                still_unmatched_rows.discard(txn.row_number)
+                matched_by_row[txn.row_number] = newly_matched[-1]
+
+    updated_matches = all_matches + newly_matched
+    updated_unmatched = [txn for txn in final_unmatched if txn.row_number in still_unmatched_rows]
+
+    if newly_matched:
+        logger.debug(
+            f"[SHARED] Linked shared documents to {len(newly_matched)} previously unmatched transactions"
+        )
+    if shared_candidate_ids:
+        logger.debug(
+            f"[SHARED] {len(shared_candidate_ids)} shared candidate(s): "
+            f"{', '.join(sorted(shared_candidate_ids)[:5])}"
+        )
+
+    return updated_matches, updated_unmatched, shared_candidate_ids
 
 
 def _write_reconciliation_file(
@@ -633,7 +719,14 @@ def _reconcile_single(
     p2_matched_rows = {m.transaction.row_number for m in p2_matches}
     final_unmatched = [txn for txn in unmatched_txns if txn.row_number not in p2_matched_rows]
 
-    # Redundancy detection: warn if a non-sub-doc candidate matches multiple transactions
+    # Link shared documents (e.g., Shared Toll receipt shared across all SHAREDTOLL transactions)
+    profile = get_current_profile()
+    rules = profile.reconciliation.rules
+    all_matches, final_unmatched, shared_candidate_ids = _link_shared_documents(
+        all_matches, final_unmatched, candidates, rules,
+    )
+
+    # Redundancy detection: warn if a non-sub-doc, non-shared candidate matches multiple transactions
     candidate_match_counts: dict[str, int] = {}
     for m in all_matches:
         for cand in m.pdf_candidates:
@@ -644,7 +737,7 @@ def _reconcile_single(
                 c.candidate_id == cid and c.is_sub_document
                 for m in all_matches for c in m.pdf_candidates
             )
-            if not is_sub_doc:
+            if not is_sub_doc and cid not in shared_candidate_ids:
                 logger.warning(f"[REDUNDANT-MATCH] {cid} matched {count} transactions")
 
     # Build set of all matched PDF candidate_ids
@@ -655,8 +748,6 @@ def _reconcile_single(
     unmatched_files = [c for c in candidates if c.candidate_id not in matched_candidate_ids]
 
     # Validate required document types per transaction category
-    profile = get_current_profile()
-    rules = profile.reconciliation.rules
     validation_errors = _validate_required_documents(all_matches, rules)
     for row_num, row_errors in validation_errors.items():
         txn = next(m.transaction for m in all_matches if m.transaction.row_number == row_num)
