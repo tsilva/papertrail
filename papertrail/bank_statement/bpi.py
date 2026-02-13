@@ -1,5 +1,13 @@
-"""Millennium BCP bank statement parser."""
+"""BPI (Banco BPI) bank statement parser.
 
+Parses XLSX exports from BPI Net Empresas (business banking portal).
+Sheet name: "Download de MOVIMENTOS"
+Row 7: account & currency (e.g., "4-5970154.000.001 (EUR)")
+Row 18: column headers
+Row 19+: transaction data
+"""
+
+import re
 import unicodedata
 from datetime import datetime
 from pathlib import Path
@@ -12,14 +20,12 @@ from papertrail.logging_utils import get_logger
 
 logger = get_logger("bank_statement")
 
-FORMAT = BankFormat.MILLENNIUM_BCP
+FORMAT = BankFormat.BPI
 
-# Row layout
-_HEADER_ROW = 8
-_DATA_START_ROW = 9
+_HEADER_ROW = 18
+_DATA_START_ROW = 19
 
-# Header detection: ASCII-stripped lowercase substrings to match
-_EXPECTED_HEADERS = {"data lancamento", "descricao", "montante"}
+_EXPECTED_HEADERS = {"data mov.", "descricao do movimento", "valor em eur"}
 
 
 def _strip_diacritics(s: str) -> str:
@@ -31,7 +37,7 @@ def _strip_diacritics(s: str) -> str:
 
 
 def can_parse(ws) -> bool:
-    """Detect Millennium BCP format by checking column headers in row 8."""
+    """Detect BPI format by checking column headers in row 18."""
     headers = set()
     for col in range(1, 8):
         val = ws.cell(row=_HEADER_ROW, column=col).value
@@ -41,11 +47,11 @@ def can_parse(ws) -> bool:
 
 
 def _parse_date_str(value: str) -> Optional[str]:
-    """Parse DD/MM/YYYY or DD-MM-YYYY to YYYY-MM-DD."""
+    """Parse DD-MM-YYYY to YYYY-MM-DD."""
     if not value or not value.strip():
         return None
     s = value.strip()
-    for fmt in ("%d/%m/%Y", "%d-%m-%Y"):
+    for fmt in ("%d-%m-%Y", "%d/%m/%Y"):
         try:
             return datetime.strptime(s, fmt).strftime("%Y-%m-%d")
         except ValueError:
@@ -54,7 +60,7 @@ def _parse_date_str(value: str) -> Optional[str]:
 
 
 def parse(xlsx_path: Path) -> Optional[BankStatementData]:
-    """Parse a Millennium BCP bank statement XLSX."""
+    """Parse a BPI bank statement XLSX."""
     wb = openpyxl.load_workbook(xlsx_path, data_only=True)
     ws = wb.active
 
@@ -62,46 +68,53 @@ def parse(xlsx_path: Path) -> Optional[BankStatementData]:
         wb.close()
         return None
 
-    # Extract metadata from header rows (1-6)
-    # Row 2: account info in C3 (e.g., "0000045615660381 - EUR")
-    account_raw = str(ws.cell(row=2, column=3).value or "").strip()
-    parts = account_raw.split(" - ")
-    account_number = parts[0].strip() if parts else ""
-    currency = parts[1].strip() if len(parts) > 1 else "EUR"
+    # Row 7, column 3: account & currency (e.g., "4-5970154.000.001 (EUR)")
+    account_raw = str(ws.cell(row=7, column=3).value or "").strip()
+    m = re.match(r"([\d\-.]+)\s*\((\w+)\)", account_raw)
+    if m:
+        account_number = m.group(1).strip()
+        currency = m.group(2).strip()
+    else:
+        account_number = account_raw
+        currency = "EUR"
 
-    # Row 3: start date in C3 (e.g., "01/01/2026")
-    period_start = _parse_date_str(str(ws.cell(row=3, column=3).value or ""))
-
-    # Row 4: end date in C3 (e.g., "31/01/2026")
-    period_end = _parse_date_str(str(ws.cell(row=4, column=3).value or ""))
-
-    # Count transaction rows (row 9+, non-empty description in C3)
+    # Scan transaction rows (19+) for dates and count
+    dates = []
     transaction_count = 0
     for row in ws.iter_rows(min_row=_DATA_START_ROW, max_col=4):
-        if row[2].value is not None:  # C3 = description
+        cell_val = row[0].value  # Column A: "Data Mov."
+        if cell_val is None:
+            continue
+        date_str = str(cell_val).strip()
+        parsed = _parse_date_str(date_str)
+        if parsed:
+            dates.append(parsed)
             transaction_count += 1
 
     wb.close()
 
-    if not period_start or not period_end:
-        logger.warning(f"Could not parse date range from {xlsx_path.name}")
+    if not dates:
+        logger.warning(f"No transaction dates found in {xlsx_path.name}")
         return None
 
+    period_start = min(dates)
+    period_end = max(dates)
+
     logger.debug(
-        f"[BANK-PARSE] {xlsx_path.name}: Millennium BCP, "
+        f"[BANK-PARSE] {xlsx_path.name}: BPI, "
         f"account={account_number}, {period_start} to {period_end}, "
         f"{transaction_count} transactions"
     )
 
     return BankStatementData(
-        bank_format=BankFormat.MILLENNIUM_BCP,
+        bank_format=BankFormat.BPI,
         account_number=account_number,
         currency=currency,
         period_start=period_start,
         period_end=period_end,
         transaction_count=transaction_count,
-        issuing_party="millennium-bcp",
-        issuing_party_raw="Millennium BCP",
+        issuing_party="bpi",
+        issuing_party_raw="BPI",
     )
 
 
@@ -114,10 +127,25 @@ def _parse_date_cell(value) -> Optional[str]:
     return _parse_date_str(str(value))
 
 
+def _parse_amount(value) -> Optional[float]:
+    """Parse an amount cell value, handling European comma decimal format."""
+    if value is None:
+        return None
+    try:
+        return float(value)
+    except (ValueError, TypeError):
+        pass
+    try:
+        return float(str(value).replace(",", "."))
+    except (ValueError, TypeError):
+        return None
+
+
 def load_transactions(xlsx_path: Path) -> Optional[list[dict]]:
-    """Load transactions from a Millennium BCP bank statement.
+    """Load transactions from a BPI bank statement.
 
     Returns list of transaction dicts, or None if not a recognized format.
+    BPI has no "treated" or "notes" columns — all transactions are included.
     """
     wb = openpyxl.load_workbook(xlsx_path, data_only=True)
     ws = wb.active
@@ -127,21 +155,12 @@ def load_transactions(xlsx_path: Path) -> Optional[list[dict]]:
         return None
 
     transactions = []
-    for row in ws.iter_rows(min_row=_DATA_START_ROW, max_col=7):
-        if row[2].value is None:  # description column C
+    for row in ws.iter_rows(min_row=_DATA_START_ROW, max_col=4):
+        if row[0].value is None:  # Data Mov. column A
             continue
 
-        treated_val = str(row[6].value or "").strip()
-        if treated_val.lower() not in ("nao", "não", ""):
-            continue
-
-        amount_raw = row[3].value
-        if amount_raw is None:
-            continue
-
-        try:
-            amount = float(amount_raw)
-        except (ValueError, TypeError):
+        amount = _parse_amount(row[3].value)
+        if amount is None:
             continue
 
         transactions.append({
@@ -150,9 +169,9 @@ def load_transactions(xlsx_path: Path) -> Optional[list[dict]]:
             "date_value": _parse_date_cell(row[1].value),
             "description": str(row[2].value or "").strip(),
             "amount": amount,
-            "currency": str(row[4].value or "EUR").strip(),
-            "notes": str(row[5].value or "").strip(),
-            "treated": treated_val,
+            "currency": "EUR",
+            "notes": "",
+            "treated": "",
         })
 
     wb.close()

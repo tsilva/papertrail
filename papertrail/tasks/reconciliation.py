@@ -18,17 +18,6 @@ from papertrail.tasks import task_log_context
 
 logger = get_logger("reconcile")
 
-# Excel layout constants (Millennium BCP format)
-_HEADER_ROW = 8  # Row with column headers
-_DATA_START_ROW = 9  # First data row
-_COL_DATA_LANCAMENTO = 1  # A
-_COL_DATA_VALOR = 2  # B
-_COL_DESCRICAO = 3  # C
-_COL_MONTANTE = 4  # D
-_COL_MOEDA = 5  # E
-_COL_NOTAS = 6  # F
-_COL_TRATADO = 7  # G
-
 # Matching parameters
 _AMOUNT_TOLERANCE = 0.01
 _DATE_WINDOW_DAYS = 30
@@ -100,44 +89,34 @@ def _parse_date(value) -> Optional[str]:
 
 
 def _load_transactions(excel_path: Path) -> list[Transaction]:
-    """Load untreated transactions from a Millennium BCP Excel export."""
+    """Load transactions from a bank statement Excel export.
+
+    Dispatches to the appropriate bank format parser based on file content.
+    """
     import warnings
     warnings.filterwarnings("ignore", message="Workbook contains no default style")
+
+    from papertrail.bank_statement.extractor import _PARSERS
+
     wb = openpyxl.load_workbook(excel_path, data_only=True)
     ws = wb.active
 
-    transactions = []
-    for row in ws.iter_rows(min_row=_DATA_START_ROW, max_col=_COL_TRATADO):
-        if row[_COL_DESCRICAO - 1].value is None:
-            continue
-
-        treated_val = str(row[_COL_TRATADO - 1].value or "").strip()
-
-        if treated_val.lower() not in ("nao", "não", ""):
-            continue
-
-        amount_raw = row[_COL_MONTANTE - 1].value
-        if amount_raw is None:
-            continue
-
-        try:
-            amount = float(amount_raw)
-        except (ValueError, TypeError):
-            continue
-
-        transactions.append(Transaction(
-            row_number=row[0].row,
-            date_posting=_parse_date(row[_COL_DATA_LANCAMENTO - 1].value),
-            date_value=_parse_date(row[_COL_DATA_VALOR - 1].value),
-            description=str(row[_COL_DESCRICAO - 1].value or "").strip(),
-            amount=amount,
-            currency=str(row[_COL_MOEDA - 1].value or "EUR").strip(),
-            notes=str(row[_COL_NOTAS - 1].value or "").strip(),
-            treated=treated_val,
-        ))
-
+    selected_parser = None
+    for parser in _PARSERS:
+        if parser.can_parse(ws):
+            selected_parser = parser
+            break
     wb.close()
-    return transactions
+
+    if selected_parser is None:
+        logger.warning(f"No parser recognized format of {excel_path.name}")
+        return []
+
+    txn_dicts = selected_parser.load_transactions(excel_path)
+    if txn_dicts is None:
+        return []
+
+    return [Transaction(**d) for d in txn_dicts]
 
 
 def _discover_bank_statements(export_path: Path) -> list[Path]:
@@ -695,11 +674,6 @@ def _reconcile_single(
 
     candidates = _load_pdf_candidates(export_path)
 
-    if not candidates:
-        if not quiet:
-            console.warning("No document candidates found")
-        return empty_stats
-
     p1_matches, unmatched_txns, remaining_cands = (
         _phase1_deterministic_match(transactions, candidates)
     )
@@ -756,14 +730,14 @@ def _reconcile_single(
             f"[INCOMPLETE] Row {row_num} ({category}): {', '.join(row_errors)}"
         )
 
-    if all_matches and not dry_run:
+    if not dry_run:
         _write_reconciliation_file(
             excel_path, all_matches, final_unmatched, len(transactions),
             errors=validation_errors,
             unmatched_files=unmatched_files,
             rules=rules,
         )
-    elif dry_run and all_matches:
+    elif dry_run:
         if not quiet:
             console.detail(f"Dry run: would write {len(all_matches)} matches to .reconciliation file")
 
