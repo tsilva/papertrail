@@ -103,6 +103,7 @@ class ReconciliationRule:
     match_description: List[str] = field(default_factory=list)
     direction: Optional[str] = None  # "credit" or "debit"
     required_types: Dict[str, Any] = field(default_factory=dict)  # pattern → cardinality
+    shared_types: Dict[str, Optional[str]] = field(default_factory=dict)  # type pattern → issuing_party filter
 
 
 @dataclass
@@ -291,6 +292,7 @@ def _parse_reconciliation_config(recon_data: Dict[str, Any]) -> ReconciliationCo
             match_description=rd.get("match_description", []),
             direction=rd.get("direction"),
             required_types=rd.get("required_types", {}),
+            shared_types=rd.get("shared_types", {}),
         ))
     return ReconciliationConfig(rules=rules)
 

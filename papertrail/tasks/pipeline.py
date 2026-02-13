@@ -340,11 +340,11 @@ def pipeline(export_date_arg=None, processed_path_override=None):
                         console=console, quiet=True,
                     )
                     recon_stats_all.append(recon_stats)
-                    matched = recon_stats["matched"]
+                    reconciled = recon_stats["reconciled"]
                     total = recon_stats["total"]
-                    pct = recon_stats["match_rate"]
+                    pct = recon_stats["reconciliation_rate"]
                     if total > 0:
-                        step.success(f"{matched}/{total} matched ({pct:.0f}%)")
+                        step.success(f"{reconciled}/{total} reconciled ({pct:.0f}%)")
                     else:
                         step.warning("No transactions found")
                 except Exception as e:
@@ -354,13 +354,13 @@ def pipeline(export_date_arg=None, processed_path_override=None):
     # Build reconciliation summary
     if recon_stats_all:
         total_statements = len(recon_stats_all)
-        total_matched = sum(s["matched"] for s in recon_stats_all)
+        total_reconciled = sum(s["reconciled"] for s in recon_stats_all)
         total_txns = sum(s["total"] for s in recon_stats_all)
         if total_txns > 0:
-            avg_rate = total_matched / total_txns * 100
-            summary["Matched"] = (
+            avg_rate = total_reconciled / total_txns * 100
+            summary["Reconciled"] = (
                 f"{total_statements} statement{'s' if total_statements != 1 else ''}, "
-                f"{avg_rate:.0f}% matched ({total_matched}/{total_txns})"
+                f"{avg_rate:.0f}% reconciled ({total_reconciled}/{total_txns})"
             )
 
     # Add output paths
