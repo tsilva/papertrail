@@ -8,6 +8,7 @@ from typing import Optional
 class BankFormat(Enum):
     """Supported bank statement formats."""
     MILLENNIUM_BCP = "millennium_bcp"
+    BPI = "bpi"
 
 
 @dataclass
