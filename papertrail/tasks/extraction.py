@@ -851,14 +851,11 @@ def task_sync(processed_path: Path, dry_run: bool = False,
             return name[:37] + "..." if len(name) > 40 else name
 
         if workers == 1:
-            # Sequential path (single worker)
-            with console.progress("Syncing", total=len(targets)) as progress:
-                task = progress.add_task("Syncing", total=len(targets))
-                for item in targets:
-                    progress.update(task, description=f"[dim]{_truncated_name(item[1])}[/dim]")
-                    metadata_path, old_data, new_metadata, error = classify_one(item)
-                    process_result(metadata_path, old_data, new_metadata, error)
-                    progress.update(task, advance=1)
+            # Sequential path — no progress bar (interactive prompts conflict with Live display)
+            for i, item in enumerate(targets, 1):
+                logger.debug(f"Syncing [{i}/{len(targets)}] {_truncated_name(item[1])}")
+                metadata_path, old_data, new_metadata, error = classify_one(item)
+                process_result(metadata_path, old_data, new_metadata, error)
         else:
             # Parallel path - disable interactive prompts (not thread-safe)
             set_interactive(False)
