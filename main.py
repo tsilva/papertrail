@@ -157,7 +157,9 @@ def main():
     parser.add_argument("--copy_dest_folder", type=str, help="Destination folder for copied files.")
     parser.add_argument("--export_base_dir", type=str, help="Base export directory.")
     parser.add_argument("--run_merge", action="store_true", help="Run PDF merge for changed directories.")
-    parser.add_argument("--export_date", type=str, help="Export date in YYYY-MM format (for pipeline).")
+    date_group = parser.add_mutually_exclusive_group()
+    date_group.add_argument("--months", type=int, default=2, help="Number of months to process (default: 2). Counts back from current month.")
+    date_group.add_argument("--export_date", type=str, help="Export date in YYYY-MM format (for pipeline).")
     parser.add_argument("--dry_run", action="store_true", help="Show what would be changed without modifying files.")
     parser.add_argument("--all_unknown", action="store_true", help="Re-extract all files with $UNKNOWN$ values.")
     parser.add_argument("--workers", "-w", type=int, default=1, help="Number of parallel workers (default: 1).")
@@ -178,15 +180,18 @@ def main():
 
     task = args.task
 
+    if args.months < 1:
+        parser.error("The --months argument must be >= 1.")
+
     if task == "pipeline":
         if args.export_date and not re.match(r"^\d{4}-\d{2}$", args.export_date):
             parser.error("The --export_date argument must be in YYYY-MM format.")
-        pipeline(export_date_arg=args.export_date)
+        pipeline(months=args.months, export_date_arg=args.export_date)
         return
 
     if task == "gmail_download":
         try:
-            task_gmail_download()
+            task_gmail_download(months=args.months)
         except RuntimeError:
             sys.exit(1)
         return
