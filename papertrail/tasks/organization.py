@@ -153,13 +153,26 @@ def _get_nested_value(metadata: dict, key: str):
 
 
 def _match_value(actual, pattern: str) -> bool:
-    """Match a metadata value against a pattern (supports trailing wildcard)."""
+    """Match a metadata value against a pattern (supports trailing wildcard and numeric operators)."""
     if actual is None:
         return False
+    # Numeric comparison operators
+    for op in ('>=', '<=', '!=', '>', '<'):
+        if pattern.startswith(op):
+            try:
+                return {
+                    '>':  float(actual) > float(pattern[len(op):]),
+                    '<':  float(actual) < float(pattern[len(op):]),
+                    '>=': float(actual) >= float(pattern[len(op):]),
+                    '<=': float(actual) <= float(pattern[len(op):]),
+                    '!=': float(actual) != float(pattern[len(op):]),
+                }[op]
+            except (ValueError, TypeError):
+                return False
     actual_str = str(actual)
     if pattern.endswith("*"):
         return actual_str.startswith(pattern[:-1])
-    # Numeric comparison for numeric values (handles float repr: 0.0 vs "0")
+    # Numeric equality for numeric values (handles float repr: 0.0 vs "0")
     if isinstance(actual, (int, float)):
         try:
             return float(actual) == float(pattern)

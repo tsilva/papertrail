@@ -72,7 +72,7 @@ class PortugueseInvoiceQR:
         doc_type_map = {
             "FT": "invoice",
             "FS": "invoice",
-            "FR": "receipt",
+            "FR": "invoice-receipt",
             "NC": "invoice-credit",
             "ND": "invoice-debit",
             "RC": "receipt",
