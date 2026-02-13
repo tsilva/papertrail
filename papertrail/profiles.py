@@ -93,6 +93,7 @@ class ReconciliationRule:
     direction: Optional[str] = None  # "credit" or "debit"
     required_types: Dict[str, Any] = field(default_factory=dict)  # pattern → cardinality
     shared_types: Dict[str, Optional[str]] = field(default_factory=dict)  # type pattern → issuing_party filter
+    expected_page_count: Dict[str, int] = field(default_factory=dict)  # type pattern → expected page count
 
 
 @dataclass
@@ -287,6 +288,7 @@ def _parse_reconciliation_config(recon_data: Dict[str, Any]) -> ReconciliationCo
             direction=rd.get("direction"),
             required_types=rd.get("required_types", {}),
             shared_types=rd.get("shared_types", {}),
+            expected_page_count=rd.get("expected_page_count", {}),
         ))
     return ReconciliationConfig(rules=rules)
 
