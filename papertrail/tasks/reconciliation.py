@@ -1,7 +1,6 @@
 """Bank transaction reconciliation: matches bank transactions to PDF documents."""
 
 import json
-import unicodedata
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -10,6 +9,7 @@ from typing import Optional
 import openpyxl
 
 from papertrail.config import get_current_profile, get_openai_client
+from papertrail.text_utils import strip_diacritics
 from papertrail.console import get_console
 from papertrail.llm import _extract_json_from_response
 from papertrail.logging_utils import get_logger
@@ -406,17 +406,9 @@ Respond in JSON:
     return matches
 
 
-def _strip_diacritics(s: str) -> str:
-    """Remove diacritics/accents from a string."""
-    return "".join(
-        c for c in unicodedata.normalize("NFD", s)
-        if unicodedata.category(c) != "Mn"
-    )
-
-
 def _normalize_for_match(s: str) -> str:
     """Normalize a string for fuzzy matching: strip diacritics, lowercase, keep only alphanumeric."""
-    return "".join(c for c in _strip_diacritics(s).lower() if c.isalnum())
+    return "".join(c for c in strip_diacritics(s).lower() if c.isalnum())
 
 
 def _match_type_pattern(doc_type: str, pattern: str) -> bool:
@@ -444,7 +436,7 @@ def _classify_transaction(
     rules: list,
 ) -> tuple[str, object | None]:
     """Classify transaction by first-match-wins rules. Returns (category_name, rule)."""
-    normalized = _strip_diacritics(txn.description).upper()
+    normalized = strip_diacritics(txn.description).upper()
     for rule in rules:
         # Check direction filter
         if rule.direction is not None:

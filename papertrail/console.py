@@ -179,25 +179,30 @@ class PapertrailConsole:
         else:
             self.console.print(f"{symbol} {msg_style}{message}[/]")
 
-    def success(self, message: str, indent: bool = True) -> None:
+    def _print_line(self, symbol: str, style: str | None, message: str, indent: bool) -> None:
         prefix = "   " if indent else ""
-        self.console.print(f"{prefix}[green]\u2713[/green] {message}")
+        if symbol:
+            text = f"{prefix}{symbol} {message}"
+        elif style:
+            text = f"{prefix}[{style}]{message}[/{style}]"
+        else:
+            text = f"{prefix}{message}"
+        self.console.print(text)
+
+    def success(self, message: str, indent: bool = True) -> None:
+        self._print_line("[green]\u2713[/green]", None, message, indent)
 
     def warning(self, message: str, indent: bool = True) -> None:
-        prefix = "   " if indent else ""
-        self.console.print(f"{prefix}[yellow]![/yellow] {message}")
+        self._print_line("[yellow]![/yellow]", None, message, indent)
 
     def error(self, message: str, indent: bool = True) -> None:
-        prefix = "   " if indent else ""
-        self.console.print(f"{prefix}[red]\u2717[/red] {message}")
+        self._print_line("[red]\u2717[/red]", None, message, indent)
 
     def detail(self, message: str, indent: bool = True) -> None:
-        prefix = "   " if indent else ""
-        self.console.print(f"{prefix}[dim]{message}[/dim]")
+        self._print_line("", "dim", message, indent)
 
     def info(self, message: str, indent: bool = True) -> None:
-        prefix = "   " if indent else ""
-        self.console.print(f"{prefix}{message}")
+        self._print_line("", None, message, indent)
 
     def progress(
         self,
@@ -214,16 +219,15 @@ class PapertrailConsole:
                 console=self.console,
                 transient=transient,
             )
-        else:
-            return Progress(
-                TextColumn("[progress.description]{task.description}"),
-                BarColumn(),
-                TaskProgressColumn(),
-                MofNCompleteColumn(),
-                TimeElapsedColumn(),
-                console=self.console,
-                transient=transient,
-            )
+        return Progress(
+            TextColumn("[progress.description]{task.description}"),
+            BarColumn(),
+            TaskProgressColumn(),
+            MofNCompleteColumn(),
+            TimeElapsedColumn(),
+            console=self.console,
+            transient=transient,
+        )
 
     def track(
         self,

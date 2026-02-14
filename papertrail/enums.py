@@ -105,22 +105,22 @@ def load_issuing_parties(processed_files_dir: Optional[str] = None) -> list[str]
     return sorted(values_set)
 
 
+def _get_cached(cached: list[str] | None, loader, session_set: set[str]) -> tuple[list[str], list[str]]:
+    """Return (result, new_cache) with session-aware cache invalidation."""
+    if cached is None or session_set - set(cached):
+        cached = loader()
+    return cached, cached
+
+
 def get_document_types() -> list[str]:
     """Get document types list (cached after first call, includes session types)."""
     global _DOCUMENT_TYPES_LIST
-    if _DOCUMENT_TYPES_LIST is None:
-        _DOCUMENT_TYPES_LIST = load_document_types()
-    # Always include session types even if cache was populated before they were added
-    if _session_types - set(_DOCUMENT_TYPES_LIST):
-        _DOCUMENT_TYPES_LIST = load_document_types()
-    return _DOCUMENT_TYPES_LIST
+    _DOCUMENT_TYPES_LIST, result = _get_cached(_DOCUMENT_TYPES_LIST, load_document_types, _session_types)
+    return result
 
 
 def get_issuing_parties() -> list[str]:
     """Get issuing parties list (cached after first call, includes session parties)."""
     global _ISSUING_PARTIES_LIST
-    if _ISSUING_PARTIES_LIST is None:
-        _ISSUING_PARTIES_LIST = load_issuing_parties()
-    if _session_parties - set(_ISSUING_PARTIES_LIST):
-        _ISSUING_PARTIES_LIST = load_issuing_parties()
-    return _ISSUING_PARTIES_LIST
+    _ISSUING_PARTIES_LIST, result = _get_cached(_ISSUING_PARTIES_LIST, load_issuing_parties, _session_parties)
+    return result

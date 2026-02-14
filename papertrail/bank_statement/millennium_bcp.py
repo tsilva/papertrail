@@ -1,6 +1,5 @@
 """Millennium BCP bank statement parser."""
 
-import unicodedata
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
@@ -9,6 +8,7 @@ import openpyxl
 
 from papertrail.bank_statement.models import BankFormat, BankStatementData
 from papertrail.logging_utils import get_logger
+from papertrail.text_utils import strip_diacritics
 
 logger = get_logger("bank_statement")
 
@@ -22,21 +22,13 @@ _DATA_START_ROW = 9
 _EXPECTED_HEADERS = {"data lancamento", "descricao", "montante"}
 
 
-def _strip_diacritics(s: str) -> str:
-    """Remove diacritics/accents from a string."""
-    return "".join(
-        c for c in unicodedata.normalize("NFD", s)
-        if unicodedata.category(c) != "Mn"
-    )
-
-
 def can_parse(ws) -> bool:
     """Detect Millennium BCP format by checking column headers in row 8."""
     headers = set()
     for col in range(1, 8):
         val = ws.cell(row=_HEADER_ROW, column=col).value
         if val:
-            headers.add(_strip_diacritics(str(val).strip().lower()))
+            headers.add(strip_diacritics(str(val).strip().lower()))
     return _EXPECTED_HEADERS.issubset(headers)
 
 

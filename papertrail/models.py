@@ -2,7 +2,6 @@
 
 import re
 from datetime import datetime
-from enum import Enum
 from typing import Optional
 
 from pydantic import BaseModel, Field, field_validator
@@ -132,12 +131,3 @@ class DocumentMetadata(BaseModel):
         value = value.strip().upper()
         currency_map = {'€': 'EUR', 'EURO': 'EUR', '$': 'USD', '£': 'GBP'}
         return currency_map.get(value, value)
-
-
-def normalize_enum_field_in_dict(data: dict, field_name: str, enum_prefix: str) -> None:
-    """Normalize enum fields in metadata dict (mutates in place)."""
-    value = data.get(field_name)
-    if isinstance(value, Enum):
-        data[field_name] = value.value
-    elif isinstance(value, str):
-        data[field_name] = clean_enum_string(value, enum_prefix)

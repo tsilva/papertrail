@@ -154,6 +154,9 @@ class GmailDownloader:
                     self._extract_attachments_from_parts(part["parts"], allowed_types)
                 )
 
+            if attachment_id and filename and mime_type not in allowed_types:
+                logger.debug(f"Skipped attachment '{filename}' (mime_type={mime_type}, not in {allowed_types})")
+
             if attachment_id and mime_type in allowed_types and filename:
                 attachments.append(
                     {
@@ -273,19 +276,22 @@ class GmailDownloader:
                 message = self.get_message(msg_id)
                 attachments = self.extract_attachments(message)
 
+                downloaded_count = 0
                 for att in attachments:
                     output_path = self.download_attachment(
                         msg_id, att["attachment_id"], att["filename"]
                     )
 
                     if output_path:
+                        downloaded_count += 1
                         stats["attachments_downloaded"] += 1
                         stats["bytes_downloaded"] += att["size"]
                     else:
                         stats["attachments_failed"] += 1
 
-                processed_ids.add(msg_id)
-                stats["messages_processed"] += 1
+                if downloaded_count > 0:
+                    processed_ids.add(msg_id)
+                    stats["messages_processed"] += 1
 
             except HttpError as e:
                 if self.failure_logger:

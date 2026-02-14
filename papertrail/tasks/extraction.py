@@ -35,9 +35,6 @@ from papertrail.metadata import build_hash_index, save_metadata_json, load_json_
 from papertrail.hashing import hash_file_fast, hash_file_content, hash_file_text
 from papertrail.dedup import dedup_batch
 
-def enum_value(v):
-    """Extract value from enum or return as-is."""
-    return v.value if hasattr(v, 'value') else v
 from papertrail.tasks import task_log_context
 from papertrail.qr import extract_all_metadata_from_qr, QRExtractedMetadata
 from papertrail.nif_lookup import NIFLookupCache
@@ -864,8 +861,8 @@ def task_sync(processed_path: Path, dry_run: bool = False,
                 failed_count += 1
                 return
 
-            new_doc_type = enum_value(new_metadata.document_type)
-            new_issuer = enum_value(new_metadata.issuing_party)
+            new_doc_type = new_metadata.document_type
+            new_issuer = new_metadata.issuing_party
             new_date = new_metadata.date_issued
 
             if old_data is None:

@@ -11,7 +11,11 @@ from archive_extractor import extract_archives
 
 from papertrail.config import get_current_profile
 from papertrail.console import get_console
-from papertrail.logging_utils import get_logger, setup_task_logging, suppress_console_logging, suppress_stdout
+import io
+import warnings
+from contextlib import redirect_stdout, redirect_stderr
+
+from papertrail.logging_utils import get_logger, setup_task_logging, suppress_console_logging
 from papertrail.mbox import extract_mbox_attachments
 from papertrail.metadata import load_json_data
 from papertrail.tasks.validation import validate_merged_pdf
@@ -115,7 +119,8 @@ def pipeline(months=2, export_date_arg=None, processed_path_override=None):
                 elif totals['messages_processed'] > 0:
                     step.success(f"{totals['messages_processed']} messages, 0 new attachments")
                 else:
-                    step.warning("No messages found")
+                    date_range = f"{export_dates[0]} to {export_dates[-1]}"
+                    step.warning(f"No messages found ({date_range})")
             except Exception as e:
                 msg = f"Gmail download failed, continuing pipeline ({e})"
                 step.warning(msg)
@@ -143,7 +148,8 @@ def pipeline(months=2, export_date_arg=None, processed_path_override=None):
         # Archive extraction
         with console.step_progress("Extract compressed archives") as step:
             logger.debug("### Extract compressed archives...")
-            with suppress_stdout():
+            with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()), warnings.catch_warnings():
+                warnings.simplefilter("ignore")
                 results = extract_archives(rd, passwords=passwords if passwords else None)
             total_extracted = 0
             failures = 0
