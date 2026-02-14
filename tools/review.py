@@ -115,6 +115,23 @@ function _ensureDragHandle(panel) {
         document.addEventListener('mouseup', onUp);
     });
 }
+
+/* ── Fullscreen image on click ── */
+document.addEventListener('click', function(e) {
+    var img = e.target.closest('.preview-img');
+    if (!img) return;
+    var overlay = document.createElement('div');
+    overlay.className = 'preview-fullscreen-overlay';
+    overlay.innerHTML = '<img src="' + img.src + '"/>';
+    overlay.onclick = function() { overlay.remove(); };
+    document.body.appendChild(overlay);
+});
+document.addEventListener('keydown', function(e) {
+    if (e.key === 'Escape') {
+        var o = document.querySelector('.preview-fullscreen-overlay');
+        if (o) o.remove();
+    }
+});
 """
 
 _CSS = """
@@ -161,6 +178,16 @@ _CSS = """
 }
 .preview-img {
     max-width: 100%; border: 1px solid var(--border-color-primary, #444);
+    border-radius: 4px; cursor: zoom-in;
+}
+.preview-fullscreen-overlay {
+    position: fixed; inset: 0; z-index: 9999;
+    background: rgba(0,0,0,0.9); display: flex;
+    align-items: center; justify-content: center;
+    cursor: zoom-out;
+}
+.preview-fullscreen-overlay img {
+    max-width: 95vw; max-height: 95vh; object-fit: contain;
     border-radius: 4px;
 }
 #selected_file_bridge {
