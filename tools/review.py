@@ -608,11 +608,7 @@ def build_ui():
                     '<p class="placeholder">Load a folder to view bank statements.</p>'
                 )
             with gr.Column(scale=1, min_width=400, elem_id="preview_panel"):
-                bank_file_dd = gr.Dropdown(
-                    label="Preview File",
-                    choices=[],
-                    interactive=True,
-                )
+                bank_file_label = gr.Markdown("*No file selected*")
                 with gr.Tabs():
                     with gr.Tab("Preview"):
                         bank_preview = gr.HTML(
@@ -631,7 +627,6 @@ def build_ui():
             empty = (
                 "Select an export folder.",
                 '<p class="placeholder">No data loaded.</p>',
-                gr.update(choices=[], value=None),
             )
             if not folder_name or not base_dir:
                 _CACHE["data"] = {}
@@ -640,49 +635,32 @@ def build_ui():
             data, status = load_export_folder(folder_path)
             if not data:
                 _CACHE["data"] = {}
-                return (status, empty[1], empty[2])
+                return (status, empty[1])
 
             _CACHE["data"] = data
 
             bs_list = data.get("bank_statements", [])
             bank_content = render_all_banks_html(bs_list)
 
-            bank_file_choices = data.get("bank_files", [])
-            return (
-                status, bank_content,
-                gr.update(choices=bank_file_choices, value=bank_file_choices[0] if bank_file_choices else None),
-            )
+            return (status, bank_content)
 
         folder_dd.change(
             on_load, [folder_dd, export_base_state],
-            [status_bar, bank_html, bank_file_dd],
-        )
-
-        # ── Bank: file selection via Dropdown ────────────────────
-
-        def on_bank_dd_select(filename):
-            if not filename:
-                return (*_EMPTY_PREVIEW, "")
-            preview, js_str, pl, pg = _do_preview(filename, 0)
-            return preview, js_str, pl, pg, filename
-
-        bank_file_dd.change(
-            on_bank_dd_select, [bank_file_dd],
-            [bank_preview, bank_json, b_page, bank_page, bank_file],
+            [status_bar, bank_html],
         )
 
         # ── Bank: file selection via JS bridge (click in table) ──
 
         def on_bridge_input(raw_value):
             if not raw_value:
-                return gr.update(), *_EMPTY_PREVIEW, ""
+                return "*No file selected*", *_EMPTY_PREVIEW, ""
             filename = raw_value.rsplit("|", 1)[0] if "|" in raw_value else raw_value
             preview, js_str, pl, pg = _do_preview(filename, 0)
-            return gr.update(value=filename), preview, js_str, pl, pg, filename
+            return f"**{filename}**", preview, js_str, pl, pg, filename
 
         selected_file_bridge.change(
             on_bridge_input, [selected_file_bridge],
-            [bank_file_dd, bank_preview, bank_json, b_page, bank_page, bank_file],
+            [bank_file_label, bank_preview, bank_json, b_page, bank_page, bank_file],
         )
 
         # ── Bank: page navigation ────────────────────────────────
@@ -710,7 +688,7 @@ def build_ui():
         if default_folder:
             app.load(
                 on_load, [folder_dd, export_base_state],
-                [status_bar, bank_html, bank_file_dd],
+                [status_bar, bank_html],
             )
 
     return app
