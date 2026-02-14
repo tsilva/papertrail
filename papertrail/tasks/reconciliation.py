@@ -171,7 +171,7 @@ def _load_pdf_candidates(export_path: Path) -> list[PDFCandidate]:
                     sub_doc_index=i,
                     is_sub_document=True,
                 ))
-            continue  # Skip parent as candidate
+            # Parent also added below as candidate for aggregated amount matching
 
         total_amount = data.get("total_amount")
         if total_amount is not None:
