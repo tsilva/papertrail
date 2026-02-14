@@ -27,7 +27,7 @@ These are core constraints that must be preserved in all changes:
 
 ### Four-Phase Extraction Pipeline
 1. **Phase 0 - QR Extraction** (optional): Scans PDF for QR codes, extracts metadata with 100% confidence (e.g., Portuguese invoice QR codes)
-2. **Phase 1 - Raw Extraction** (`classify_pdf_document`): Renders first 2 pages as JPEG, sends to LLM with vision. For `issuing_party`, extracts EXACTLY as appears. For `document_type`, extracts only the core type label (strips dates, billing periods, reference numbers). For `document_title`, extracts the specific subject/product/service/transaction (e.g., "YouTube Premium", "Claude API")
+2. **Phase 1 - Raw Extraction** (`classify_pdf_document`): Renders first 2 pages as JPEG, sends to LLM with vision. For multi-QR PDFs, the LLM prompt includes context about sub-document count and issuer NIFs so it classifies the aggregator/wrapper document rather than an embedded invoice. For `issuing_party`, extracts EXACTLY as appears. For `document_type`, extracts only the core type label (strips dates, billing periods, reference numbers). For `document_title`, extracts the specific subject/product/service/transaction (e.g., "YouTube Premium", "Claude API")
 3. **Phase 2 - Normalization** (`normalize_metadata`): LLM maps raw values to known types/parties from processed files. For new values, suggests a slug-cased name instead of falling back to `$UNKNOWN$`
 4. **Phase 3 - Merge**: QR-extracted values override LLM values (QR is 100% accurate)
 5. **Phase 2b - Interactive Confirmation** (`confirm_classification`): If normalized value is not in known types/parties, prompts user to accept, pick existing, enter custom, or skip. Bypassed for QR-overridden document_type and NIF-enriched issuing_party (both 100% accurate). Session caching prevents re-asking for the same value within a run.
@@ -80,7 +80,7 @@ PDF → render pages at 300 DPI → pyzbar decode → detect QR type → parse �
 - `is_portuguese_invoice_qr(content)` - Detection function
 - `parse_portuguese_invoice_qr(qr_data)` - Parser for PT invoice QR codes
 
-**Multi-QR (sub-documents):** When 2+ Portuguese invoice QR codes are detected in a single PDF (e.g., Shared Toll toll aggregator), each becomes a sub-document with independent metadata stored in `sub_documents`. The parent document gets LLM classification (aggregator info) without QR merge. Each sub-document gets NIF-enriched `issuing_party` during extraction. In reconciliation, sub-documents are expanded as independent candidates for matching.
+**Multi-QR (sub-documents):** When 2+ Portuguese invoice QR codes are detected in a single PDF (e.g., Shared Toll toll aggregator), each becomes a sub-document with independent metadata stored in `sub_documents`. The parent document gets LLM classification with multi-QR context injected into the system prompt (sub-document count + issuer NIFs), guiding the LLM to classify the aggregator/wrapper document rather than any embedded invoice or payment reference. QR data is not merged into the parent (`qrcode=null`). Each sub-document gets NIF-enriched `issuing_party` during extraction. In reconciliation, sub-documents are expanded as independent candidates for matching.
 
 **Portuguese QR fields extracted:**
 - `issue_date` from F field (YYYYMMDD → YYYY-MM-DD, stored as `date_issued` in sidecar JSON)

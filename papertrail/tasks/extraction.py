@@ -119,7 +119,8 @@ def _phase0_qr_extract(pdf_path, doc_logger):
         return None, None, []
 
 
-def _phase1_llm_extract(pdf_path, exclude_fields, pre_extracted, ctx, doc_logger):
+def _phase1_llm_extract(pdf_path, exclude_fields, pre_extracted, ctx, doc_logger,
+                        multi_qr_info=None):
     """Phase 1: Render PDF and extract metadata via LLM vision model."""
     t0 = _time.monotonic()
     images_b64 = render_pdf_to_images(pdf_path)
@@ -131,7 +132,8 @@ def _phase1_llm_extract(pdf_path, exclude_fields, pre_extracted, ctx, doc_logger
         for img_b64 in images_b64
     ]
     messages = [
-        {"role": "system", "content": get_system_prompt_raw_extraction(pre_extracted or None)},
+        {"role": "system", "content": get_system_prompt_raw_extraction(
+            pre_extracted or None, multi_qr_info=multi_qr_info)},
         {"role": "user", "content": user_content},
     ]
 
@@ -148,6 +150,14 @@ def _phase1_llm_extract(pdf_path, exclude_fields, pre_extracted, ctx, doc_logger
         doc_logger.log_timing("llm_extraction", _time.monotonic() - t0)
         if response.usage:
             doc_logger.log_llm_usage(ctx.model_id, response.usage.prompt_tokens, response.usage.completion_tokens)
+
+    # Warn if the API appears to have dropped images (token count too low for vision)
+    if response.usage and response.usage.prompt_tokens < 100 and images_b64:
+        logger.warning(
+            f"[VISION-WARNING] Suspiciously low prompt_tokens={response.usage.prompt_tokens} "
+            f"for vision request with {len(images_b64)} images ({pdf_path.name}). "
+            f"The API may not be forwarding images — classification may be hallucinated."
+        )
 
     tool_calls = response.choices[0].message.tool_calls
     if not tool_calls:
@@ -320,12 +330,25 @@ def classify_pdf_document(pdf_path: Path, file_hash: str, failure_logger=None,
         if doc_logger and exclude_fields:
             doc_logger.log_qr_skip(exclude_fields)
 
+    # Build multi-QR context for LLM prompt
+    multi_qr_info = None
+    if is_multi_qr:
+        issuers = []
+        for qr_meta, _ in all_qr_results:
+            name = qr_meta.issuer_nif or qr_meta.issuer_tax_number
+            if name and name not in issuers:
+                issuers.append(name)
+        multi_qr_info = {"count": len(all_qr_results), "issuers": issuers}
+        if doc_logger:
+            logger.debug(f"[MULTI-QR] LLM context: {multi_qr_info}")
+
     try:
         # Phase 1: LLM extraction (retry once on failure)
         raw_metadata = None
         for attempt in range(2):
             try:
-                raw_metadata = _phase1_llm_extract(pdf_path, exclude_fields, pre_extracted, ctx, doc_logger)
+                raw_metadata = _phase1_llm_extract(pdf_path, exclude_fields, pre_extracted, ctx, doc_logger,
+                                                   multi_qr_info=multi_qr_info)
                 break
             except Exception as e:
                 if attempt == 0:
