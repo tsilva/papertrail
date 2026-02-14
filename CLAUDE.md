@@ -276,7 +276,7 @@ The `source_extension` field stores the original file extension when it's not `.
 
 The `hash_text` field stores the text-based hash of a PDF document (first 8 hex chars of SHA256 of normalized text). `null` for scanned/image-only PDFs and XLSX files. Used as an intermediate dedup tier between `hash_file` (byte-level) and `hash_content` (pixel-level) to catch compression duplicates cheaply. Backfill: `python main.py backfill_text_hash <processed_path>`.
 
-The `file_size_kb` field stores the companion document file size in kilobytes (rounded integer). Set during extraction for both PDFs and XLSX files. When `null`, the file size hasn't been backfilled yet. Migration: `scripts/migrate_add_file_size.py <dir> [--dry-run]`.
+The `file_size_kb` field stores the companion document file size in kilobytes (rounded integer). Set during extraction for both PDFs and XLSX files. When `null`, the file size hasn't been backfilled yet. Backfill: `python main.py backfill_file_size <processed_path>`.
 
 The `sub_documents` field stores metadata for individual invoices within a multi-invoice PDF (e.g., Via Verde toll aggregator PDFs with multiple QR codes from different issuers). When 2+ Portuguese invoice QR codes are detected, each is stored as a sub-document with independently NIF-enriched metadata. The parent document gets LLM-classified metadata (aggregator info) while `qrcode` is set to `null`. Each sub-document participates individually in reconciliation matching.
 ```json
