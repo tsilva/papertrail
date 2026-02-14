@@ -11,7 +11,7 @@ from papertrail.console import get_console
 from papertrail.hashing import hash_file_fast
 from papertrail.logging_utils import get_logger, setup_task_logging
 from papertrail.metadata import get_unique_dates
-from papertrail.models import normalize_enum_field_in_dict
+from papertrail.enums import clean_enum_string
 from papertrail.tasks.organization import copy_matching_files
 from papertrail.tasks.validation import validate_merged_pdf
 
@@ -43,7 +43,8 @@ def export_metadata_to_excel(processed_path: Path, excel_output_path: str, quiet
             metadata_dict["year"] = None
             metadata_dict["month"] = None
 
-        normalize_enum_field_in_dict(metadata_dict, "document_type", "DocumentType")
+        if isinstance(metadata_dict.get("document_type"), str):
+            metadata_dict["document_type"] = clean_enum_string(metadata_dict["document_type"], "DocumentType")
 
         metadata_list.append(metadata_dict)
 

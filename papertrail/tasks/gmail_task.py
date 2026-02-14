@@ -92,4 +92,5 @@ def task_gmail_download(months: int = 2):
             indent=False
         )
     else:
-        console.warning("No messages found", indent=False)
+        date_range = f"{export_dates[0]} to {export_dates[-1]}"
+        console.warning(f"No messages found ({date_range})", indent=False)

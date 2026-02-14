@@ -120,24 +120,6 @@ def setup_logging(
 
 
 @contextmanager
-def suppress_stdout():
-    """Temporarily redirect stdout/stderr to devnull and suppress warnings."""
-    import io
-    import warnings
-
-    old_stdout, old_stderr = sys.stdout, sys.stderr
-    sys.stdout = io.StringIO()
-    sys.stderr = io.StringIO()
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore")
-        try:
-            yield
-        finally:
-            sys.stdout = old_stdout
-            sys.stderr = old_stderr
-
-
-@contextmanager
 def suppress_console_logging():
     """Temporarily suppress console logging output (StreamHandler and RichHandler)."""
     loggers = [logging.getLogger(), logging.getLogger('papertrail')]
