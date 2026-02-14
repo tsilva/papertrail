@@ -360,7 +360,10 @@ def load_export_folder(folder_path):
                 fname = uf.get("file", "")
                 if fname and fname not in unmatched_files_map:
                     unmatched_files_map[fname] = uf
-    unmatched_files = sorted(unmatched_files_map.values(), key=lambda u: u.get("file", ""))
+    unmatched_files = sorted(
+        (uf for uf in unmatched_files_map.values() if uf.get("file", "") not in bank_files),
+        key=lambda u: u.get("file", ""),
+    )
 
     n_recon = sum(1 for b in bank_statements if b.get("reconciliation"))
     status = f"Loaded **{len(bank_statements)}** bank statements"
