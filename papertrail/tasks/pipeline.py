@@ -1,5 +1,6 @@
 """Pipeline task."""
 
+import json
 import os
 import re
 import shutil
@@ -17,10 +18,82 @@ from contextlib import redirect_stdout, redirect_stderr
 
 from papertrail.logging_utils import get_logger, setup_task_logging, suppress_console_logging
 from papertrail.mbox import extract_mbox_attachments
-from papertrail.metadata import load_json_data
+from papertrail.metadata import load_json_data, find_companion_file, iter_json_files
 from papertrail.tasks.validation import validate_merged_pdf
 
 logger = get_logger('cli')
+
+
+_PREFIX_RE = re.compile(r"^[A-Z]+_")
+
+
+def _rename_unmatched_to_exc(export_dir: Path, all_recon_matches: list) -> int:
+    """Rename unmatched files to EXC_ prefix. Returns count of renamed files."""
+    # Collect all matched filenames from reconciliation results
+    matched_filenames: set[str] = set()
+    for m in all_recon_matches:
+        for cand in m.pdf_candidates:
+            matched_filenames.add(cand.pdf_filename)
+
+    # Scan export folder for non-bank document files
+    unmatched_files: list[tuple[Path, Path, str]] = []  # (json_path, doc_path, doc_name)
+    for json_path, data in iter_json_files(export_dir):
+        if data.get("document_type") == "bank-statement":
+            continue
+        doc_path = find_companion_file(json_path, data)
+        if doc_path is None:
+            continue
+        if doc_path.name in matched_filenames:
+            continue
+        unmatched_files.append((json_path, doc_path, doc_path.name))
+
+    if not unmatched_files:
+        return 0
+
+    # Build old→new filename mapping for all renamed files
+    rename_map: dict[str, str] = {}  # old_filename → new_filename
+    renamed = 0
+
+    for json_path, doc_path, doc_name in unmatched_files:
+        stem = doc_path.stem
+        if stem.startswith("EXC_"):
+            continue
+
+        # Replace existing prefix or prepend EXC_
+        if _PREFIX_RE.match(stem):
+            new_stem = _PREFIX_RE.sub("EXC_", stem, count=1)
+        else:
+            new_stem = f"EXC_{stem}"
+
+        new_doc_name = new_stem + doc_path.suffix
+        new_doc_path = doc_path.with_name(new_doc_name)
+        new_json_name = new_stem + ".json"
+        new_json_path = json_path.with_name(new_json_name)
+
+        doc_path.rename(new_doc_path)
+        json_path.rename(new_json_path)
+
+        rename_map[doc_name] = new_doc_name
+        renamed += 1
+        logger.debug(f"[EXC-RENAME] {doc_name} → {new_doc_name}")
+
+    # Update .reconciliation.json files with renamed filenames
+    if rename_map:
+        for rp in export_dir.glob("*.reconciliation.json"):
+            try:
+                recon_data = json.loads(rp.read_text(encoding="utf-8"))
+                changed = False
+                for uf in recon_data.get("unmatched_files", []):
+                    old_name = uf.get("file", "")
+                    if old_name in rename_map:
+                        uf["file"] = rename_map[old_name]
+                        changed = True
+                if changed:
+                    rp.write_text(json.dumps(recon_data, indent=2, ensure_ascii=False) + "\n")
+            except Exception as e:
+                logger.warning(f"Failed to update {rp.name}: {e}")
+
+    return renamed
 
 
 def pipeline(months=2, export_date_arg=None, processed_path_override=None):
@@ -367,6 +440,20 @@ def pipeline(months=2, export_date_arg=None, processed_path_override=None):
                 except Exception as e:
                     step.warning(f"Merge attachments failed: {e}")
                     logger.warning(f"Merge attachments failed: {e}")
+
+        # ── Stage 7c: Rename unmatched files to EXC_ ──
+
+        if all_recon_matches:
+            with console.step_progress(f"Rename unmatched files ({export_date})") as step:
+                try:
+                    exc_count = _rename_unmatched_to_exc(Path(export_date_dir), all_recon_matches)
+                    if exc_count > 0:
+                        step.success(f"{exc_count} file(s) → EXC_")
+                    else:
+                        step.success("0 unmatched files")
+                except Exception as e:
+                    step.warning(f"Rename failed: {e}")
+                    logger.warning(f"EXC rename failed: {e}")
 
         # ── Stage 8: Merge all PDFs (final combined files) ──
 
