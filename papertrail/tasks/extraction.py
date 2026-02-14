@@ -29,7 +29,7 @@ from papertrail.enums import (
     add_session_type,
     add_session_party,
 )
-from papertrail.interactive import confirm_classification, set_interactive
+from papertrail.interactive import confirm_classification, set_interactive, is_interactive
 from papertrail.pdf import render_pdf_to_images, find_pdf_files, find_document_files, get_page_count, is_image_file
 from papertrail.metadata import build_hash_index, save_metadata_json, load_json_data, iter_json_files
 from papertrail.hashing import hash_file_fast, hash_file_content, hash_file_text
@@ -324,8 +324,24 @@ def classify_pdf_document(pdf_path: Path, file_hash: str, failure_logger=None,
             doc_logger.log_qr_skip(exclude_fields)
 
     try:
-        # Phase 1: LLM extraction
-        raw_metadata = _phase1_llm_extract(pdf_path, exclude_fields, pre_extracted, ctx, doc_logger)
+        # Phase 1: LLM extraction (retry once on failure)
+        raw_metadata = None
+        for attempt in range(2):
+            try:
+                raw_metadata = _phase1_llm_extract(pdf_path, exclude_fields, pre_extracted, ctx, doc_logger)
+                break
+            except Exception as e:
+                if attempt == 0:
+                    logger.warning(f"LLM extraction attempt 1 failed for {pdf_path.name}, retrying: {e}")
+                else:
+                    logger.warning(f"LLM extraction attempt 2 failed for {pdf_path.name}, using fallback: {e}")
+                    raw_metadata = DocumentMetadataRaw(
+                        issue_date="$UNKNOWN$",
+                        document_type="$UNKNOWN$",
+                        issuing_party="$UNKNOWN$",
+                        confidence=0.0,
+                        reasoning="LLM extraction failed after 2 attempts",
+                    )
 
         # Phase 2: Normalization
         t0 = _time.monotonic()
@@ -901,6 +917,7 @@ def task_sync(processed_path: Path, dry_run: bool = False,
                 process_result(metadata_path, old_data, new_metadata, error)
         else:
             # Parallel path - disable interactive prompts (not thread-safe)
+            was_interactive = is_interactive()
             set_interactive(False)
             try:
                 with ThreadPoolExecutor(max_workers=workers) as executor:
@@ -914,7 +931,7 @@ def task_sync(processed_path: Path, dry_run: bool = False,
                             process_result(metadata_path, old_data, new_metadata, error)
                             progress.update(task, advance=1)
             finally:
-                set_interactive(True)
+                set_interactive(was_interactive)
 
         # Summary output
         if not quiet:
