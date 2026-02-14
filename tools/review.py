@@ -351,16 +351,30 @@ def load_export_folder(folder_path):
                     if f in file_index:
                         bank_files.add(f)
 
+    # Aggregate unmatched files from all reconciliation results (deduplicate by filename)
+    unmatched_files_map: dict[str, dict] = {}
+    for bs in bank_statements:
+        recon = bs.get("reconciliation")
+        if recon:
+            for uf in recon.get("unmatched_files", []):
+                fname = uf.get("file", "")
+                if fname and fname not in unmatched_files_map:
+                    unmatched_files_map[fname] = uf
+    unmatched_files = sorted(unmatched_files_map.values(), key=lambda u: u.get("file", ""))
+
     n_recon = sum(1 for b in bank_statements if b.get("reconciliation"))
     status = f"Loaded **{len(bank_statements)}** bank statements"
     if n_recon:
         status += f" ({n_recon} with reconciliation)"
     status += f", **{len(file_index)}** files indexed"
+    if unmatched_files:
+        status += f", **{len(unmatched_files)}** unmatched files"
 
     return {
         "bank_statements": bank_statements,
         "bank_files": sorted(bank_files),
         "file_index": file_index,
+        "unmatched_files": unmatched_files,
         "folder_path": str(folder),
     }, status
 
@@ -472,11 +486,62 @@ def render_single_bank_html(bs):
     return "\n".join(parts)
 
 
-def render_all_banks_html(bs_list):
+def render_all_banks_html(bs_list, unmatched_files=None, file_index=None):
     """Render all bank statements as concatenated HTML sections."""
     if not bs_list:
         return '<p class="placeholder">No bank statements found in this folder.</p>'
-    return "\n".join(render_single_bank_html(bs) for bs in bs_list)
+    parts = [render_single_bank_html(bs) for bs in bs_list]
+    if unmatched_files:
+        parts.append(_render_unmatched_files_html(unmatched_files, file_index or {}))
+    return "\n".join(parts)
+
+
+def _render_unmatched_files_html(unmatched_files, file_index):
+    """Render an unmatched files section with a table of clickable file links."""
+    if not unmatched_files:
+        return ""
+
+    parts = ['<div class="bank-section unmatched-section">']
+    parts.append(
+        f'<div class="bank-info" style="background:rgba(220,53,69,0.12);">'
+        f'<strong>Unmatched Files ({len(unmatched_files)})</strong>'
+        f'</div>'
+    )
+
+    parts.append('<div style="margin:0 16px 12px;">')
+    parts.append("<table class='txn-table'><thead><tr>")
+    for h, a in [
+        ("Date", "left"), ("Issuing Party", "left"), ("Type", "left"),
+        ("Amount", "right"), ("File", "left"),
+    ]:
+        parts.append(f'<th style="text-align:{a};">{h}</th>')
+    parts.append("</tr></thead><tbody>")
+
+    for uf in unmatched_files:
+        fname = uf.get("file", "")
+        date = uf.get("date_issued", "") or ""
+        party = html_lib.escape(uf.get("issuing_party", "") or "")
+        doc_type = html_lib.escape(uf.get("document_type", "") or "")
+        amt = uf.get("total_amount")
+        currency = uf.get("currency", "EUR") or "EUR"
+        amt_str = f"{amt:.2f} {currency}" if amt is not None else "-"
+
+        sf = fname.replace("'", "\\'")
+        file_cell = (
+            f'<button class="file-link" onclick="selectReviewFile(\'{sf}\');'
+            f'return false;">{html_lib.escape(fname)}</button>'
+        )
+
+        bg = _COLORS["unmatched"]
+        parts.append(f'<tr style="background:{bg};">')
+        parts.append(f"<td>{date}</td><td>{party}</td><td>{doc_type}</td>")
+        parts.append(f'<td style="text-align:right;font-family:monospace;">{amt_str}</td>')
+        parts.append(f"<td>{file_cell}</td>")
+        parts.append("</tr>")
+
+    parts.append("</tbody></table></div>")
+    parts.append("</div>")
+    return "\n".join(parts)
 
 
 def _render_txn_table(recon):
@@ -675,7 +740,11 @@ def build_ui():
             _CACHE["data"] = data
 
             bs_list = data.get("bank_statements", [])
-            bank_content = render_all_banks_html(bs_list)
+            bank_content = render_all_banks_html(
+                bs_list,
+                unmatched_files=data.get("unmatched_files"),
+                file_index=data.get("file_index"),
+            )
 
             return (status, bank_content)
 
