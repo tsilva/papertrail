@@ -2,6 +2,8 @@
 
 import base64
 import json
+import re
+import unicodedata
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional
@@ -25,6 +27,29 @@ _DEFAULT_SETTINGS = {
     "max_results_per_query": 500,
     "skip_already_downloaded": True,
 }
+
+_EXTENSION_TO_MIME = {
+    ".pdf": "application/pdf",
+    ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    ".xls": "application/vnd.ms-excel",
+}
+
+_GENERIC_MIME_TYPES = {
+    "application/octet-stream",
+    "application/binary",
+    "application/force-download",
+    "application/x-download",
+}
+
+
+def _slugify(text: str) -> str:
+    """Convert text to a filesystem-safe slug."""
+    text = unicodedata.normalize("NFKD", text)
+    text = text.encode("ascii", "ignore").decode("ascii").lower()
+    text = re.sub(r"[^a-z0-9]+", "-", text)
+    text = text.strip("-")
+    text = re.sub(r"-{2,}", "-", text)
+    return text[:80] or "no-subject"
 
 
 class GmailDownloader:
@@ -155,7 +180,16 @@ class GmailDownloader:
                 )
 
             if attachment_id and filename and mime_type not in allowed_types:
-                logger.debug(f"Skipped attachment '{filename}' (mime_type={mime_type}, not in {allowed_types})")
+                if mime_type in _GENERIC_MIME_TYPES:
+                    ext = Path(filename).suffix.lower()
+                    resolved_mime = _EXTENSION_TO_MIME.get(ext)
+                    if resolved_mime and resolved_mime in allowed_types:
+                        mime_type = resolved_mime
+                        logger.info(f"[GMAIL] Accepted '{filename}' by extension ({ext} → {resolved_mime})")
+                    else:
+                        logger.info(f"[GMAIL] Skipped '{filename}' (generic mime={mime_type}, ext={ext} not in allowed types)")
+                else:
+                    logger.info(f"[GMAIL] Skipped '{filename}' (mime_type={mime_type}, not in allowed types)")
 
             if attachment_id and mime_type in allowed_types and filename:
                 attachments.append(
@@ -177,9 +211,29 @@ class GmailDownloader:
         payload = message.get("payload", {})
         parts = payload.get("parts", [])
 
+        if not parts and payload.get("body", {}).get("attachmentId"):
+            parts = [payload]
+            logger.info("[GMAIL] Single-part email detected, checking payload directly")
+
         return self._extract_attachments_from_parts(parts, allowed_types)
 
-    def download_attachment(self, message_id: str, attachment_id: str, filename: str) -> Optional[Path]:
+    def _get_message_dir(self, message: dict) -> Path:
+        """Build output directory for a message: output_dir/YYYY-MM-DD - subject-slug/"""
+        headers = {h["name"].lower(): h["value"] for h in message.get("payload", {}).get("headers", [])}
+
+        internal_date = message.get("internalDate", "")
+        if internal_date:
+            dt = datetime.fromtimestamp(int(internal_date) / 1000)
+            date_str = dt.strftime("%Y-%m-%d")
+        else:
+            date_str = "unknown-date"
+
+        subject = headers.get("subject", "")
+        subject_slug = _slugify(subject) if subject else "no-subject"
+
+        return self.output_dir / f"{date_str} - {subject_slug}"
+
+    def download_attachment(self, message_id: str, attachment_id: str, filename: str, output_dir: Optional[Path] = None) -> Optional[Path]:
         """Download a single attachment. Returns path or None on failure."""
         try:
             result = (
@@ -193,7 +247,7 @@ class GmailDownloader:
             data = result.get("data", "")
             file_data = base64.urlsafe_b64decode(data)
 
-            output_path = self._generate_unique_path(filename)
+            output_path = self._generate_unique_path(filename, base_dir=output_dir)
 
             with open(output_path, "wb") as f:
                 f.write(file_data)
@@ -205,8 +259,10 @@ class GmailDownloader:
                 self.failure_logger.error(f"Failed to download {filename}: {e}")
             return None
 
-    def _generate_unique_path(self, filename: str) -> Path:
-        base_path = self.output_dir / filename
+    def _generate_unique_path(self, filename: str, base_dir: Optional[Path] = None) -> Path:
+        directory = base_dir or self.output_dir
+        directory.mkdir(parents=True, exist_ok=True)
+        base_path = directory / filename
 
         if not base_path.exists():
             return base_path
@@ -215,7 +271,7 @@ class GmailDownloader:
         suffix = base_path.suffix
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
 
-        return self.output_dir / f"{stem}_{timestamp}{suffix}"
+        return directory / f"{stem}_{timestamp}{suffix}"
 
     def _get_processed_messages_path(self) -> Path:
         return self.tracking_dir / "gmail_processed_messages.json"
@@ -274,12 +330,13 @@ class GmailDownloader:
 
             try:
                 message = self.get_message(msg_id)
+                msg_dir = self._get_message_dir(message)
                 attachments = self.extract_attachments(message)
 
                 downloaded_count = 0
                 for att in attachments:
                     output_path = self.download_attachment(
-                        msg_id, att["attachment_id"], att["filename"]
+                        msg_id, att["attachment_id"], att["filename"], output_dir=msg_dir
                     )
 
                     if output_path:
