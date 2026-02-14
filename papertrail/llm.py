@@ -66,7 +66,8 @@ def get_qr_exclusions(qr_metadata: QRExtractedMetadata) -> tuple[set[str], dict[
     return exclude, pre_extracted
 
 
-def get_system_prompt_raw_extraction(pre_extracted: dict[str, Any] | None = None) -> str:
+def get_system_prompt_raw_extraction(pre_extracted: dict[str, Any] | None = None,
+                                     multi_qr_info: dict[str, Any] | None = None) -> str:
     """Build system prompt for raw metadata extraction."""
     # Use live lists (includes session-confirmed values)
     doc_types = get_document_types()
@@ -132,6 +133,18 @@ def get_system_prompt_raw_extraction(pre_extracted: dict[str, Any] | None = None
         )
         for field, value in pre_extracted.items():
             prompt += f"- {field}: {value}\n"
+
+    if multi_qr_info:
+        issuers_str = ", ".join(multi_qr_info.get("issuers", []))
+        prompt += (
+            "\n\n"
+            f"IMPORTANT: This PDF contains {multi_qr_info['count']} separate invoices "
+            f"(detected by QR codes) from the following issuers: {issuers_str}. "
+            "These individual invoices are already extracted separately as sub-documents. "
+            "Classify the OVERALL document — the wrapper/aggregator/statement that contains these invoices. "
+            "Focus on who issued this aggregator document and its overall type (e.g., extracto, statement, invoice-receipt). "
+            "Do NOT classify it based on any individual embedded invoice or payment reference."
+        )
 
     return prompt
 
