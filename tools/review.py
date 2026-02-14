@@ -24,20 +24,9 @@ _CACHE = {"data": {}}
 # ── JS: clickable file links in transaction table → update dropdown ──
 
 _JS = """
-window.togglePreviewPanel = function() {
-    var panel = document.getElementById('preview_panel');
-    if (!panel) return;
-    var expanded = panel.classList.toggle('expanded');
-    var btn = document.getElementById('toggle_preview_btn');
-    if (btn) btn.innerText = expanded ? 'Hide Preview' : 'Show Preview';
-    if (expanded) _ensureDragHandle(panel);
-};
-
 window.closePreviewPanel = function() {
     var panel = document.getElementById('preview_panel');
     if (panel) panel.classList.remove('expanded');
-    var btn = document.getElementById('toggle_preview_btn');
-    if (btn) btn.innerText = 'Show Preview';
 };
 
 window.selectReviewFile = function(filename) {
@@ -45,8 +34,6 @@ window.selectReviewFile = function(filename) {
     if (panel && !panel.classList.contains('expanded')) {
         panel.classList.add('expanded');
         _ensureDragHandle(panel);
-        var btn = document.getElementById('toggle_preview_btn');
-        if (btn) btn.innerText = 'Hide Preview';
     }
 
     var el = document.getElementById('selected_file_bridge');
@@ -95,6 +82,32 @@ function _ensureDragHandle(panel) {
             panel.style.right = 'auto';
         }
         function onUp() {
+            document.removeEventListener('mousemove', onMove);
+            document.removeEventListener('mouseup', onUp);
+        }
+        document.addEventListener('mousemove', onMove);
+        document.addEventListener('mouseup', onUp);
+    });
+
+    /* ── Resize handle (left edge) ── */
+    var resizeBar = document.createElement('div');
+    resizeBar.className = 'preview-resize-bar';
+    panel.appendChild(resizeBar);
+
+    resizeBar.addEventListener('mousedown', function(e) {
+        e.preventDefault();
+        e.stopPropagation();
+        var startX = e.clientX;
+        var startW = panel.offsetWidth;
+        document.body.style.cursor = 'ew-resize';
+        document.body.style.userSelect = 'none';
+        function onMove(ev) {
+            var newW = Math.max(360, startW - (ev.clientX - startX));
+            panel.style.width = newW + 'px';
+        }
+        function onUp() {
+            document.body.style.cursor = '';
+            document.body.style.userSelect = '';
             document.removeEventListener('mousemove', onMove);
             document.removeEventListener('mouseup', onUp);
         }
@@ -161,10 +174,6 @@ _CSS = """
     box-shadow: 0 8px 32px rgba(0,0,0,0.4);
     padding: 12px;
 }
-#toggle_preview_btn {
-    max-width: 160px !important;
-    margin-left: auto !important;
-}
 .preview-drag-bar {
     display: flex; align-items: center; justify-content: space-between;
     cursor: grab; padding: 4px 0 8px; user-select: none;
@@ -182,6 +191,13 @@ _CSS = """
 }
 .preview-close-btn:hover {
     background: rgba(220, 53, 69, 0.3); color: #ff6b6b;
+}
+.preview-resize-bar {
+    position: absolute; left: 0; top: 0; bottom: 0; width: 5px;
+    cursor: ew-resize; z-index: 10;
+}
+.preview-resize-bar:hover, .preview-resize-bar:active {
+    background: var(--border-color-primary, #555);
 }
 """
 
@@ -586,11 +602,6 @@ def build_ui():
             elem_id="selected_file_bridge", label="", container=False,
         )
 
-        toggle_btn = gr.Button(
-            "Show Preview", size="sm",
-            elem_id="toggle_preview_btn",
-        )
-
         with gr.Row(equal_height=False):
             with gr.Column(scale=1, min_width=400):
                 bank_html = gr.HTML(
@@ -692,7 +703,7 @@ def build_ui():
             on_bank_next, [bank_page, bank_file],
             [bank_preview, b_page, bank_page],
         )
-        toggle_btn.click(fn=None, js="() => togglePreviewPanel()")
+
 
         # ── Auto-load most recent folder on startup ──────────────
 

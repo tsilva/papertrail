@@ -40,8 +40,8 @@ class DocumentMetadataRaw(BaseModel):
     issuing_party: str = Field(description="Issuer name (exactly as it appears on document).")
     total_amount: Optional[float] = Field(default=None, description="Total currency amount.")
     total_amount_currency: Optional[str] = Field(default=None, description="Currency of the total amount.")
-    confidence: float = Field(description="Confidence score between 0 and 1.")
-    reasoning: str = Field(description="Why this classification was chosen.")
+    confidence: float = Field(default=0.0, description="Confidence score between 0 and 1.")
+    reasoning: str = Field(default="", description="Why this classification was chosen.")
     issuer_tax_number: Optional[str] = Field(
         default=None,
         description="Issuer's tax identification number (VAT, NIF, EIN). Include country prefix when visible (e.g., DE123456789, IE1234567X)."

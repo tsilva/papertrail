@@ -167,6 +167,7 @@ def main():
     parser.add_argument("--all", action="store_true", help="Process all matching PDFs, not just orphans.")
     parser.add_argument("--export_path", type=str, help="Path to export folder.")
     parser.add_argument("--excel_path", type=str, help="Path to transactions Excel file (for reconcile).")
+    parser.add_argument("--interactive", "-i", action="store_true", help="Enable interactive prompts for new document types/parties.")
     parser.add_argument("--no_resume", action="store_true", help="Don't resume from checkpoint.")
     args = parser.parse_args()
 
@@ -178,6 +179,10 @@ def main():
         parser.error(str(e))
     except ProfileError as e:
         parser.error(f"Failed to load profile: {e}")
+
+    if args.interactive:
+        from papertrail.interactive import set_interactive
+        set_interactive(True)
 
     task = args.task
 

@@ -9,9 +9,9 @@ from papertrail.logging_utils import get_logger
 
 logger = get_logger('interactive')
 
-# When False, new values are auto-accepted without prompting.
-# Used in non-interactive contexts (e.g., multi-threaded sync, CI).
-_interactive_enabled = True
+# When False, unknown values become $UNKNOWN$ without prompting.
+# Enable with --interactive flag for interactive classification.
+_interactive_enabled = False
 
 
 def set_interactive(enabled: bool) -> None:
@@ -37,13 +37,16 @@ def confirm_classification(
     Shows the LLM's suggestion and offers options to accept, pick from existing
     values, enter a custom name, or skip ($UNKNOWN$).
 
-    When interactive mode is disabled, auto-accepts the LLM suggestion.
+    When interactive mode is disabled, accepts known values and returns $UNKNOWN$ for new ones.
 
     Returns the confirmed value.
     """
     if not _interactive_enabled:
-        logger.debug(f"Non-interactive: auto-accepting {field_name}={suggested_value}")
-        return suggested_value
+        if suggested_value in known_values:
+            logger.debug(f"Non-interactive: accepted known {field_name}={suggested_value}")
+            return suggested_value
+        logger.debug(f"Non-interactive: unknown {field_name}={suggested_value} -> $UNKNOWN$")
+        return "$UNKNOWN$"
 
     try:
         console = get_console().console
@@ -89,8 +92,8 @@ def confirm_classification(
 
         return "$UNKNOWN$"
     except Exception:
-        logger.warning(f"Interactive prompt failed, auto-accepting {field_name}={suggested_value}")
-        return suggested_value
+        logger.warning(f"Interactive prompt failed, falling back to $UNKNOWN$ for {field_name}")
+        return "$UNKNOWN$"
 
 
 def _pick_from_existing(field_name: str, known_values: set[str], console) -> str:
