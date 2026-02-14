@@ -65,8 +65,8 @@ function _ensureDragHandle(panel) {
     closeBtn.className = 'preview-close-btn';
     closeBtn.textContent = '\\u2715';
     closeBtn.onclick = function(e) { e.stopPropagation(); closePreviewPanel(); };
-    bar.appendChild(grip);
     bar.appendChild(closeBtn);
+    bar.appendChild(grip);
     panel.insertBefore(bar, panel.firstChild);
 
     var ox, oy, sx, sy;
@@ -118,7 +118,15 @@ function _ensureDragHandle(panel) {
 """
 
 _CSS = """
-.gradio-container, .gradio-container[class*="gradio-container-"] { max-width: 100% !important; padding-left: 4px !important; padding-right: 4px !important; overflow: visible !important; }
+.gradio-container, .gradio-container[class*="gradio-container-"] {
+    max-width: 100% !important; padding-left: 4px !important; padding-right: 4px !important;
+    overflow: visible !important;
+    height: 100vh !important; display: flex !important; flex-direction: column !important;
+}
+.gradio-container > .main { flex: 1 !important; min-height: 0 !important; display: flex !important; flex-direction: column !important; }
+.gradio-container > .main > .wrap { flex: 1 !important; min-height: 0 !important; display: flex !important; flex-direction: column !important; }
+#content_row { flex: 1 !important; min-height: 0 !important; }
+#bank_html { flex: 1 !important; min-height: 0 !important; overflow-y: auto !important; }
 .file-link {
     color: #58a6ff; text-decoration: underline; cursor: pointer;
     background: none; border: none; font: inherit; padding: 0;
@@ -162,6 +170,7 @@ _CSS = """
 #preview_panel { display: none !important; }
 #preview_panel.expanded {
     display: flex !important;
+    flex-direction: column;
     position: fixed !important;
     top: 20px; right: 20px;
     width: 520px;
@@ -175,8 +184,8 @@ _CSS = """
     padding: 12px;
 }
 .preview-drag-bar {
-    display: flex; align-items: center; justify-content: space-between;
-    cursor: grab; padding: 4px 0 8px; user-select: none;
+    display: flex; align-items: center; justify-content: flex-end;
+    cursor: grab; user-select: none;
     border-bottom: 1px solid var(--border-color-primary, #444);
     margin: -4px -4px 8px; padding: 6px 8px;
 }
@@ -495,17 +504,16 @@ def _render_txn_table(recon):
                 tip_parts.append(", ".join(r[key]))
         tip = html_lib.escape(" | ".join(tip_parts))
 
-        # Clickable file links as bullet list
+        # Clickable file links
         file_list = r.get("files", [])
         if file_list:
-            fs = '<ul style="margin:0;padding-left:16px;list-style:disc;">'
+            fs = ""
             for f in file_list:
                 sf = f.replace("'", "\\'")
                 fs += (
-                    f'<li><button class="file-link" onclick="selectReviewFile(\'{sf}\');'
-                    f'return false;">{html_lib.escape(f)}</button></li>'
+                    f'<p style="margin:0;"><button class="file-link" onclick="selectReviewFile(\'{sf}\');'
+                    f'return false;">{html_lib.escape(f)}</button></p>'
                 )
-            fs += "</ul>"
         else:
             fs = '<span style="color:var(--body-text-color-subdued,#555);">-</span>'
 
@@ -580,7 +588,7 @@ def build_ui():
     folder_choices = _list_export_folders(export_base)
     default_folder = folder_choices[0] if folder_choices else None
 
-    with gr.Blocks(title="Papertrail Review", css=_CSS, js=_JS) as app:
+    with gr.Blocks(title="Papertrail Review") as app:
         # State (small values only — large data lives in _CACHE)
         export_base_state = gr.State(str(export_base) if export_base else "")
         bank_page = gr.State(0)
@@ -602,13 +610,13 @@ def build_ui():
             elem_id="selected_file_bridge", label="", container=False,
         )
 
-        with gr.Row(equal_height=False):
+        with gr.Row(equal_height=False, elem_id="content_row"):
             with gr.Column(scale=1, min_width=400):
                 bank_html = gr.HTML(
-                    '<p class="placeholder">Load a folder to view bank statements.</p>'
+                    '<p class="placeholder">Load a folder to view bank statements.</p>',
+                    elem_id="bank_html",
                 )
             with gr.Column(scale=1, min_width=400, elem_id="preview_panel"):
-                bank_file_label = gr.Markdown("*No file selected*")
                 with gr.Tabs():
                     with gr.Tab("Preview"):
                         bank_preview = gr.HTML(
@@ -653,14 +661,14 @@ def build_ui():
 
         def on_bridge_input(raw_value):
             if not raw_value:
-                return "*No file selected*", *_EMPTY_PREVIEW, ""
+                return *_EMPTY_PREVIEW, ""
             filename = raw_value.rsplit("|", 1)[0] if "|" in raw_value else raw_value
             preview, js_str, pl, pg = _do_preview(filename, 0)
-            return f"**{filename}**", preview, js_str, pl, pg, filename
+            return preview, js_str, pl, pg, filename
 
         selected_file_bridge.change(
             on_bridge_input, [selected_file_bridge],
-            [bank_file_label, bank_preview, bank_json, b_page, bank_page, bank_file],
+            [bank_preview, bank_json, b_page, bank_page, bank_file],
         )
 
         # ── Bank: page navigation ────────────────────────────────
@@ -697,4 +705,4 @@ def build_ui():
 demo = build_ui()
 
 if __name__ == "__main__":
-    demo.launch()
+    demo.launch(css=_CSS, js=_JS)
