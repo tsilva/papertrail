@@ -75,7 +75,7 @@ def pipeline(months=2, export_date_arg=None, processed_path_override=None):
     processed_files_excel_path = Path(PROCESSED_FILES_DIR) / "processed_files.xlsx"
 
     # Footer accumulators
-    warnings: list[str] = []
+    pipeline_warnings: list[str] = []
     summary: dict[str, str] = {}
     output_paths: list[tuple[str, str]] = []
 
@@ -124,7 +124,7 @@ def pipeline(months=2, export_date_arg=None, processed_path_override=None):
             except Exception as e:
                 msg = f"Gmail download failed, continuing pipeline ({e})"
                 step.warning(msg)
-                warnings.append(msg)
+                pipeline_warnings.append(msg)
                 logger.warning(f"Gmail download failed (non-fatal): {e}")
 
     for rd in raw_dirs:
@@ -138,7 +138,7 @@ def pipeline(months=2, export_date_arg=None, processed_path_override=None):
             else:
                 msg = "No mbox files found"
                 step.warning(msg)
-                warnings.append(msg)
+                pipeline_warnings.append(msg)
             if stats['errors']:
                 step.error(f"{len(stats['errors'])} error(s)")
                 logger.error(f"Extract mbox attachments encountered {len(stats['errors'])} error(s)")
@@ -201,7 +201,7 @@ def pipeline(months=2, export_date_arg=None, processed_path_override=None):
         if unknown_parts:
             unknown_msg = f"Unknown: {', '.join(unknown_parts)}"
             console.notable(unknown_msg)
-            warnings.append(f"{unknown_msg} in extracted documents")
+            pipeline_warnings.append(f"{unknown_msg} in extracted documents")
 
         # Update summary
         if extract_stats["new"] > 0 or extract_stats["duplicates"] > 0:
@@ -241,7 +241,7 @@ def pipeline(months=2, export_date_arg=None, processed_path_override=None):
             if orphans > 0:
                 msg = f"{orphans} orphaned JSON sidecar(s) (companion file missing)"
                 console.notable(msg)
-                warnings.append(msg)
+                pipeline_warnings.append(msg)
         except Exception as e:
             step.error(str(e))
             sys.exit(1)
@@ -418,7 +418,7 @@ def pipeline(months=2, export_date_arg=None, processed_path_override=None):
     elapsed = time.time() - start_time
     console.pipeline_footer(
         elapsed_seconds=elapsed,
-        warnings=warnings if warnings else None,
+        warnings=pipeline_warnings if pipeline_warnings else None,
         summary=summary if summary else None,
         output_paths=output_paths,
     )
