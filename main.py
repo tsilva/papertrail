@@ -45,6 +45,7 @@ from papertrail.tasks import (
     pipeline,
     task_qr_inventory,
     task_reconcile,
+    task_audit,
     task_log_context,
 )
 
@@ -149,7 +150,7 @@ def main():
         'copy_matching', 'export_all_dates', 'pipeline',
         'gmail_download', 'backfill_page_count', 'backfill_file_size',
         'backfill_text_hash', 'backfill_sub_documents', 'fix_unicode',
-        'split_bundles', 'sync', 'validate_extraction', 'qr_inventory', 'reconcile',
+        'split_bundles', 'sync', 'validate_extraction', 'qr_inventory', 'reconcile', 'audit',
     ], help="Task to perform (default: pipeline).")
     parser.add_argument("processed_path", type=str, nargs='?', help="Path to output folder.")
     parser.add_argument("--raw_path", type=str, help="Path to documents folder(s). Use ';' to separate multiple.")
@@ -287,6 +288,9 @@ def main():
 
     elif task == "split_bundles":
         task_split_bundles(processed_path, dry_run=args.dry_run)
+
+    elif task == "audit":
+        task_audit(processed_path)
 
 
 if __name__ == "__main__":

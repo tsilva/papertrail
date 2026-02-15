@@ -110,6 +110,18 @@ reconciliation:
     #     bank-note: 1
     #     "insurance-notice|insurance-auto": [0, 1]
 
+    # Companion matching: when a fee and its stamp duty appear as separate transactions
+    # but the bank issues one combined bank note, use companions to sum-match them.
+    # - name: bank-fee-package
+    #   match_description: ["PACOTE M EMPRESA"]
+    #   companions: ["bank-fee-stamp-duty"]  # group with stamp duty on same date
+    #   required_types:
+    #     bank-note: [1, null]  # may have individual + combined notes
+    # - name: bank-fee-stamp-duty
+    #   match_description: ["IMPOSTO SELO"]
+    #   required_types:
+    #     bank-note: [1, null]
+
     # Default credit: any incoming payment needs a bank-note or credit note
     - name: default-credit
       direction: credit  # amount > 0
@@ -128,6 +140,9 @@ reconciliation:
   #   match_description (list[str], optional): Keywords matched case-insensitively against
   #     diacritics-stripped description. Any keyword match = rule matches.
   #   direction (str, optional): "credit" (amount > 0) or "debit" (amount <= 0)
+  #   companions (list[str], optional): Rule names to group with for sum-based matching.
+  #     When a fee + stamp duty are separate transactions but one combined bank note,
+  #     companions groups them on the same date and matches their summed amount.
   #   required_types (dict, required): Document type patterns → cardinality constraints
   #     Key: document type or "|"-separated alternatives (e.g., "invoice|receipt")
   #     Value: N (exactly N) or [min, max] (range, null = unbounded)
