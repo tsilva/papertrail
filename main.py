@@ -30,8 +30,6 @@ from papertrail.tasks import (
     task_extract_new,
     task_rename_files,
     task_sync,
-    task_validate_extraction,
-    validate_metadata,
     export_metadata_to_excel,
     copy_matching_files,
     task_export_all_dates,
@@ -39,11 +37,8 @@ from papertrail.tasks import (
     task_backfill_file_size,
     task_backfill_text_hash,
     task_backfill_sub_documents,
-    task_fix_unicode,
-    task_split_bundles,
     task_gmail_download,
     pipeline,
-    task_qr_inventory,
     task_reconcile,
     task_audit,
     task_log_context,
@@ -191,57 +186,37 @@ def main():
     p.add_argument("--excel_path", type=str, help="Path to transactions Excel file.")
     p.add_argument("--dry_run", action="store_true", help="Preview without modifying.")
 
-    # qr-inventory
-    p = sub.add_parser("qr-inventory", help="Scan PDFs for QR codes.")
-    p.add_argument("--export_path", type=str, help="Path to export folder.")
-    p.add_argument("--no_resume", action="store_true", help="Don't resume from checkpoint.")
-
-    # gmail (was gmail_download)
+    # gmail
     p = sub.add_parser("gmail", help="Download email attachments from Gmail.")
     p.add_argument("--months", type=int, default=2, help="Months to process (default: 2).")
 
-    # export-excel (was export_excel)
-    p = sub.add_parser("export-excel", help="Export metadata to Excel.")
-    _add_processed_path(p)
-    p.add_argument("--output", type=str, required=True, help="Output .xlsx file path.")
-
-    # export-dates (was export_all_dates)
-    p = sub.add_parser("export-dates", help="Export files by date range.")
-    _add_processed_path(p)
-    p.add_argument("--base_dir", type=str, help="Base export directory.")
-    p.add_argument("--run_merge", action="store_true", help="Run PDF merge for changed directories.")
-
-    # validate-extraction
-    p = sub.add_parser("validate-extraction", help="Validate extraction quality.")
-    _add_processed_path(p)
-    p.add_argument("--pattern", type=str, help="Glob/regex pattern.")
-
-    # copy (was copy_matching)
-    p = sub.add_parser("copy", help="Copy files matching pattern.")
-    _add_processed_path(p)
-    p.add_argument("--pattern", type=str, required=True, help="Pattern for matching files.")
-    p.add_argument("--dest", type=str, required=True, help="Destination folder.")
-
-    # split-bundles
-    p = sub.add_parser("split-bundles", help="Split bundled documents.")
-    _add_processed_path(p)
-    p.add_argument("--dry_run", action="store_true", help="Preview without modifying.")
-
-    # rename (was rename_files)
+    # rename
     p = sub.add_parser("rename", help="Rename files based on metadata.")
     _add_processed_path(p)
 
-    # validate (was validate_metadata)
-    p = sub.add_parser("validate", help="Validate metadata consistency.")
-    _add_processed_path(p)
-
-    # fix-unicode
-    p = sub.add_parser("fix-unicode", help="Fix escaped Unicode in metadata JSON.")
-    _add_processed_path(p)
-
-    # audit
+    # audit (absorbs validate + validate-extraction)
     p = sub.add_parser("audit", help="Audit processed files.")
     _add_processed_path(p)
+    p.add_argument("--verify-hashes", action="store_true",
+                   help="Verify file hashes match metadata (expensive).")
+
+    # export (subcommand group)
+    p_export = sub.add_parser("export", help="Export documents and metadata.")
+    esub = p_export.add_subparsers(dest="export_command", title="export tasks")
+
+    ep = esub.add_parser("excel", help="Export metadata to Excel.")
+    _add_processed_path(ep)
+    ep.add_argument("--output", type=str, required=True, help="Output .xlsx file path.")
+
+    ep = esub.add_parser("dates", help="Export files by date range.")
+    _add_processed_path(ep)
+    ep.add_argument("--base_dir", type=str, help="Base export directory.")
+    ep.add_argument("--run_merge", action="store_true", help="Run PDF merge.")
+
+    ep = esub.add_parser("copy", help="Copy files matching pattern.")
+    _add_processed_path(ep)
+    ep.add_argument("--pattern", type=str, required=True, help="Pattern for matching files.")
+    ep.add_argument("--dest", type=str, required=True, help="Destination folder.")
 
     # backfill (with sub-subcommands)
     p_backfill = sub.add_parser("backfill", help="Backfill metadata fields.")
@@ -310,10 +285,6 @@ def main():
         excel = Path(args.excel_path) if args.excel_path else None
         task_reconcile(export, excel_path=excel, dry_run=args.dry_run)
 
-    elif cmd == "qr-inventory":
-        export = require_path(parser, args.export_path or _get_profile_path("export"), "export_path")
-        task_qr_inventory(export, resume=not args.no_resume)
-
     elif cmd == "gmail":
         if args.months < 1:
             parser.error("--months must be >= 1.")
@@ -322,54 +293,40 @@ def main():
         except RuntimeError:
             sys.exit(1)
 
-    elif cmd == "export-excel":
-        processed_path = get_processed_path(args, parser)
-        if not args.output.endswith(".xlsx"):
-            parser.error("--output must end with '.xlsx'.")
-        with task_log_context(processed_path, "export_excel"):
-            export_metadata_to_excel(processed_path, args.output)
-
-    elif cmd == "export-dates":
-        processed_path = get_processed_path(args, parser)
-        from papertrail.config import get_current_profile
-        profile = get_current_profile()
-        export_base_dir = getattr(args, 'base_dir', None) or (profile.paths.export if profile else None) or os.getenv("EXPORT_FILES_DIR")
-        export_dir = require_path(parser, export_base_dir, "base_dir", create_if_missing=True)
-        profile_context = None
-        if profile and profile.profile.tax_number:
-            profile_context = {"tax_number": profile.profile.tax_number}
-        task_export_all_dates(processed_path, export_dir, args.run_merge, export_config=profile.export if profile else None, profile_context=profile_context)
-
-    elif cmd == "validate-extraction":
-        processed_path = get_processed_path(args, parser)
-        task_validate_extraction(processed_path, pattern=args.pattern)
-
-    elif cmd == "copy":
-        processed_path = get_processed_path(args, parser)
-        dest = require_path(parser, args.dest, "dest", create_if_missing=True)
-        with task_log_context(processed_path, "copy_matching"):
-            copy_matching_files(processed_path, args.pattern, dest)
-
-    elif cmd == "split-bundles":
-        processed_path = get_processed_path(args, parser)
-        task_split_bundles(processed_path, dry_run=args.dry_run)
-
     elif cmd == "rename":
         processed_path = get_processed_path(args, parser)
         task_rename_files(processed_path)
 
-    elif cmd == "validate":
-        processed_path = get_processed_path(args, parser)
-        with task_log_context(processed_path, "validate_metadata"):
-            validate_metadata(processed_path)
-
-    elif cmd == "fix-unicode":
-        processed_path = get_processed_path(args, parser)
-        task_fix_unicode(processed_path)
-
     elif cmd == "audit":
         processed_path = get_processed_path(args, parser)
-        task_audit(processed_path)
+        task_audit(processed_path, verify_hashes=args.verify_hashes)
+
+    elif cmd == "export":
+        if not args.export_command:
+            p_export.print_help()
+            sys.exit(1)
+        ecmd = args.export_command
+        if ecmd == "excel":
+            processed_path = get_processed_path(args, parser)
+            if not args.output.endswith(".xlsx"):
+                parser.error("--output must end with '.xlsx'.")
+            with task_log_context(processed_path, "export_excel"):
+                export_metadata_to_excel(processed_path, args.output)
+        elif ecmd == "dates":
+            processed_path = get_processed_path(args, parser)
+            from papertrail.config import get_current_profile
+            profile = get_current_profile()
+            export_base_dir = getattr(args, 'base_dir', None) or (profile.paths.export if profile else None) or os.getenv("EXPORT_FILES_DIR")
+            export_dir = require_path(parser, export_base_dir, "base_dir", create_if_missing=True)
+            profile_context = None
+            if profile and profile.profile.tax_number:
+                profile_context = {"tax_number": profile.profile.tax_number}
+            task_export_all_dates(processed_path, export_dir, args.run_merge, export_config=profile.export if profile else None, profile_context=profile_context)
+        elif ecmd == "copy":
+            processed_path = get_processed_path(args, parser)
+            dest = require_path(parser, args.dest, "dest", create_if_missing=True)
+            with task_log_context(processed_path, "copy_matching"):
+                copy_matching_files(processed_path, args.pattern, dest)
 
     elif cmd == "backfill":
         if not args.backfill_command:

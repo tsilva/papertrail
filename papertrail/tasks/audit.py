@@ -361,7 +361,13 @@ def _section_summary(records: list[tuple[Path, dict]]) -> None:
         print(f"  {label:<30} {value:>10}")
 
 
-def task_audit(processed_path: Path) -> None:
+def _section_verify_hashes(processed_path: Path) -> None:
+    _header("11. Hash Verification")
+    from papertrail.tasks.validation import validate_metadata
+    validate_metadata(processed_path)
+
+
+def task_audit(processed_path: Path, verify_hashes: bool = False) -> None:
     """Run extraction quality audit and print report to stdout."""
     print(f"Loading metadata from: {processed_path}")
     records = _load_all_metadata(processed_path)
@@ -381,4 +387,8 @@ def task_audit(processed_path: Path) -> None:
     _section_amounts(records)
     _section_qr(records)
     _section_summary(records)
+
+    if verify_hashes:
+        _section_verify_hashes(processed_path)
+
     print()

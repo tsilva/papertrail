@@ -52,6 +52,7 @@ class PDFCandidate:
     page_count: Optional[int] = None
     sub_doc_index: Optional[int] = None
     is_sub_document: bool = False
+    exclude_from_matching: bool = False
 
     @property
     def candidate_id(self) -> str:
@@ -132,13 +133,17 @@ def _discover_bank_statements(export_path: Path) -> list[Path]:
     return statements
 
 
-def _load_pdf_candidates(export_path: Path) -> list[PDFCandidate]:
+def _load_pdf_candidates(export_path: Path, exclude_prefixes: list[str] | None = None) -> list[PDFCandidate]:
     """Load document candidates from JSON sidecar metadata in export folder.
 
     Excludes bank-statement entries (they are the source, not candidates).
     When a document has sub_documents (2+ entries), expands each sub-document
     as an independent candidate (parent is skipped as a candidate).
+    Candidates whose filename starts with an exclude prefix are flagged
+    (exclude_from_matching=True) and skipped during matching phases.
     """
+    if exclude_prefixes is None:
+        exclude_prefixes = []
     candidates = []
     for json_path, data in iter_json_files(export_path):
         if data.get("document_type") == "bank-statement":
@@ -147,6 +152,11 @@ def _load_pdf_candidates(export_path: Path) -> list[PDFCandidate]:
         doc_path = find_companion_file(json_path, data)
         if doc_path is None:
             continue
+
+        # Check if this candidate should be excluded from matching
+        excluded = any(doc_path.name.startswith(prefix) for prefix in exclude_prefixes)
+        if excluded:
+            logger.debug(f"[EXCLUDE-PREFIX] Skipping {doc_path.name} from matching")
 
         # Expand sub-documents as individual candidates
         sub_docs = data.get("sub_documents")
@@ -170,6 +180,7 @@ def _load_pdf_candidates(export_path: Path) -> list[PDFCandidate]:
                     total_amount_currency=sd.get("total_amount_currency"),
                     sub_doc_index=i,
                     is_sub_document=True,
+                    exclude_from_matching=excluded,
                 ))
             # Parent also added below as candidate for aggregated amount matching
 
@@ -190,6 +201,7 @@ def _load_pdf_candidates(export_path: Path) -> list[PDFCandidate]:
             total_amount=total_amount,
             total_amount_currency=data.get("total_amount_currency"),
             page_count=data.get("page_count"),
+            exclude_from_matching=excluded,
         ))
 
     return candidates
@@ -476,6 +488,14 @@ def _validate_required_documents(
                 row_errors.append(f"missing {display_pattern} (expected {min_count}, found {count})")
             elif max_count is not None and count > max_count:
                 row_errors.append(f"too many {display_pattern} (expected max {max_count}, found {count})")
+
+        # Check for unexpected document types (not matching any required or shared pattern)
+        all_patterns = list(rule.required_types.keys()) + list(rule.shared_types.keys())
+        for c in m.pdf_candidates:
+            if c.document_type is None:
+                row_errors.append(f"unexpected document with unknown type ({c.pdf_filename})")
+            elif not any(_match_type_pattern(c.document_type, p) for p in all_patterns):
+                row_errors.append(f"unexpected {c.document_type} ({c.pdf_filename})")
 
         # Page count validation per document type
         if rule.expected_page_count:
@@ -815,15 +835,17 @@ def _reconcile_single(
             console.warning("No untreated transactions found")
         return empty_stats
 
-    candidates = _load_pdf_candidates(export_path)
+    profile = get_current_profile()
+    exclude_prefixes = profile.reconciliation.exclude_prefixes
+    candidates = _load_pdf_candidates(export_path, exclude_prefixes=exclude_prefixes)
+    matchable = [c for c in candidates if not c.exclude_from_matching]
 
     p1_matches, unmatched_txns, remaining_cands = (
-        _phase1_deterministic_match(transactions, candidates)
+        _phase1_deterministic_match(transactions, matchable)
     )
 
     p2_matches: list[MatchResult] = []
     if unmatched_txns and remaining_cands:
-        profile = get_current_profile()
         model_id = profile.openrouter.model_id
         client = get_openai_client()
         p2_matches = _phase2_llm_match(
@@ -837,15 +859,14 @@ def _reconcile_single(
     final_unmatched = [txn for txn in unmatched_txns if txn.row_number not in p2_matched_rows]
 
     # Link companion documents (sum-based matching for grouped transactions like fee + stamp duty)
-    profile = get_current_profile()
     rules = profile.reconciliation.rules
     all_matches, final_unmatched, companion_candidate_ids = _link_companion_documents(
-        all_matches, final_unmatched, candidates, rules,
+        all_matches, final_unmatched, matchable, rules,
     )
 
     # Link shared documents (e.g., Shared Toll receipt shared across all SHAREDTOLL transactions)
     all_matches, final_unmatched, shared_candidate_ids = _link_shared_documents(
-        all_matches, final_unmatched, candidates, rules,
+        all_matches, final_unmatched, matchable, rules,
     )
 
     # Redundancy detection: warn if a non-sub-doc, non-shared, non-companion candidate matches multiple transactions
