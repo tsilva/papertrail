@@ -123,6 +123,9 @@ def initialize_config(profile_name: Optional[str] = None) -> None:
         console = get_console()
         console.warning(f"API base URL is not accessible: {base_url}", indent=False)
         console.warning("LLM-dependent tasks will fail. Offline tasks (rename, validate, backfill) will work.", indent=False)
+        from rich.prompt import Confirm
+        if not Confirm.ask("Proceed without API access?", default=True):
+            raise SystemExit(0)
 
     cache_dir = get_cache_dir()
     nif_cache = None
@@ -137,40 +140,121 @@ def initialize_config(profile_name: Optional[str] = None) -> None:
     ))
 
 
+def get_processed_path(args, parser) -> Path:
+    """Resolve processed_path from args or profile, with validation."""
+    path_str = getattr(args, 'processed_path', None) or _get_profile_path("processed")
+    p = require_path(parser, path_str, "processed_path")
+    p.mkdir(parents=True, exist_ok=True)
+    return p
+
+
+def _add_processed_path(sub):
+    """Add optional processed_path positional to a subparser."""
+    sub.add_argument("processed_path", nargs="?", help="Path to processed folder (default: from profile).")
+
+
 def main():
     """Main CLI entry point."""
     parser = argparse.ArgumentParser(
-        description="Process a folder of PDF files.",
+        description="AI-powered document classification and organization.",
         epilog="Use --profile to select a configuration profile."
     )
     parser.add_argument("--profile", type=str, help="Configuration profile to use.")
     parser.add_argument("--verbose", "-v", action="store_true", help="Enable verbose output.")
-    parser.add_argument("task", type=str, nargs='?', default='pipeline', choices=[
-        'extract_new', 'rename_files', 'validate_metadata', 'export_excel',
-        'copy_matching', 'export_all_dates', 'pipeline',
-        'gmail_download', 'backfill_page_count', 'backfill_file_size',
-        'backfill_text_hash', 'backfill_sub_documents', 'fix_unicode',
-        'split_bundles', 'sync', 'validate_extraction', 'qr_inventory', 'reconcile', 'audit',
-    ], help="Task to perform (default: pipeline).")
-    parser.add_argument("processed_path", type=str, nargs='?', help="Path to output folder.")
-    parser.add_argument("--raw_path", type=str, help="Path to documents folder(s). Use ';' to separate multiple.")
-    parser.add_argument("--excel_output_path", type=str, help="Path to output Excel file.")
-    parser.add_argument("--pattern", type=str, help="Pattern for matching files (glob or regex).")
-    parser.add_argument("--copy_dest_folder", type=str, help="Destination folder for copied files.")
-    parser.add_argument("--export_base_dir", type=str, help="Base export directory.")
-    parser.add_argument("--run_merge", action="store_true", help="Run PDF merge for changed directories.")
-    date_group = parser.add_mutually_exclusive_group()
-    date_group.add_argument("--months", type=int, default=2, help="Number of months to process (default: 2). Counts back from current month.")
-    date_group.add_argument("--export_date", type=str, help="Export date in YYYY-MM format (for pipeline).")
-    parser.add_argument("--dry_run", action="store_true", help="Show what would be changed without modifying files.")
-    parser.add_argument("--all_unknown", action="store_true", help="Re-extract all files with $UNKNOWN$ values.")
-    parser.add_argument("--workers", "-w", type=int, default=1, help="Number of parallel workers (default: 1).")
-    parser.add_argument("--all", action="store_true", help="Process all matching PDFs, not just orphans.")
-    parser.add_argument("--export_path", type=str, help="Path to export folder.")
-    parser.add_argument("--excel_path", type=str, help="Path to transactions Excel file (for reconcile).")
     parser.add_argument("--interactive", "-i", action="store_true", help="Enable interactive prompts for new document types/parties.")
-    parser.add_argument("--no_resume", action="store_true", help="Don't resume from checkpoint.")
+
+    sub = parser.add_subparsers(dest="command", title="commands")
+
+    # pipeline (default when no command given)
+    p = sub.add_parser("pipeline", help="Full end-to-end workflow (default).")
+    grp = p.add_mutually_exclusive_group()
+    grp.add_argument("--months", type=int, default=2, help="Months to process (default: 2).")
+    grp.add_argument("--export_date", type=str, help="Export date in YYYY-MM format.")
+
+    # extract (was extract_new)
+    p = sub.add_parser("extract", help="Process new PDFs/XLSX from raw folder.")
+    _add_processed_path(p)
+    p.add_argument("--raw_path", type=str, help="Document folder(s), ';'-separated.")
+
+    # sync
+    p = sub.add_parser("sync", help="Sync metadata.")
+    _add_processed_path(p)
+    p.add_argument("--pattern", type=str, help="Glob/regex pattern.")
+    p.add_argument("--dry_run", action="store_true", help="Preview without modifying.")
+    p.add_argument("--all_unknown", action="store_true", help="Re-extract all $UNKNOWN$ values.")
+    p.add_argument("--workers", "-w", type=int, default=1, help="Parallel workers (default: 1).")
+    p.add_argument("--all", action="store_true", help="Process all PDFs, not just orphans.")
+
+    # reconcile
+    p = sub.add_parser("reconcile", help="Reconcile bank transactions against documents.")
+    p.add_argument("--export_path", type=str, help="Path to export folder.")
+    p.add_argument("--excel_path", type=str, help="Path to transactions Excel file.")
+    p.add_argument("--dry_run", action="store_true", help="Preview without modifying.")
+
+    # qr-inventory
+    p = sub.add_parser("qr-inventory", help="Scan PDFs for QR codes.")
+    p.add_argument("--export_path", type=str, help="Path to export folder.")
+    p.add_argument("--no_resume", action="store_true", help="Don't resume from checkpoint.")
+
+    # gmail (was gmail_download)
+    p = sub.add_parser("gmail", help="Download email attachments from Gmail.")
+    p.add_argument("--months", type=int, default=2, help="Months to process (default: 2).")
+
+    # export-excel (was export_excel)
+    p = sub.add_parser("export-excel", help="Export metadata to Excel.")
+    _add_processed_path(p)
+    p.add_argument("--output", type=str, required=True, help="Output .xlsx file path.")
+
+    # export-dates (was export_all_dates)
+    p = sub.add_parser("export-dates", help="Export files by date range.")
+    _add_processed_path(p)
+    p.add_argument("--base_dir", type=str, help="Base export directory.")
+    p.add_argument("--run_merge", action="store_true", help="Run PDF merge for changed directories.")
+
+    # validate-extraction
+    p = sub.add_parser("validate-extraction", help="Validate extraction quality.")
+    _add_processed_path(p)
+    p.add_argument("--pattern", type=str, help="Glob/regex pattern.")
+
+    # copy (was copy_matching)
+    p = sub.add_parser("copy", help="Copy files matching pattern.")
+    _add_processed_path(p)
+    p.add_argument("--pattern", type=str, required=True, help="Pattern for matching files.")
+    p.add_argument("--dest", type=str, required=True, help="Destination folder.")
+
+    # split-bundles
+    p = sub.add_parser("split-bundles", help="Split bundled documents.")
+    _add_processed_path(p)
+    p.add_argument("--dry_run", action="store_true", help="Preview without modifying.")
+
+    # rename (was rename_files)
+    p = sub.add_parser("rename", help="Rename files based on metadata.")
+    _add_processed_path(p)
+
+    # validate (was validate_metadata)
+    p = sub.add_parser("validate", help="Validate metadata consistency.")
+    _add_processed_path(p)
+
+    # fix-unicode
+    p = sub.add_parser("fix-unicode", help="Fix escaped Unicode in metadata JSON.")
+    _add_processed_path(p)
+
+    # audit
+    p = sub.add_parser("audit", help="Audit processed files.")
+    _add_processed_path(p)
+
+    # backfill (with sub-subcommands)
+    p_backfill = sub.add_parser("backfill", help="Backfill metadata fields.")
+    bsub = p_backfill.add_subparsers(dest="backfill_command", title="backfill tasks")
+    for name in ["page-count", "file-size", "text-hash", "sub-documents"]:
+        bp = bsub.add_parser(name, help=f"Backfill {name}.")
+        _add_processed_path(bp)
+
     args = parser.parse_args()
+
+    # Default to pipeline when no command given
+    if not args.command:
+        args.command = "pipeline"
 
     setup_logging(verbose=args.verbose)
 
@@ -185,39 +269,21 @@ def main():
         from papertrail.interactive import set_interactive
         set_interactive(True)
 
-    task = args.task
+    cmd = args.command
 
-    if args.months < 1:
-        parser.error("The --months argument must be >= 1.")
+    # --- Dispatch ---
 
-    if task == "pipeline":
-        if args.export_date and not re.match(r"^\d{4}-\d{2}$", args.export_date):
-            parser.error("The --export_date argument must be in YYYY-MM format.")
-        pipeline(months=args.months, export_date_arg=args.export_date)
-        return
+    if cmd == "pipeline":
+        months = getattr(args, 'months', 2) or 2
+        export_date = getattr(args, 'export_date', None)
+        if months < 1:
+            parser.error("--months must be >= 1.")
+        if export_date and not re.match(r"^\d{4}-\d{2}$", export_date):
+            parser.error("--export_date must be in YYYY-MM format.")
+        pipeline(months=months, export_date_arg=export_date)
 
-    if task == "gmail_download":
-        try:
-            task_gmail_download(months=args.months)
-        except RuntimeError:
-            sys.exit(1)
-        return
-
-    if task == "qr_inventory":
-        export = require_path(parser, args.export_path or _get_profile_path("export"), "export_path")
-        task_qr_inventory(export, resume=not args.no_resume)
-        return
-
-    if task == "reconcile":
-        export = require_path(parser, args.export_path or _get_profile_path("export"), "export_path")
-        excel = Path(args.excel_path) if args.excel_path else None
-        task_reconcile(export, excel_path=excel, dry_run=args.dry_run)
-        return
-
-    processed_path = require_path(parser, args.processed_path or _get_profile_path("processed"), "processed_path")
-    processed_path.mkdir(parents=True, exist_ok=True)
-
-    if task == "extract_new":
+    elif cmd == "extract":
+        processed_path = get_processed_path(args, parser)
         raw_path_arg = args.raw_path
         if not raw_path_arg:
             from papertrail.config import get_current_profile
@@ -225,72 +291,98 @@ def main():
             if profile and profile.paths.raw:
                 raw_path_arg = ";".join(profile.paths.raw)
         if not raw_path_arg:
-            parser.error("the --raw_path argument is required when task is 'extract_new'.")
+            parser.error("--raw_path is required for extract.")
         raw_paths = [require_path(parser, rp, "raw_path") for rp in raw_path_arg.split(';') if rp]
         if not raw_paths:
-            parser.error("the --raw_path argument must contain at least one path.")
+            parser.error("--raw_path must contain at least one path.")
         task_extract_new(processed_path, raw_paths)
 
-    elif task == "rename_files":
-        task_rename_files(processed_path)
-
-    elif task == "validate_metadata":
-        with task_log_context(processed_path, "validate_metadata"):
-            validate_metadata(processed_path)
-
-    elif task == "export_excel":
-        if not args.excel_output_path:
-            parser.error("the --excel_output_path argument is required when task is 'export_excel'.")
-        if not args.excel_output_path.endswith(".xlsx"):
-            parser.error("the --excel_output_path must end with '.xlsx'.")
-        with task_log_context(processed_path, "export_excel"):
-            export_metadata_to_excel(processed_path, args.excel_output_path)
-
-    elif task == "copy_matching":
-        if not args.pattern:
-            parser.error("the --pattern argument is required when task is 'copy_matching'.")
-        dest = require_path(parser, args.copy_dest_folder, "copy_dest_folder", create_if_missing=True)
-        with task_log_context(processed_path, "copy_matching"):
-            copy_matching_files(processed_path, args.pattern, dest)
-
-    elif task == "export_all_dates":
-        export_base_dir = args.export_base_dir or os.getenv("EXPORT_FILES_DIR")
-        export_dir = require_path(parser, export_base_dir, "export_base_dir", create_if_missing=True)
-        profile_context = None
-        if profile.profile.tax_number:
-            profile_context = {"tax_number": profile.profile.tax_number}
-        task_export_all_dates(processed_path, export_dir, args.run_merge, export_config=profile.export, profile_context=profile_context)
-
-    elif task == "sync":
+    elif cmd == "sync":
+        processed_path = get_processed_path(args, parser)
         task_sync(
             processed_path, dry_run=args.dry_run,
             all_unknown=args.all_unknown, pattern=args.pattern,
             workers=args.workers, all=args.all,
         )
 
-    elif task == "validate_extraction":
+    elif cmd == "reconcile":
+        export = require_path(parser, args.export_path or _get_profile_path("export"), "export_path")
+        excel = Path(args.excel_path) if args.excel_path else None
+        task_reconcile(export, excel_path=excel, dry_run=args.dry_run)
+
+    elif cmd == "qr-inventory":
+        export = require_path(parser, args.export_path or _get_profile_path("export"), "export_path")
+        task_qr_inventory(export, resume=not args.no_resume)
+
+    elif cmd == "gmail":
+        if args.months < 1:
+            parser.error("--months must be >= 1.")
+        try:
+            task_gmail_download(months=args.months)
+        except RuntimeError:
+            sys.exit(1)
+
+    elif cmd == "export-excel":
+        processed_path = get_processed_path(args, parser)
+        if not args.output.endswith(".xlsx"):
+            parser.error("--output must end with '.xlsx'.")
+        with task_log_context(processed_path, "export_excel"):
+            export_metadata_to_excel(processed_path, args.output)
+
+    elif cmd == "export-dates":
+        processed_path = get_processed_path(args, parser)
+        from papertrail.config import get_current_profile
+        profile = get_current_profile()
+        export_base_dir = getattr(args, 'base_dir', None) or (profile.paths.export if profile else None) or os.getenv("EXPORT_FILES_DIR")
+        export_dir = require_path(parser, export_base_dir, "base_dir", create_if_missing=True)
+        profile_context = None
+        if profile and profile.profile.tax_number:
+            profile_context = {"tax_number": profile.profile.tax_number}
+        task_export_all_dates(processed_path, export_dir, args.run_merge, export_config=profile.export if profile else None, profile_context=profile_context)
+
+    elif cmd == "validate-extraction":
+        processed_path = get_processed_path(args, parser)
         task_validate_extraction(processed_path, pattern=args.pattern)
 
-    elif task == "backfill_page_count":
-        task_backfill_page_count(processed_path)
+    elif cmd == "copy":
+        processed_path = get_processed_path(args, parser)
+        dest = require_path(parser, args.dest, "dest", create_if_missing=True)
+        with task_log_context(processed_path, "copy_matching"):
+            copy_matching_files(processed_path, args.pattern, dest)
 
-    elif task == "backfill_file_size":
-        task_backfill_file_size(processed_path)
-
-    elif task == "backfill_text_hash":
-        task_backfill_text_hash(processed_path)
-
-    elif task == "backfill_sub_documents":
-        task_backfill_sub_documents(processed_path)
-
-    elif task == "fix_unicode":
-        task_fix_unicode(processed_path)
-
-    elif task == "split_bundles":
+    elif cmd == "split-bundles":
+        processed_path = get_processed_path(args, parser)
         task_split_bundles(processed_path, dry_run=args.dry_run)
 
-    elif task == "audit":
+    elif cmd == "rename":
+        processed_path = get_processed_path(args, parser)
+        task_rename_files(processed_path)
+
+    elif cmd == "validate":
+        processed_path = get_processed_path(args, parser)
+        with task_log_context(processed_path, "validate_metadata"):
+            validate_metadata(processed_path)
+
+    elif cmd == "fix-unicode":
+        processed_path = get_processed_path(args, parser)
+        task_fix_unicode(processed_path)
+
+    elif cmd == "audit":
+        processed_path = get_processed_path(args, parser)
         task_audit(processed_path)
+
+    elif cmd == "backfill":
+        if not args.backfill_command:
+            p_backfill.print_help()
+            sys.exit(1)
+        processed_path = get_processed_path(args, parser)
+        backfill_map = {
+            "page-count": task_backfill_page_count,
+            "file-size": task_backfill_file_size,
+            "text-hash": task_backfill_text_hash,
+            "sub-documents": task_backfill_sub_documents,
+        }
+        backfill_map[args.backfill_command](processed_path)
 
 
 if __name__ == "__main__":
