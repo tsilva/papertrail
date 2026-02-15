@@ -41,6 +41,7 @@ from papertrail.tasks import (
     pipeline,
     task_reconcile,
     task_audit,
+    task_archive,
     task_log_context,
 )
 
@@ -200,6 +201,12 @@ def main():
     p.add_argument("--verify-hashes", action="store_true",
                    help="Verify file hashes match metadata (expensive).")
 
+    # archive
+    p = sub.add_parser("archive", help="Archive documents by hash digest.")
+    p.add_argument("digest", nargs="+", help="One or more hash_file digests to archive.")
+    _add_processed_path(p)
+    p.add_argument("--dry_run", action="store_true", help="Preview without moving.")
+
     # export (subcommand group)
     p_export = sub.add_parser("export", help="Export documents and metadata.")
     esub = p_export.add_subparsers(dest="export_command", title="export tasks")
@@ -300,6 +307,10 @@ def main():
     elif cmd == "audit":
         processed_path = get_processed_path(args, parser)
         task_audit(processed_path, verify_hashes=args.verify_hashes)
+
+    elif cmd == "archive":
+        processed_path = get_processed_path(args, parser)
+        task_archive(processed_path, args.digest, dry_run=args.dry_run)
 
     elif cmd == "export":
         if not args.export_command:

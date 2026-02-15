@@ -53,3 +53,4 @@ from papertrail.tasks.gmail_task import task_gmail_download
 from papertrail.tasks.pipeline import pipeline
 from papertrail.tasks.reconciliation import task_reconcile
 from papertrail.tasks.audit import task_audit
+from papertrail.tasks.archive import task_archive
