@@ -101,6 +101,7 @@ class ReconciliationRule:
 class ReconciliationConfig:
     """Reconciliation validation configuration."""
     rules: List[ReconciliationRule] = field(default_factory=list)
+    exclude_prefixes: List[str] = field(default_factory=list)
 
 
 @dataclass
@@ -292,7 +293,8 @@ def _parse_reconciliation_config(recon_data: Dict[str, Any]) -> ReconciliationCo
             companions=rd.get("companions", []),
             expected_page_count=rd.get("expected_page_count", {}),
         ))
-    return ReconciliationConfig(rules=rules)
+    exclude_prefixes = recon_data.get("exclude_prefixes", [])
+    return ReconciliationConfig(rules=rules, exclude_prefixes=exclude_prefixes)
 
 
 def _parse_profile_dict(data: Dict[str, Any], profile_path: Path) -> Profile:
