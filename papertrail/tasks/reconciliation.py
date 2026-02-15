@@ -571,6 +571,147 @@ def _link_shared_documents(
     return updated_matches, updated_unmatched, shared_candidate_ids
 
 
+def _link_companion_documents(
+    all_matches: list[MatchResult],
+    final_unmatched: list[Transaction],
+    all_candidates: list[PDFCandidate],
+    rules: list,
+) -> tuple[list[MatchResult], list[Transaction], set[str]]:
+    """Link companion documents via sum-based matching for grouped transactions.
+
+    When a rule declares companions (e.g., bank-fee-package companions: [bank-fee-stamp-duty]),
+    transactions matching those rules on the same date are grouped. Their absolute amounts are
+    summed and matched against unmatched candidates. The matched document is linked to all
+    transactions in the group.
+
+    Returns updated (all_matches, final_unmatched, companion_candidate_ids).
+    """
+    companion_candidate_ids: set[str] = set()
+
+    # Build rules-by-name index
+    rules_by_name: dict[str, object] = {r.name: r for r in rules}
+
+    # Find rules that declare companions
+    rules_with_companions = [r for r in rules if r.companions]
+    if not rules_with_companions:
+        return all_matches, final_unmatched, companion_candidate_ids
+
+    # Classify all transactions (matched + unmatched) by rule
+    matched_by_row = {m.transaction.row_number: m for m in all_matches}
+    all_txns = [m.transaction for m in all_matches] + final_unmatched
+
+    txns_by_rule: dict[str, list[Transaction]] = {}
+    for txn in all_txns:
+        category, _ = _classify_transaction(txn, rules)
+        txns_by_rule.setdefault(category, []).append(txn)
+
+    # Build set of already-matched candidate IDs to skip
+    already_matched_ids: set[str] = set()
+    for m in all_matches:
+        for c in m.pdf_candidates:
+            already_matched_ids.add(c.candidate_id)
+
+    newly_matched: list[MatchResult] = []
+    still_unmatched_rows: set[int] = {txn.row_number for txn in final_unmatched}
+    seen_groups: set[frozenset[int]] = set()
+
+    for rule in rules_with_companions:
+        companion_names = [rule.name] + rule.companions
+        # Gather all transactions from the rule + its companions
+        companion_txns: list[Transaction] = []
+        for name in companion_names:
+            companion_txns.extend(txns_by_rule.get(name, []))
+
+        if len(companion_txns) < 2:
+            continue
+
+        # Group by exact posting date
+        by_date: dict[str, list[Transaction]] = {}
+        for txn in companion_txns:
+            date = txn.date_posting or txn.date_value
+            if date:
+                by_date.setdefault(date, []).append(txn)
+
+        for date, group_txns in by_date.items():
+            # Need transactions from at least 2 different rules to form a companion group
+            group_rules = set()
+            for txn in group_txns:
+                cat, _ = _classify_transaction(txn, rules)
+                group_rules.add(cat)
+            if len(group_rules) < 2:
+                continue
+
+            # Dedup groups by frozenset of row numbers
+            group_key = frozenset(txn.row_number for txn in group_txns)
+            if group_key in seen_groups:
+                continue
+            seen_groups.add(group_key)
+
+            # Sum absolute amounts
+            group_sum = sum(abs(txn.amount) for txn in group_txns)
+
+            # Search for matching candidate (amount match within tolerance, date within window)
+            matched_cand = None
+            for cand in all_candidates:
+                if cand.candidate_id in already_matched_ids:
+                    continue
+                if cand.total_amount is None:
+                    continue
+                if abs(group_sum - cand.total_amount) > _AMOUNT_TOLERANCE:
+                    continue
+                days = _days_between(date, cand.date_issued)
+                if days is not None and days <= _DATE_WINDOW_DAYS:
+                    matched_cand = cand
+                    break
+
+            if matched_cand is None:
+                continue
+
+            companion_candidate_ids.add(matched_cand.candidate_id)
+            already_matched_ids.add(matched_cand.candidate_id)
+
+            row_nums = sorted(txn.row_number for txn in group_txns)
+            logger.debug(
+                f"[COMPANION] Rows {row_nums}: sum={group_sum:.2f} -> "
+                f"{matched_cand.pdf_filename} ({matched_cand.total_amount:.2f})"
+            )
+
+            # Link found document to all transactions in the group
+            for txn in group_txns:
+                if txn.row_number in matched_by_row:
+                    # Already matched — append candidate (skip duplicates)
+                    match = matched_by_row[txn.row_number]
+                    existing_ids = {c.candidate_id for c in match.pdf_candidates}
+                    if matched_cand.candidate_id not in existing_ids:
+                        match.pdf_candidates.append(matched_cand)
+                elif txn.row_number in still_unmatched_rows:
+                    # Previously unmatched — create new match
+                    new_match = MatchResult(
+                        transaction=txn,
+                        pdf_candidates=[matched_cand],
+                        method="companion",
+                        confidence=1.0,
+                        reasoning=f"Companion sum match: {group_sum:.2f}",
+                    )
+                    newly_matched.append(new_match)
+                    still_unmatched_rows.discard(txn.row_number)
+                    matched_by_row[txn.row_number] = new_match
+
+    updated_matches = all_matches + newly_matched
+    updated_unmatched = [txn for txn in final_unmatched if txn.row_number in still_unmatched_rows]
+
+    if newly_matched:
+        logger.debug(
+            f"[COMPANION] Linked companion documents to {len(newly_matched)} previously unmatched transactions"
+        )
+    if companion_candidate_ids:
+        logger.debug(
+            f"[COMPANION] {len(companion_candidate_ids)} companion candidate(s) matched"
+        )
+
+    return updated_matches, updated_unmatched, companion_candidate_ids
+
+
 def _write_reconciliation_file(
     excel_path: Path,
     matches: list[MatchResult],
@@ -695,14 +836,19 @@ def _reconcile_single(
     p2_matched_rows = {m.transaction.row_number for m in p2_matches}
     final_unmatched = [txn for txn in unmatched_txns if txn.row_number not in p2_matched_rows]
 
-    # Link shared documents (e.g., Via Verde receipt shared across all VIAVERDE transactions)
+    # Link companion documents (sum-based matching for grouped transactions like fee + stamp duty)
     profile = get_current_profile()
     rules = profile.reconciliation.rules
+    all_matches, final_unmatched, companion_candidate_ids = _link_companion_documents(
+        all_matches, final_unmatched, candidates, rules,
+    )
+
+    # Link shared documents (e.g., Via Verde receipt shared across all VIAVERDE transactions)
     all_matches, final_unmatched, shared_candidate_ids = _link_shared_documents(
         all_matches, final_unmatched, candidates, rules,
     )
 
-    # Redundancy detection: warn if a non-sub-doc, non-shared candidate matches multiple transactions
+    # Redundancy detection: warn if a non-sub-doc, non-shared, non-companion candidate matches multiple transactions
     candidate_match_counts: dict[str, int] = {}
     for m in all_matches:
         for cand in m.pdf_candidates:
@@ -713,7 +859,7 @@ def _reconcile_single(
                 c.candidate_id == cid and c.is_sub_document
                 for m in all_matches for c in m.pdf_candidates
             )
-            if not is_sub_doc and cid not in shared_candidate_ids:
+            if not is_sub_doc and cid not in shared_candidate_ids and cid not in companion_candidate_ids:
                 logger.warning(f"[REDUNDANT-MATCH] {cid} matched {count} transactions")
 
     # Build set of all matched PDF candidate_ids
