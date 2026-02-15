@@ -53,7 +53,7 @@ export:
   file_mappings:
     enabled: true
     default_prefix: "DIV_"
-    filename_fields: [date_issued, issuing_party, document_title]
+    filename_fields: [date_issued, document_type, issuing_party, document_title]
     rules:
       # Vendor: I issued this invoice (my tax number is the issuer)
       - match:
