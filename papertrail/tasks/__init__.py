@@ -33,21 +33,17 @@ from papertrail.tasks.extraction import (
     classify_pdf_document,
     task_extract_new,
     task_sync,
-    task_validate_extraction,
 )
 from papertrail.tasks.organization import (
     task_rename_files,
     copy_matching_files,
 )
 from papertrail.tasks.validation import (
-    validate_metadata,
     validate_merged_pdf,
     task_backfill_page_count,
     task_backfill_file_size,
     task_backfill_text_hash,
     task_backfill_sub_documents,
-    task_fix_unicode,
-    task_split_bundles,
 )
 from papertrail.tasks.export import (
     export_metadata_to_excel,
@@ -55,6 +51,5 @@ from papertrail.tasks.export import (
 )
 from papertrail.tasks.gmail_task import task_gmail_download
 from papertrail.tasks.pipeline import pipeline
-from papertrail.tasks.qr_inventory import task_qr_inventory
 from papertrail.tasks.reconciliation import task_reconcile
 from papertrail.tasks.audit import task_audit
