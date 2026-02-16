@@ -168,7 +168,7 @@ def main(
     except (ProfileNotFoundError, ConfigError) as e:
         _fail(str(e))
     if ctx.invoked_subcommand is None:
-        pipeline_cmd()
+        pipeline_cmd(months=2, export_date=None)
 
 
 # ── Commands ─────────────────────────────────────────────────────
