@@ -403,19 +403,22 @@ def classify_pdf_document(pdf_path: Path, file_hash: str, failure_logger=None,
 
         # Phase 4: NIF enrichment
         nif_enriched = False
+        nif_from_qr = qr_metadata is not None and not is_multi_qr
         old_issuing_party = normalized_issuing_party
         normalized_issuing_party = _phase4_nif_enrich(
             merged, raw_metadata, normalized_issuing_party, ctx, doc_logger,
         )
         nif_enriched = normalized_issuing_party != old_issuing_party
 
-        # Auto-accept NIF-enriched issuer names (100% accurate official data)
-        if nif_enriched and normalized_issuing_party != "$UNKNOWN$":
+        # Auto-accept NIF-enriched issuer names only when NIF came from QR code
+        # (QR NIFs are machine-readable and 100% accurate; LLM-extracted NIFs
+        # may be wrong — e.g. reading a different entity's NIF from the document)
+        if nif_enriched and nif_from_qr and normalized_issuing_party != "$UNKNOWN$":
             add_session_party(normalized_issuing_party)
 
         # Phase 2b: Interactive confirmation for issuing_party
-        # Skip if NIF enriched it (100% accurate)
-        if not nif_enriched:
+        # Skip only if QR-sourced NIF enriched it (100% accurate)
+        if not (nif_enriched and nif_from_qr):
             known_parties = set(get_issuing_parties())
             if normalized_issuing_party not in known_parties:
                 normalized_issuing_party = confirm_classification(
