@@ -1,15 +1,12 @@
 """Profile-based configuration system for papertrail."""
 
 import os
-from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Optional
 
 try:
     import yaml
 except ImportError:
     yaml = None  # type: ignore
-
 
 
 class ProfileError(Exception):
@@ -32,132 +29,71 @@ class ProfileValidationError(ProfileError):
     pass
 
 
+class Config:
+    """YAML config with dot-path access.
 
-@dataclass
-class ProfileMetadata:
-    """Profile metadata (name, description)."""
-    name: str
-    description: str = ""
-    tax_number: Optional[str] = None
+    Wraps a dict so that nested sections are accessible via attribute access:
+        config.openrouter.model_id  # instead of config["openrouter"]["model_id"]
 
+    Nested dicts become Config objects. Lists of dicts become lists of Config objects.
+    Missing keys return None. Also supports dict-like methods (items, keys, etc.)
+    for data dicts like reconciliation rule required_types.
+    """
 
-@dataclass
-class PathsConfig:
-    """Path configuration for raw, processed, and export directories."""
-    raw: List[str] = field(default_factory=list)
-    processed: Optional[str] = None
-    export: Optional[str] = None
+    def __init__(self, data: dict):
+        object.__setattr__(self, '_data', data)
 
+    def __getattr__(self, key):
+        try:
+            val = self._data[key]
+        except KeyError:
+            return None
+        if isinstance(val, dict):
+            return Config(val)
+        if isinstance(val, list):
+            return [Config(item) if isinstance(item, dict) else item for item in val]
+        return val
 
-@dataclass
-class OpenRouterConfig:
-    """OpenRouter API configuration."""
-    model_id: Optional[str] = None
-    api_key: Optional[str] = None
-    base_url: str = "https://openrouter.ai/api/v1"
+    def __setattr__(self, key, value):
+        self._data[key] = value
 
+    def get(self, key, default=None):
+        val = self._data.get(key)
+        if val is None:
+            return default
+        if isinstance(val, dict):
+            return Config(val)
+        if isinstance(val, list):
+            return [Config(item) if isinstance(item, dict) else item for item in val]
+        return val
 
+    def items(self):
+        return self._data.items()
 
-@dataclass
-class GmailConfig:
-    """Gmail integration configuration."""
-    enabled: bool = False
-    credentials_file: Optional[str] = None
-    token_file: Optional[str] = None
-    # Settings (flattened from GmailSettingsConfig)
-    attachment_mime_types: List[str] = field(default_factory=lambda: ["application/pdf"])
-    label_filter: Optional[str] = None
-    max_results_per_query: int = 500
-    skip_already_downloaded: bool = True
+    def keys(self):
+        return self._data.keys()
 
+    def values(self):
+        return self._data.values()
 
-@dataclass
-class PasswordsConfig:
-    """Password configuration for ZIP extraction."""
-    passwords: Optional[List[str]] = None
-    passwords_file: Optional[str] = None
+    def __iter__(self):
+        return iter(self._data)
 
+    def __len__(self):
+        return len(self._data)
 
+    def __contains__(self, key):
+        return key in self._data
 
-@dataclass
-class NifApiConfig:
-    """NIF lookup configuration for Portuguese tax number lookups."""
-    enabled: bool = False
-
-
-@dataclass
-class ReconciliationRule:
-    """A single reconciliation validation rule."""
-    name: str
-    match_description: List[str] = field(default_factory=list)
-    direction: Optional[str] = None  # "credit" or "debit"
-    required_types: Dict[str, Any] = field(default_factory=dict)  # pattern → cardinality
-    shared_types: Dict[str, Optional[str]] = field(default_factory=dict)  # type pattern → issuing_party filter
-    companions: List[str] = field(default_factory=list)  # rule names to group for sum-based matching
-    expected_page_count: Dict[str, int] = field(default_factory=dict)  # type pattern → expected page count
+    def __bool__(self):
+        return bool(self._data)
 
 
-@dataclass
-class ReconciliationConfig:
-    """Reconciliation validation configuration."""
-    rules: List[ReconciliationRule] = field(default_factory=list)
-    exclude_prefixes: List[str] = field(default_factory=list)
+# Backwards compatibility — config.py imports this name
+Profile = Config
 
 
-@dataclass
-class ExportMappingRule:
-    """A single prefix mapping rule for export files."""
-    match: Dict[str, str]
-    prefix: str
-
-
-@dataclass
-class ExportFileMappingsConfig:
-    """Configuration for applying prefixes to exported files."""
-    enabled: bool = False
-    default_prefix: str = ""
-    filename_fields: Optional[List[str]] = None
-    rules: List[ExportMappingRule] = field(default_factory=list)
-
-
-@dataclass
-class ExportMergeRule:
-    """A rule for merging attachment documents into target documents."""
-    target_type: str   # Type pattern for primary document (e.g., "at-irs*")
-    attach_type: str   # Type pattern for document to append (e.g., "bank-note")
-
-
-@dataclass
-class ExportConfig:
-    """Export configuration."""
-    max_file_size_mb: Optional[float] = None
-    file_mappings: ExportFileMappingsConfig = field(default_factory=ExportFileMappingsConfig)
-    merge_rules: List[ExportMergeRule] = field(default_factory=list)
-
-
-@dataclass
-class Profile:
-    """Complete profile configuration."""
-    profile: ProfileMetadata
-    paths: PathsConfig = field(default_factory=PathsConfig)
-    openrouter: OpenRouterConfig = field(default_factory=OpenRouterConfig)
-    gmail: GmailConfig = field(default_factory=GmailConfig)
-    passwords: PasswordsConfig = field(default_factory=PasswordsConfig)
-    nif_api: NifApiConfig = field(default_factory=NifApiConfig)
-    reconciliation: ReconciliationConfig = field(default_factory=ReconciliationConfig)
-    export: ExportConfig = field(default_factory=ExportConfig)
-    _profile_path: Optional[Path] = field(default=None, repr=False)
-
-    @property
-    def profile_dir(self) -> Optional[Path]:
-        """Get the directory containing this profile's config and data files."""
-        if self._profile_path:
-            return self._profile_path.parent
-        return None
-
-
-
-def resolve_path(path_str: Optional[str], profile_path: Path) -> Optional[str]:
+def _resolve_path(path_str, profile_path):
     """Resolve a path string relative to the profile file location."""
     if not path_str:
         return None
@@ -167,29 +103,108 @@ def resolve_path(path_str: Optional[str], profile_path: Path) -> Optional[str]:
     return str((profile_path.parent / path).resolve())
 
 
-def resolve_paths_in_profile(profile: Profile) -> None:
-    """Resolve all relative paths in a profile to absolute paths."""
-    if profile._profile_path is None:
-        return
+def _normalize_data(data, profile_path):
+    """Apply defaults, flatten nested structures, resolve paths."""
+    # Ensure top-level sections exist
+    data.setdefault("profile", {})
+    data["profile"].setdefault("description", "")
+    data.setdefault("paths", {})
+    data.setdefault("openrouter", {})
+    data.setdefault("gmail", {})
+    data.setdefault("passwords", {})
+    data.setdefault("nif_api", {})
+    data.setdefault("reconciliation", {})
+    data.setdefault("export", {})
 
-    pp = profile._profile_path
+    # Flatten gmail.settings into gmail
+    gmail = data["gmail"]
+    settings = gmail.pop("settings", {})
+    for k, v in settings.items():
+        gmail.setdefault(k, v)
 
-    # Resolve path lists
-    if profile.paths.raw:
-        profile.paths.raw = [resolve_path(p, pp) for p in profile.paths.raw]
+    # Apply scalar defaults
+    data["openrouter"].setdefault("base_url", "https://openrouter.ai/api/v1")
+    gmail.setdefault("enabled", False)
+    gmail.setdefault("attachment_mime_types", ["application/pdf"])
+    gmail.setdefault("max_results_per_query", 500)
+    gmail.setdefault("skip_already_downloaded", True)
+    data["nif_api"].setdefault("enabled", False)
 
-    # Resolve single paths
-    profile.paths.processed = resolve_path(profile.paths.processed, pp)
-    profile.paths.export = resolve_path(profile.paths.export, pp)
-    profile.passwords.passwords_file = resolve_path(profile.passwords.passwords_file, pp)
+    # Normalize paths.raw to list
+    paths = data["paths"]
+    raw = paths.get("raw")
+    if isinstance(raw, str):
+        paths["raw"] = [raw]
+    elif raw is None:
+        paths["raw"] = []
 
-    # Gmail credentials (resolve explicit paths; defaults handled by get_gmail_config_paths())
-    if profile.gmail.credentials_file:
-        profile.gmail.credentials_file = resolve_path(profile.gmail.credentials_file, pp)
+    # Reconciliation defaults
+    recon = data["reconciliation"]
+    if "rules" not in recon:
+        recon["rules"] = _default_reconciliation_rules()
+    else:
+        recon["rules"] = [r for r in recon["rules"] if isinstance(r, dict) and "name" in r]
+    recon.setdefault("exclude_prefixes", [])
+    # Ensure each rule has all expected fields
+    for rule in recon["rules"]:
+        rule.setdefault("match_description", [])
+        rule.setdefault("required_types", {})
+        rule.setdefault("shared_types", {})
+        rule.setdefault("companions", [])
+        rule.setdefault("expected_page_count", {})
 
-    if profile.gmail.token_file:
-        profile.gmail.token_file = resolve_path(profile.gmail.token_file, pp)
+    # Export defaults
+    export = data["export"]
+    export.setdefault("file_mappings", {})
+    export["file_mappings"].setdefault("enabled", False)
+    export["file_mappings"].setdefault("default_prefix", "")
+    export["file_mappings"].setdefault("rules", [])
+    export.setdefault("merge_rules", [])
 
+    # Profile path metadata
+    data["_profile_path"] = profile_path
+    data["profile_dir"] = profile_path.parent if profile_path else None
+
+    # Resolve relative paths
+    if profile_path:
+        if paths.get("raw"):
+            paths["raw"] = [_resolve_path(p, profile_path) for p in paths["raw"]]
+        paths["processed"] = _resolve_path(paths.get("processed"), profile_path)
+        paths["export"] = _resolve_path(paths.get("export"), profile_path)
+        data["passwords"]["passwords_file"] = _resolve_path(
+            data["passwords"].get("passwords_file"), profile_path
+        )
+        if gmail.get("credentials_file"):
+            gmail["credentials_file"] = _resolve_path(gmail["credentials_file"], profile_path)
+        if gmail.get("token_file"):
+            gmail["token_file"] = _resolve_path(gmail["token_file"], profile_path)
+
+
+def _default_reconciliation_rules():
+    """Return default rules equivalent to the old hardcoded behavior."""
+    return [
+        {
+            "name": "bank-fee",
+            "match_description": [
+                "COMISSAO", "IMPOSTO SELO", "IMP.SELO", "JUROS",
+                "ANUIDADE", "MANUTENCAO", "DESPESAS", "PORTES",
+            ],
+            "required_types": {"bank-note": 1},
+        },
+        {
+            "name": "default-credit",
+            "direction": "credit",
+            "required_types": {"bank-note|invoice-credit": 1},
+        },
+        {
+            "name": "default-debit",
+            "direction": "debit",
+            "required_types": {
+                "bank-note": 1,
+                "invoice|receipt|invoice-receipt|invoice-credit|invoice-debit|invoice-order|receipt-reference|receipt-delivery": [1, None],
+            },
+        },
+    ]
 
 
 def get_profiles_dir() -> Path:
@@ -204,7 +219,7 @@ def get_profiles_dir() -> Path:
     return repo_root / "profiles"
 
 
-def list_available_profiles() -> List[str]:
+def list_available_profiles():
     """List all available profile names (subdirectories containing profile.yaml)."""
     profiles_dir = get_profiles_dir()
     if not profiles_dir.exists():
@@ -215,7 +230,7 @@ def list_available_profiles() -> List[str]:
     ])
 
 
-def load_profile(name: str) -> Profile:
+def load_profile(name):
     """Load a profile by name from the profiles directory."""
     if yaml is None:
         raise ProfileError("PyYAML is not installed.")
@@ -239,162 +254,16 @@ def load_profile(name: str) -> Profile:
     if not isinstance(data, dict):
         raise ProfileParseError(f"Profile '{name}' must be a YAML mapping")
 
-    profile = _parse_profile_dict(data, profile_path)
-    resolve_paths_in_profile(profile)
-    return profile
-
-
-def _default_reconciliation_rules() -> List[ReconciliationRule]:
-    """Return default rules equivalent to the old hardcoded behavior."""
-    return [
-        ReconciliationRule(
-            name="bank-fee",
-            match_description=[
-                "COMISSAO", "IMPOSTO SELO", "IMP.SELO", "JUROS",
-                "ANUIDADE", "MANUTENCAO", "DESPESAS", "PORTES",
-            ],
-            required_types={"bank-note": 1},
-        ),
-        ReconciliationRule(
-            name="default-credit",
-            direction="credit",
-            required_types={
-                "bank-note|invoice-credit": 1,
-            },
-        ),
-        ReconciliationRule(
-            name="default-debit",
-            direction="debit",
-            required_types={
-                "bank-note": 1,
-                "invoice|receipt|invoice-receipt|invoice-credit|invoice-debit|invoice-order|receipt-reference|receipt-delivery": [1, None],
-            },
-        ),
-    ]
-
-
-def _parse_reconciliation_config(recon_data: Dict[str, Any]) -> ReconciliationConfig:
-    """Parse reconciliation config from YAML data."""
-    rules_data = recon_data.get("rules")
-    if rules_data is None:
-        # No rules configured — use defaults
-        return ReconciliationConfig(rules=_default_reconciliation_rules())
-
-    rules = []
-    for rd in rules_data:
-        if not isinstance(rd, dict) or "name" not in rd:
-            continue
-        rules.append(ReconciliationRule(
-            name=rd["name"],
-            match_description=rd.get("match_description", []),
-            direction=rd.get("direction"),
-            required_types=rd.get("required_types", {}),
-            shared_types=rd.get("shared_types", {}),
-            companions=rd.get("companions", []),
-            expected_page_count=rd.get("expected_page_count", {}),
-        ))
-    exclude_prefixes = recon_data.get("exclude_prefixes", [])
-    return ReconciliationConfig(rules=rules, exclude_prefixes=exclude_prefixes)
-
-
-def _parse_profile_dict(data: Dict[str, Any], profile_path: Path) -> Profile:
-    """Parse a profile dictionary into Profile dataclass."""
-    if "profile" not in data:
+    if "profile" not in data or not isinstance(data.get("profile"), dict):
         raise ProfileValidationError("Missing required field: profile")
-
-    profile_meta_data = data.get("profile", {})
-    if not isinstance(profile_meta_data, dict) or "name" not in profile_meta_data:
+    if "name" not in data["profile"]:
         raise ProfileValidationError("Missing required field: profile.name")
 
-    profile_meta = ProfileMetadata(
-        name=profile_meta_data["name"],
-        description=profile_meta_data.get("description", ""),
-        tax_number=profile_meta_data.get("tax_number"),
-    )
-
-    paths_data = data.get("paths", {})
-    paths = PathsConfig(
-        raw=paths_data.get("raw", []) if isinstance(paths_data.get("raw"), list) else [paths_data.get("raw")] if paths_data.get("raw") else [],
-        processed=paths_data.get("processed"),
-        export=paths_data.get("export")
-    )
-
-    openrouter_data = data.get("openrouter", {})
-    openrouter = OpenRouterConfig(
-        model_id=openrouter_data.get("model_id"),
-        api_key=openrouter_data.get("api_key"),
-        base_url=openrouter_data.get("base_url") or "https://openrouter.ai/api/v1"
-    )
-
-    gmail_data = data.get("gmail", {})
-    gmail_settings = gmail_data.get("settings", {})
-    gmail = GmailConfig(
-        enabled=gmail_data.get("enabled", False),
-        credentials_file=gmail_data.get("credentials_file"),
-        token_file=gmail_data.get("token_file"),
-        attachment_mime_types=gmail_settings.get("attachment_mime_types", ["application/pdf"]),
-        label_filter=gmail_settings.get("label_filter"),
-        max_results_per_query=gmail_settings.get("max_results_per_query", 500),
-        skip_already_downloaded=gmail_settings.get("skip_already_downloaded", True)
-    )
-
-    passwords_data = data.get("passwords", {})
-    passwords = PasswordsConfig(
-        passwords=passwords_data.get("passwords"),
-        passwords_file=passwords_data.get("passwords_file")
-    )
-
-    nif_api_data = data.get("nif_api", {})
-    nif_api = NifApiConfig(
-        enabled=nif_api_data.get("enabled", False),
-    )
-
-    recon_data = data.get("reconciliation", {})
-    reconciliation = _parse_reconciliation_config(recon_data)
-
-    export_data = data.get("export", {})
-    fm_data = export_data.get("file_mappings", {})
-    export_rules = []
-    for rule_data in fm_data.get("rules", []):
-        if isinstance(rule_data, dict) and "match" in rule_data and "prefix" in rule_data:
-            export_rules.append(ExportMappingRule(
-                match=rule_data["match"],
-                prefix=rule_data["prefix"],
-            ))
-    export_file_mappings = ExportFileMappingsConfig(
-        enabled=fm_data.get("enabled", False),
-        default_prefix=fm_data.get("default_prefix", ""),
-        filename_fields=fm_data.get("filename_fields"),
-        rules=export_rules,
-    )
-    merge_rules = []
-    for mr_data in export_data.get("merge_rules", []):
-        if isinstance(mr_data, dict) and "target_type" in mr_data and "attach_type" in mr_data:
-            merge_rules.append(ExportMergeRule(
-                target_type=mr_data["target_type"],
-                attach_type=mr_data["attach_type"],
-            ))
-    export_config = ExportConfig(
-        max_file_size_mb=export_data.get("max_file_size_mb"),
-        file_mappings=export_file_mappings,
-        merge_rules=merge_rules,
-    )
-
-    return Profile(
-        profile=profile_meta,
-        paths=paths,
-        openrouter=openrouter,
-        gmail=gmail,
-        passwords=passwords,
-        nif_api=nif_api,
-        reconciliation=reconciliation,
-        export=export_config,
-        _profile_path=profile_path
-    )
+    _normalize_data(data, profile_path)
+    return Config(data)
 
 
-
-def get_passwords_from_profile(profile: Profile) -> tuple[list[str], str | None]:
+def get_passwords_from_profile(profile):
     """Get passwords list from profile."""
     if profile.passwords.passwords:
         return (profile.passwords.passwords, None)
@@ -407,5 +276,3 @@ def get_passwords_from_profile(profile: Profile) -> tuple[list[str], str | None]
             return (passwords, str(passwords_file))
 
     return ([], None)
-
-

@@ -3,7 +3,6 @@
 from pathlib import Path
 
 from papertrail.logging_utils import get_logger
-from papertrail.profiles import ExportMergeRule
 
 logger = get_logger("merge-attachments")
 
@@ -24,7 +23,7 @@ def _match_type_pattern(doc_type: str, pattern: str) -> bool:
 def merge_reconciled_attachments(
     export_path: Path,
     all_matches: list,
-    merge_rules: list[ExportMergeRule],
+    merge_rules: list,
 ) -> dict:
     """Merge attachment PDFs into target PDFs based on reconciliation match data.
 
