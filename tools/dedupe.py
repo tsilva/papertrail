@@ -1,6 +1,5 @@
 """Gradio duplicate review tool — scan, review, and execute deduplication in one place."""
 
-import base64
 import html as html_lib
 import json
 import shutil
@@ -11,11 +10,10 @@ from pathlib import Path
 # Add project root to path for imports
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-import fitz  # PyMuPDF
 import gradio as gr
 
-from papertrail.config import load_profile
 from papertrail.hashing import PLAN_FILENAME, scan_directory
+from tools.shared import find_companion, get_processed_dir, render_pdf_page_html, FULLSCREEN_CSS
 
 # ── Module-level cache (single-user local tool) ──────────────────
 
@@ -57,14 +55,6 @@ _CSS = """
     margin-bottom: 8px;
 }
 .file-card .card-meta strong { color: var(--body-text-color, #ddd); }
-.preview-img {
-    max-width: 100%; border: 1px solid var(--border-color-primary, #444);
-    border-radius: 4px;
-}
-.placeholder {
-    color: var(--body-text-color-subdued, #888); font-size: 14px;
-    padding: 32px; text-align: center;
-}
 .status-approved { color: #4caf50; font-weight: 600; }
 .status-rejected { color: #e57373; font-weight: 600; }
 .status-pending { color: var(--body-text-color-subdued, #888); }
@@ -83,46 +73,6 @@ document.addEventListener('keydown', function(e) {
 
 # ── Helpers ──────────────────────────────────────────────────────
 
-def _get_default_directory():
-    """Get the processed directory from the default profile."""
-    try:
-        profile = load_profile("default")
-        if profile.paths.processed:
-            p = Path(profile.paths.processed)
-            if p.is_dir():
-                return str(p)
-    except Exception:
-        pass
-    return ""
-
-
-def _find_companion(json_path, data):
-    """Find companion document file for a JSON sidecar."""
-    ext = data.get("source_extension")
-    if ext:
-        c = json_path.with_suffix(ext)
-        if c.exists():
-            return c
-    for ext in (".pdf", ".xlsx"):
-        c = json_path.with_suffix(ext)
-        if c.exists():
-            return c
-    return None
-
-
-def _render_pdf_page_html(pdf_path, page_num=0):
-    """Render a single PDF page as a base64 PNG img tag."""
-    try:
-        with fitz.open(str(pdf_path)) as doc:
-            total = len(doc)
-            page_num = max(0, min(page_num, total - 1))
-            pix = doc[page_num].get_pixmap(dpi=150)
-            b64 = base64.b64encode(pix.tobytes("png")).decode("utf-8")
-            return f'<img src="data:image/png;base64,{b64}" class="preview-img"/>'
-    except Exception:
-        return '<p class="placeholder">Error rendering PDF.</p>'
-
-
 def _render_file_card(entry, role, directory):
     """Render an HTML card for one file in a group."""
     badge_class = "badge-keep" if role == "KEEP" else "badge-dupe"
@@ -137,9 +87,9 @@ def _render_file_card(entry, role, directory):
         try:
             with open(json_path, "r", encoding="utf-8") as f:
                 data = json.load(f)
-            companion = _find_companion(json_path, data)
+            companion = find_companion(json_path, data)
             if companion and companion.suffix.lower() == ".pdf":
-                preview_html = _render_pdf_page_html(companion)
+                preview_html = render_pdf_page_html(companion)[0]
             elif companion and companion.suffix.lower() == ".xlsx":
                 preview_html = (
                     '<p class="placeholder" style="padding:16px;">'
@@ -474,7 +424,7 @@ def on_confirm():
             try:
                 with open(json_path, "r", encoding="utf-8") as f:
                     data = json.load(f)
-                companion = _find_companion(json_path, data)
+                companion = find_companion(json_path, data)
                 if companion and companion.exists():
                     files_to_move.append(companion)
             except Exception:
@@ -535,9 +485,9 @@ def on_cancel():
 # ── Gradio UI ────────────────────────────────────────────────────
 
 def build_ui():
-    default_dir = _get_default_directory()
+    default_dir = get_processed_dir()
 
-    with gr.Blocks(title="Papertrail Duplicate Review", css=_CSS, js=_JS) as app:
+    with gr.Blocks(title="Papertrail Duplicate Review", css=FULLSCREEN_CSS + _CSS, js=_JS) as app:
         index_state = gr.State(0)
 
         gr.Markdown("## Papertrail Duplicate Review")
