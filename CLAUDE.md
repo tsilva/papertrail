@@ -160,15 +160,26 @@ Configurable in `profile.yaml` under `reconciliation.rules`. Rules are evaluated
 - `match_description` (list[str], optional): Keywords matched case-insensitively (diacritics-stripped) against bank description
 - `direction` (str, optional): `"credit"` (amount > 0) or `"debit"` (amount <= 0)
 - `required_types` (dict): Document type patterns → cardinality. Key is `|`-separated type alternatives, value is `N` (exactly N) or `[min, max]` (`null` = unbounded)
+- `companions` (list[str], optional): Rule names to group for sum-based matching. Transactions on the same date are summed and matched against a single document (e.g., bank fee + stamp duty matched against one combined bank note)
+- `shared_types` (dict, optional): Type pattern → issuing party filter. Documents matching these patterns are linked across multiple transactions (e.g., Via Verde receipts shared across matching transactions)
+- `expected_page_count` (dict, optional): Type pattern → expected count. Flags documents with unexpected page counts as validation warnings
+
+**Config-level fields:**
+- `exclude_prefixes` (list[str], optional): Filename prefixes to exclude from candidate matching (candidates with these prefixes are skipped)
 
 **Example:**
 ```yaml
 reconciliation:
+  exclude_prefixes: ["VND_"]
   rules:
     - name: bank-fee
-      match_description: ["COMISSAO", "IMPOSTO SELO"]
+      match_description: ["COMISSAO"]
       required_types:
         bank-note: 1
+    - name: bank-fee-stamp-duty
+      match_description: ["IMPOSTO SELO"]
+      companions: [bank-fee]
+      required_types: {}
     - name: default-debit
       direction: debit
       required_types:
@@ -231,6 +242,10 @@ Document types and issuing parties are loaded dynamically from existing metadata
 | `papertrail/bank_statement/` | XLSX bank statement classification | `classify_bank_statement`, `detect_bank_format` |
 | `papertrail/image_convert.py` | Image-to-PDF conversion | `convert_image_to_pdf`, `convert_images_to_pdfs` |
 | `papertrail/tasks/reconciliation.py` | Bank reconciliation | `task_reconcile`, `_discover_bank_statements` |
+| `papertrail/tasks/archive.py` | Document archival | `task_archive` |
+| `tools/browse.py` | Gradio document browser | Search, filter, preview processed docs |
+| `tools/dedupe.py` | Gradio duplicate review UI | Visual dedup plan review + execute |
+| `tools/review.py` | Gradio reconciliation review UI | Transaction table + document preview |
 
 ## Data Models (Pydantic)
 
@@ -318,6 +333,7 @@ The hash component is `hash_file` (SHA256 of raw bytes, 8 chars). This ensures e
 | `gmail` | Download email attachments from Gmail | `--months` |
 | `rename` | Rename files based on metadata | `processed_path?` |
 | `audit` | Audit processed files (10-section report) | `processed_path?`, `--verify-hashes` |
+| `archive` | Archive documents by hash digest | `digest...` (required), `processed_path?`, `--dry_run` |
 | `export excel` | Export metadata to Excel | `processed_path?`, `--output` (required) |
 | `export dates` | Export files by date range | `processed_path?`, `--base_dir`, `--run_merge` |
 | `export copy` | Copy files matching pattern | `processed_path?`, `--pattern` (req), `--dest` (req) |
@@ -418,6 +434,7 @@ Task runs create timestamped log files in `{processed_path}/logs/`:
 - **Validators**: Pydantic `@field_validator` for normalization (currency symbols, amounts, dates)
 - **LLM calls**: Use `tool_choice` for structured output, temperature=0 for determinism
 - **Fallbacks**: Always fall back to `$UNKNOWN$` for unrecognized values
+- **Task logging**: Use `task_log_context(processed_path, task_name)` context manager from `papertrail/tasks/__init__.py` for unified log setup
 
 ## Common Development Tasks
 
@@ -427,6 +444,14 @@ Task runs create timestamped log files in `{processed_path}/logs/`:
 **Add new QR format**: Add detection function and parser in `papertrail/qr/extractor.py`, add model in `papertrail/qr/models.py`
 **Add new bank format**: Create parser module in `papertrail/bank_statement/`, implement `can_parse(ws)` and `parse(xlsx_path)`, add to `_PARSERS` in `extractor.py`
 **Deduplicate files**: `python scripts/deduplicate.py plan <dir>` to generate plan, review `_dupes_plan.json`, then `python scripts/deduplicate.py execute <dir>` to move dupes to `_dupes/` subfolder. Use `--dry-run` on execute to preview.
+
+## Gradio Dev Tools (`tools/`)
+
+Standalone Gradio apps for interactive document management. Run with `python tools/<app>.py`.
+
+- **`browse.py`**: Document browser — search, navigate (j/k keys), preview PDFs/XLSX, view metadata as JSON
+- **`dedupe.py`**: Duplicate review — scan for duplicates (text/content hash), approve/reject (a/r keys), execute moves to `_dupes_YYYYMMDD_HHMMSS/`
+- **`review.py`**: Reconciliation audit — transaction tables color-coded by match status (exact/LLM/incomplete/unmatched), clickable file previews, unmatched files summary
 
 ## Testing
 
