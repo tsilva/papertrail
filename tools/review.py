@@ -1,21 +1,21 @@
 """Gradio document review tool for auditing export folders."""
 
-import base64
 import html as html_lib
 import json
 import re
 import sys
-import warnings
 from pathlib import Path
 
 # Add project root to path for imports
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-import fitz  # PyMuPDF
 import gradio as gr
-import openpyxl
 
 from papertrail.config import load_profile
+from tools.shared import (
+    find_companion, render_pdf_page_html, render_xlsx_as_html,
+    FULLSCREEN_CSS, FULLSCREEN_JS,
+)
 
 # ── Module-level cache (single-user local tool) ─────────────────
 
@@ -116,22 +116,6 @@ function _ensureDragHandle(panel) {
     });
 }
 
-/* ── Fullscreen image on click ── */
-document.addEventListener('click', function(e) {
-    var img = e.target.closest('.preview-img');
-    if (!img) return;
-    var overlay = document.createElement('div');
-    overlay.className = 'preview-fullscreen-overlay';
-    overlay.innerHTML = '<img src="' + img.src + '"/>';
-    overlay.onclick = function() { overlay.remove(); };
-    document.body.appendChild(overlay);
-});
-document.addEventListener('keydown', function(e) {
-    if (e.key === 'Escape') {
-        var o = document.querySelector('.preview-fullscreen-overlay');
-        if (o) o.remove();
-    }
-});
 """
 
 _CSS = """
@@ -172,24 +156,6 @@ _CSS = """
     white-space: nowrap;
 }
 .txn-table td:last-child { white-space: normal; word-break: break-all; }
-.placeholder {
-    color: var(--body-text-color-subdued, #888); font-size: 14px;
-    padding: 32px; text-align: center;
-}
-.preview-img {
-    max-width: 100%; border: 1px solid var(--border-color-primary, #444);
-    border-radius: 4px; cursor: zoom-in;
-}
-.preview-fullscreen-overlay {
-    position: fixed; inset: 0; z-index: 9999;
-    background: rgba(0,0,0,0.9); display: flex;
-    align-items: center; justify-content: center;
-    cursor: zoom-out;
-}
-.preview-fullscreen-overlay img {
-    max-width: 95vw; max-height: 95vh; object-fit: contain;
-    border-radius: 4px;
-}
 #selected_file_bridge {
     position: fixed !important; left: -9999px !important;
     width: 1px !important; height: 1px !important;
@@ -286,20 +252,6 @@ def _list_export_folders(base_dir):
 
 # ── Data loading ─────────────────────────────────────────────────
 
-def _find_companion(json_path, metadata):
-    """Find companion document file for a JSON sidecar."""
-    ext = metadata.get("source_extension")
-    if ext:
-        c = json_path.with_suffix(ext)
-        if c.exists():
-            return c
-    for ext in (".pdf", ".xlsx"):
-        c = json_path.with_suffix(ext)
-        if c.exists():
-            return c
-    return None
-
-
 def load_export_folder(folder_path):
     """Load all JSON sidecars from an export folder."""
     folder = Path(folder_path.strip().strip("'\""))
@@ -317,7 +269,7 @@ def load_export_folder(folder_path):
         except Exception:
             continue
 
-        doc_path = _find_companion(json_path, metadata)
+        doc_path = find_companion(json_path, metadata)
         entry = {
             "json_path": str(json_path),
             "doc_path": str(doc_path) if doc_path else None,
@@ -383,56 +335,6 @@ def load_export_folder(folder_path):
 
 
 # ── Rendering helpers ────────────────────────────────────────────
-
-def _render_pdf_page_html(pdf_path, page_num=0):
-    """Render a single PDF page as an HTML img tag. Returns (html, total_pages, clamped_page)."""
-    try:
-        with fitz.open(str(pdf_path)) as doc:
-            total = len(doc)
-            page_num = max(0, min(page_num, total - 1))
-            pix = doc[page_num].get_pixmap(dpi=150)
-            b64 = base64.b64encode(pix.tobytes("png")).decode("utf-8")
-            html = f'<img src="data:image/png;base64,{b64}" class="preview-img"/>'
-            return html, total, page_num
-    except Exception:
-        return '<p class="placeholder">Error rendering PDF.</p>', 0, 0
-
-
-def render_xlsx_as_html(xlsx_path, max_rows=100):
-    """Render XLSX worksheet as HTML table."""
-    warnings.filterwarnings("ignore", message="Workbook contains no default style")
-    try:
-        wb = openpyxl.load_workbook(str(xlsx_path), data_only=True)
-        ws = wb.active
-        lines = [
-            '<div>',
-            '<table style="border-collapse:collapse;font-size:13px;width:100%;">',
-        ]
-        n = 0
-        for row in ws.iter_rows(values_only=True):
-            if n >= max_rows:
-                lines.append(
-                    '<tr><td colspan="10" style="text-align:center;padding:8px;'
-                    'color:var(--body-text-color-subdued,#888);">... truncated ...</td></tr>'
-                )
-                break
-            bg = "var(--table-even-background-fill,#2a2a2a)" if n % 2 == 0 else "var(--table-odd-background-fill,#333)"
-            lines.append(f'<tr style="background:{bg};">')
-            for cell in row:
-                v = html_lib.escape(str(cell)) if cell is not None else ""
-                lines.append(
-                    f'<td style="border:1px solid var(--border-color-primary,#444);'
-                    f'padding:3px 6px;white-space:nowrap;'
-                    f'color:var(--body-text-color,#ddd);">{v}</td>'
-                )
-            lines.append("</tr>")
-            n += 1
-        lines.append("</table></div>")
-        wb.close()
-        return "\n".join(lines)
-    except Exception as e:
-        return f'<p class="placeholder">Error reading XLSX: {html_lib.escape(str(e))}</p>'
-
 
 def _match_status(m):
     """Classify a reconciliation match into a status category."""
@@ -663,7 +565,7 @@ def _do_preview(filename, page):
 
     p = Path(doc_path)
     if p.suffix.lower() == ".pdf":
-        preview_html, total, clamped = _render_pdf_page_html(doc_path, page)
+        preview_html, total, clamped = render_pdf_page_html(doc_path, page)
         pl = f"Page {clamped + 1}/{total}" if total else "Page -/-"
         return (preview_html, json_str, pl, clamped)
     elif p.suffix.lower() == ".xlsx":
@@ -804,4 +706,4 @@ def build_ui():
 demo = build_ui()
 
 if __name__ == "__main__":
-    demo.launch(css=_CSS, js=_JS)
+    demo.launch(css=FULLSCREEN_CSS + _CSS, js=_JS + "\n" + FULLSCREEN_JS)
