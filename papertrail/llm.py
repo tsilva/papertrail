@@ -158,8 +158,7 @@ def normalize_metadata(
     """Normalize raw values to canonical forms via LLM. Returns (doc_type, issuing_party).
 
     When no good match exists in the known lists, the LLM suggests a new slug-cased
-    name instead of falling back to $UNKNOWN$. The caller is responsible for confirming
-    new values interactively.
+    name instead of falling back to $UNKNOWN$. New values are auto-accepted.
     """
     # Use live lists (includes session-confirmed values)
     doc_types = get_document_types()

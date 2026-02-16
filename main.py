@@ -33,14 +33,10 @@ from papertrail.tasks import (
     export_metadata_to_excel,
     copy_matching_files,
     task_export_all_dates,
-    task_backfill_page_count,
-    task_backfill_file_size,
-    task_backfill_text_hash,
-    task_backfill_sub_documents,
     task_gmail_download,
     pipeline,
     task_reconcile,
-    task_audit,
+    task_check,
     task_archive,
     task_log_context,
 )
@@ -118,7 +114,7 @@ def initialize_config(profile_name: Optional[str] = None) -> None:
     if not api_accessible:
         console = get_console()
         console.warning(f"API base URL is not accessible: {base_url}", indent=False)
-        console.warning("LLM-dependent tasks will fail. Offline tasks (rename, validate, backfill) will work.", indent=False)
+        console.warning("LLM-dependent tasks will fail. Offline tasks (rename, check, export) will work.", indent=False)
         from rich.prompt import Confirm
         if not Confirm.ask("Proceed without API access?", default=True):
             raise SystemExit(0)
@@ -157,7 +153,6 @@ def main():
     )
     parser.add_argument("--profile", type=str, help="Configuration profile to use.")
     parser.add_argument("--verbose", "-v", action="store_true", help="Enable verbose output.")
-    parser.add_argument("--interactive", "-i", action="store_true", help="Enable interactive prompts for new document types/parties.")
 
     sub = parser.add_subparsers(dest="command", title="commands")
 
@@ -195,11 +190,12 @@ def main():
     p = sub.add_parser("rename", help="Rename files based on metadata.")
     _add_processed_path(p)
 
-    # audit (absorbs validate + validate-extraction)
-    p = sub.add_parser("audit", help="Audit processed files.")
+    # check (unified: backfill + audit)
+    p = sub.add_parser("check", help="Verify integrity, fill missing fields, audit report.")
     _add_processed_path(p)
     p.add_argument("--verify-hashes", action="store_true",
                    help="Verify file hashes match metadata (expensive).")
+    p.add_argument("--dry_run", action="store_true", help="Report only, don't fix.")
 
     # archive
     p = sub.add_parser("archive", help="Archive documents by hash digest.")
@@ -225,13 +221,6 @@ def main():
     ep.add_argument("--pattern", type=str, required=True, help="Pattern for matching files.")
     ep.add_argument("--dest", type=str, required=True, help="Destination folder.")
 
-    # backfill (with sub-subcommands)
-    p_backfill = sub.add_parser("backfill", help="Backfill metadata fields.")
-    bsub = p_backfill.add_subparsers(dest="backfill_command", title="backfill tasks")
-    for name in ["page-count", "file-size", "text-hash", "sub-documents"]:
-        bp = bsub.add_parser(name, help=f"Backfill {name}.")
-        _add_processed_path(bp)
-
     args = parser.parse_args()
 
     # Default to pipeline when no command given
@@ -246,10 +235,6 @@ def main():
         parser.error(str(e))
     except ProfileError as e:
         parser.error(f"Failed to load profile: {e}")
-
-    if args.interactive:
-        from papertrail.interactive import set_interactive
-        set_interactive(True)
 
     cmd = args.command
 
@@ -304,9 +289,9 @@ def main():
         processed_path = get_processed_path(args, parser)
         task_rename_files(processed_path)
 
-    elif cmd == "audit":
+    elif cmd == "check":
         processed_path = get_processed_path(args, parser)
-        task_audit(processed_path, verify_hashes=args.verify_hashes)
+        task_check(processed_path, verify_hashes=args.verify_hashes, dry_run=args.dry_run)
 
     elif cmd == "archive":
         processed_path = get_processed_path(args, parser)
@@ -339,18 +324,6 @@ def main():
             with task_log_context(processed_path, "copy_matching"):
                 copy_matching_files(processed_path, args.pattern, dest)
 
-    elif cmd == "backfill":
-        if not args.backfill_command:
-            p_backfill.print_help()
-            sys.exit(1)
-        processed_path = get_processed_path(args, parser)
-        backfill_map = {
-            "page-count": task_backfill_page_count,
-            "file-size": task_backfill_file_size,
-            "text-hash": task_backfill_text_hash,
-            "sub-documents": task_backfill_sub_documents,
-        }
-        backfill_map[args.backfill_command](processed_path)
 
 
 if __name__ == "__main__":

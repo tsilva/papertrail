@@ -44,6 +44,7 @@ from papertrail.tasks.validation import (
     task_backfill_file_size,
     task_backfill_text_hash,
     task_backfill_sub_documents,
+    task_check,
 )
 from papertrail.tasks.export import (
     export_metadata_to_excel,
