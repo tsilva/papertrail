@@ -475,7 +475,7 @@ def _task_extract_new_locked(processed_path: Path, raw_paths: list[Path], quiet:
         images_converted = 0
         if image_paths:
             import tempfile
-            from papertrail.image_convert import convert_images_to_pdfs
+            from papertrail.pdf import convert_images_to_pdfs
             temp_dir = tempfile.TemporaryDirectory()
             converted_pdfs = convert_images_to_pdfs(image_paths, Path(temp_dir.name), console)
             images_converted = len(converted_pdfs)
@@ -489,7 +489,7 @@ def _task_extract_new_locked(processed_path: Path, raw_paths: list[Path], quiet:
         split_pages_count = 0
         if pdf_paths:
             import tempfile
-            from papertrail.pdf_split import split_pdf_bundles
+            from papertrail.pdf import split_pdf_bundles
             split_temp_dir = tempfile.TemporaryDirectory()
             non_split, split_pages, bundles_split = split_pdf_bundles(
                 pdf_paths, Path(split_temp_dir.name), console,
