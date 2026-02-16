@@ -18,8 +18,8 @@ from papertrail.logging_utils import (
 )
 from papertrail.models import DocumentMetadata, DocumentMetadataRaw, SubDocumentMetadata
 from papertrail.llm import (
-    get_system_prompt_raw_extraction,
-    normalize_metadata,
+    get_system_prompt_classify,
+    normalize_issuing_party,
     build_extraction_tools,
     get_qr_exclusions,
 )
@@ -131,7 +131,7 @@ def _phase1_llm_extract(pdf_path, exclude_fields, pre_extracted, ctx, doc_logger
         for img_b64 in images_b64
     ]
     messages = [
-        {"role": "system", "content": get_system_prompt_raw_extraction(
+        {"role": "system", "content": get_system_prompt_classify(
             pre_extracted or None, multi_qr_info=multi_qr_info)},
         {"role": "user", "content": user_content},
     ]
@@ -202,18 +202,9 @@ def _phase4_nif_enrich(merged, raw_metadata, normalized_issuing_party, ctx, doc_
                 doc_logger.log_nif_enrichment(tax_number, official_issuer, cached_normalized)
             normalized_issuing_party = cached_normalized
         else:
-            # Re-normalize the official name to canonical form via LLM
-            nif_raw = DocumentMetadataRaw(
-                issue_date=merged["issue_date"],
-                document_type=raw_metadata.document_type,
-                issuing_party=official_issuer,
-                total_amount=merged["total_amount"],
-                total_amount_currency=merged["total_amount_currency"],
-                confidence=1.0,
-                reasoning="NIF lookup override",
-            )
-            _, nif_normalized_issuer = normalize_metadata(
-                nif_raw, ctx.openai_client, ctx.model_id,
+            # Normalize the official name via lightweight LLM call
+            nif_normalized_issuer = normalize_issuing_party(
+                official_issuer, ctx.openai_client, ctx.model_id,
             )
 
             if nif_normalized_issuer != "$UNKNOWN$":
@@ -268,16 +259,9 @@ def _build_sub_documents(all_qr_results, ctx, doc_logger):
                     if doc_logger:
                         doc_logger.log_nif_enrichment(tax_number, official_issuer, cached_normalized)
                 else:
-                    # Normalize the official name via LLM
-                    nif_raw = DocumentMetadataRaw(
-                        issue_date=qr_metadata.issue_date or "$UNKNOWN$",
-                        document_type=qr_metadata.document_type or "$UNKNOWN$",
-                        issuing_party=official_issuer,
-                        confidence=1.0,
-                        reasoning="NIF lookup for sub-document",
-                    )
-                    _, nif_normalized = normalize_metadata(
-                        nif_raw, ctx.openai_client, ctx.model_id,
+                    # Normalize the official name via lightweight LLM call
+                    nif_normalized = normalize_issuing_party(
+                        official_issuer, ctx.openai_client, ctx.model_id,
                     )
                     if nif_normalized != "$UNKNOWN$":
                         ctx.nif_cache.set_normalized(tax_number, nif_normalized)
@@ -311,7 +295,7 @@ def classify_pdf_document(pdf_path: Path, file_hash: str, failure_logger=None,
                           doc_logger: DocumentLogger = None) -> DocumentMetadata:
     """Classify a PDF document using QR extraction and LLM.
 
-    Pipeline: QR extract -> LLM extract -> Normalize -> Merge -> NIF enrich
+    Pipeline: QR extract -> LLM classify (single call) -> Merge QR overrides -> NIF enrich
     """
     from papertrail.config import get_ctx
     ctx = get_ctx()
@@ -342,7 +326,7 @@ def classify_pdf_document(pdf_path: Path, file_hash: str, failure_logger=None,
             logger.debug(f"[MULTI-QR] LLM context: {multi_qr_info}")
 
     try:
-        # Phase 1: LLM extraction (retry once on failure)
+        # Classify: single LLM call (extract + normalize) with retry
         raw_metadata = None
         for attempt in range(2):
             try:
@@ -351,32 +335,26 @@ def classify_pdf_document(pdf_path: Path, file_hash: str, failure_logger=None,
                 break
             except Exception as e:
                 if attempt == 0:
-                    logger.warning(f"LLM extraction attempt 1 failed for {pdf_path.name}, retrying: {e}")
+                    logger.warning(f"LLM classification attempt 1 failed for {pdf_path.name}, retrying: {e}")
                 else:
-                    logger.warning(f"LLM extraction attempt 2 failed for {pdf_path.name}, using fallback: {e}")
+                    logger.warning(f"LLM classification attempt 2 failed for {pdf_path.name}, using fallback: {e}")
                     raw_metadata = DocumentMetadataRaw(
                         issue_date="$UNKNOWN$",
                         document_type="$UNKNOWN$",
+                        document_type_raw="$UNKNOWN$",
                         issuing_party="$UNKNOWN$",
+                        issuing_party_raw="$UNKNOWN$",
                         confidence=0.0,
-                        reasoning="LLM extraction failed after 2 attempts",
+                        reasoning="LLM classification failed after 2 attempts",
                     )
-
-        # Phase 2: Normalization
-        t0 = _time.monotonic()
-        normalized_doc_type, normalized_issuing_party = normalize_metadata(
-            raw_metadata, ctx.openai_client, ctx.model_id, doc_logger=doc_logger,
-        )
-        if doc_logger:
-            doc_logger.log_timing("normalization", _time.monotonic() - t0)
 
         # Build sub-documents for multi-QR PDFs (before merge, needs ctx for NIF)
         sub_documents = _build_sub_documents(all_qr_results, ctx, doc_logger) if is_multi_qr else None
 
-        # Phase 3: Merge QR overrides (skip for multi-QR — QR data lives in sub_documents)
+        # Merge QR overrides (skip for multi-QR — QR data lives in sub_documents)
         merged = {
             "issue_date": raw_metadata.issue_date,
-            "document_type": normalized_doc_type,
+            "document_type": raw_metadata.document_type,
             "total_amount": raw_metadata.total_amount,
             "total_amount_currency": raw_metadata.total_amount_currency,
             "issuer_tax_number": raw_metadata.issuer_tax_number,
@@ -385,11 +363,12 @@ def classify_pdf_document(pdf_path: Path, file_hash: str, failure_logger=None,
         if qr_metadata and not is_multi_qr:
             _merge_qr_metadata(qr_metadata, merged, doc_logger)
 
-        # Auto-accept LLM suggestions for new types/parties
+        # Track new types/parties for session cache
         if merged["document_type"] != "$UNKNOWN$":
             add_session_type(merged["document_type"])
 
-        # Phase 4: NIF enrichment
+        # NIF enrichment
+        normalized_issuing_party = raw_metadata.issuing_party
         normalized_issuing_party = _phase4_nif_enrich(
             merged, raw_metadata, normalized_issuing_party, ctx, doc_logger,
         )
@@ -406,9 +385,9 @@ def classify_pdf_document(pdf_path: Path, file_hash: str, failure_logger=None,
             class_confidence=raw_metadata.confidence if is_multi_qr else (1.0 if qr_metadata else raw_metadata.confidence),
             class_reasoning=raw_metadata.reasoning,
             hash_content=file_hash,
-            document_type_raw=raw_metadata.document_type,
+            document_type_raw=raw_metadata.document_type_raw,
             document_title=raw_metadata.document_title,
-            issuing_party_raw=raw_metadata.issuing_party,
+            issuing_party_raw=raw_metadata.issuing_party_raw,
             issuer_tax_number=merged["issuer_tax_number"],
             locale=merged["locale"],
             qrcode=None if is_multi_qr else qr_raw_data,
