@@ -246,7 +246,7 @@ def copy_matching_files(
     quiet: bool = False,
 ) -> dict:
     """Copy files matching pattern to destination."""
-    from papertrail.pattern_utils import make_matcher
+    from papertrail.utils import make_matcher
 
     console = get_console()
     dest_folder.mkdir(parents=True, exist_ok=True)

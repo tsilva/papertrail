@@ -14,7 +14,7 @@ import fitz  # PyMuPDF
 import gradio as gr
 import openpyxl
 
-from papertrail.profiles import load_profile
+from papertrail.config import load_profile
 
 # ── Module-level cache (single-user local tool) ─────────────────
 
