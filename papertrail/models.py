@@ -32,11 +32,17 @@ def _normalize_to_known(value, enum_name: str, getter, field_label: str):
 
 
 class DocumentMetadataRaw(BaseModel):
-    """Phase 1 raw extraction: exact text as it appears on the document."""
+    """Single-call extraction: raw text + normalized canonical forms.
+
+    The LLM extracts raw values AND normalizes them in one vision call.
+    Raw fields (*_raw) preserve the exact text; normalized fields are slug-cased canonical forms.
+    """
     issue_date: str = Field(description="Date issued, format: YYYY-MM-DD.")
-    document_type: str = Field(description="Core document type label only, stripped of dates/periods/numbers (e.g., 'Fatura' not 'Fatura de Agosto 2021').")
+    document_type: str = Field(description="Normalized document type: slug-cased canonical form (e.g., 'invoice', 'bank-statement'). Use an existing known type if one matches, otherwise suggest a new slug-cased name.")
+    document_type_raw: str = Field(description="Core document type label as written on the document, stripped of dates/periods/numbers (e.g., 'Fatura' not 'Fatura de Agosto 2021'). Preserve original language and case.")
     document_title: Optional[str] = Field(default=None, description="Specific subject, product, service, or transaction described in the document. Null if no specific subject beyond the document type is identifiable.")
-    issuing_party: str = Field(description="Issuer name (exactly as it appears on document).")
+    issuing_party: str = Field(description="Normalized issuer name: lowercase slug form (e.g., 'anthropic', 'amazon'). Use an existing known party if one matches, otherwise produce a clean short name stripped of legal suffixes.")
+    issuing_party_raw: str = Field(default="$UNKNOWN$", description="Issuer name exactly as it appears on the document (e.g., 'Anthropic, PBC', 'Amazon Web Services, Inc.').")
     total_amount: Optional[float] = Field(default=None, description="Total currency amount.")
     total_amount_currency: Optional[str] = Field(default=None, description="Currency of the total amount.")
     confidence: float = Field(default=0.0, description="Confidence score between 0 and 1.")

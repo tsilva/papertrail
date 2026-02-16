@@ -22,7 +22,7 @@ def _extract_json_from_response(content: str) -> str:
 
 
 def build_extraction_tools(exclude_fields: set[str] | None = None) -> list[dict]:
-    """Build LLM tools list with extraction schema, optionally excluding fields."""
+    """Build LLM tools list with classification schema, optionally excluding fields."""
     import copy
     schema = copy.deepcopy(DocumentMetadataRaw.model_json_schema())
 
@@ -37,7 +37,7 @@ def build_extraction_tools(exclude_fields: set[str] | None = None) -> list[dict]
             "type": "function",
             "function": {
                 "name": "extract_document_metadata",
-                "description": "Extract metadata from a document exactly as it appears.",
+                "description": "Extract and classify document metadata. Return both raw text and normalized canonical forms.",
                 "parameters": schema,
             },
         }
@@ -66,62 +66,57 @@ def get_qr_exclusions(qr_metadata: QRExtractedMetadata) -> tuple[set[str], dict[
     return exclude, pre_extracted
 
 
-def get_system_prompt_raw_extraction(pre_extracted: dict[str, Any] | None = None,
-                                     multi_qr_info: dict[str, Any] | None = None) -> str:
-    """Build system prompt for raw metadata extraction."""
+def get_system_prompt_classify(pre_extracted: dict[str, Any] | None = None,
+                               multi_qr_info: dict[str, Any] | None = None) -> str:
+    """Build system prompt for single-call classification (extract + normalize)."""
     # Use live lists (includes session-confirmed values)
     doc_types = get_document_types()
+    issuing_parties = get_issuing_parties()
 
     prompt = (
-        f"You are an expert document extraction assistant. "
+        f"You are an expert document classification assistant. "
         f"Today's date is {datetime.now().strftime('%Y-%m-%d')}. "
-        "Given a document image, extract metadata fields EXACTLY as they appear on the document. "
+        "Given a document image, extract metadata and normalize it to canonical forms in a SINGLE step. "
         "Use all available visual, textual, and layout cues. "
         "Be strict about field formats (e.g., dates as YYYY-MM-DD, currency as ISO code). "
         "\n\n"
-        "For issuing_party, extract the EXACT text as it appears - do NOT try to normalize or standardize it. "
-        "Examples: 'Anthropic, PBC' not 'Anthropic', 'Amazon Web Services' not 'Amazon'. "
-        "\n\n"
-        "For document_title, extract the specific SUBJECT, PRODUCT, SERVICE, or TRANSACTION described in the document. "
-        "This is NOT the document type - it distinguishes this document from others of the same type and issuer. "
-        "Keep it concise (a few words, max ~60 characters). "
-        "For multi-item invoices, use a brief category like 'computer hardware' or 'office supplies' instead of listing every product. "
-        "Examples: 'YouTube Premium', 'Claude API', 'TRANSFERÊNCIA PONTUAL A DÉBITO', 'Saúde Multicare Individual'. "
-        "If no specific subject beyond what document_type already captures, leave null. "
-        "\n\n"
-        "For document_type, extract ONLY the core document type label. "
-        "Do NOT include dates, billing periods, months, years, reference numbers, or other contextual information. "
-        "Examples: 'Detalhe da Fatura de Abril 2024' → extract 'Fatura', "
-        "'Final Invoice for the August 2025 Billing Period' → extract 'Invoice', "
-        "'Nota de Crédito Abr 2022' → extract 'Nota de Crédito'. "
-        "Extract the type label exactly as written on the document (preserve case, language), just strip temporal context. "
-        "\n\n"
-        "For issuer_tax_number, look for tax identification numbers like:\n"
-        "- Portuguese NIF (e.g., PT503782467 or 503782467 for Portuguese documents)\n"
-        "- EU VAT numbers (e.g., DE123456789, FR12345678901, IE1234567X)\n"
-        "- US EIN (e.g., 12-3456789)\n"
-        "ALWAYS include the country prefix (PT, DE, FR, IE, etc.) when visible on the document. "
-        "Only omit prefix for Portuguese documents where no prefix is shown. If no tax ID is visible, leave it null.\n"
-        "\n"
-        "For locale, determine the document's country/language from:\n"
-        "- Document text language (Portuguese, English, Spanish, etc.)\n"
-        "- Currency (EUR often indicates European country)\n"
-        "- Tax ID format (Portuguese NIF, Spanish CIF, US EIN)\n"
-        "- Date format patterns and regional conventions\n"
-        "Use BCP-47 format: 'pt-PT' for Portugal, 'en-US' for US, 'es-ES' for Spain.\n"
-        "If uncertain, leave locale as null.\n"
-        "\n"
-        "For your orientation, here are the typical canonical values we work with:\n"
-        f"- Document types: {', '.join(doc_types[:20])}{'...' if len(doc_types) > 20 else ''}\n"
-        "\n"
-        "NOTE: These lists are just for orientation. Always extract the EXACT text as it appears on the document, "
-        "even if it doesn't match these canonical values. The raw text will be normalized in a later step.\n"
-        "\n"
-        "If a value cannot be extracted, use '$UNKNOWN$' for that field. "
+        "## Raw Fields (preserve exact text from the document)\n\n"
+        "For issuing_party_raw, extract the EXACT text as it appears — do NOT normalize. "
+        "Examples: 'Anthropic, PBC', 'Amazon Web Services, Inc.', 'Vodafone Portugal - Comunicações Pessoais, S.A.'\n\n"
+        "For document_type_raw, extract ONLY the core document type label as written, "
+        "stripped of dates/periods/numbers. Preserve original language and case. "
+        "Examples: 'Detalhe da Fatura de Abril 2024' → 'Fatura', "
+        "'Final Invoice for the August 2025 Billing Period' → 'Invoice', "
+        "'Nota de Crédito Abr 2022' → 'Nota de Crédito'.\n\n"
+        "## Normalized Fields (canonical slug-cased forms)\n\n"
+        "For document_type, normalize the raw type to a canonical slug-cased value:\n"
+        f"- Known types: {', '.join(t for t in doc_types if t != '$UNKNOWN$')}\n"
+        "- If a known type matches, use it EXACTLY (case-sensitive)\n"
+        "- If no match, suggest a new slug-cased name (lowercase, hyphen-separated, English, "
+        "e.g. tax-*, bank-*, invoice-*)\n"
+        "- Only use '$UNKNOWN$' if the raw value is empty or truly unidentifiable\n\n"
+        "For issuing_party, normalize the raw issuer to a canonical slug-cased value:\n"
+        f"- Known parties: {', '.join(p for p in issuing_parties if p != '$UNKNOWN$')}\n"
+        "- If a known party matches, use it EXACTLY (case-sensitive)\n"
+        "- If no match, produce a clean short name: lowercase, strip legal suffixes "
+        "(Inc., Ltd., S.A., Lda., PBC), use the most recognizable form "
+        "(e.g., 'Anthropic, PBC' → 'anthropic', 'Amazon Web Services' → 'amazon')\n"
+        "- Only use '$UNKNOWN$' if the raw value is empty or truly unidentifiable\n\n"
+        "## Other Fields\n\n"
+        "For document_title, extract the specific SUBJECT, PRODUCT, SERVICE, or TRANSACTION. "
+        "This is NOT the document type — it distinguishes this document from others of the same type and issuer. "
+        "Keep it concise (max ~60 characters). "
+        "Examples: 'YouTube Premium', 'Claude API', 'Saúde Multicare Individual'. "
+        "If no specific subject beyond what document_type already captures, leave null.\n\n"
+        "For issuer_tax_number, look for tax identification numbers (NIF, VAT, EIN). "
+        "Include country prefix when visible (e.g., DE123456789). "
+        "Omit prefix only for Portuguese documents where no prefix is shown. Null if not visible.\n\n"
+        "For locale, use BCP-47 format based on language, currency, tax ID format "
+        "(e.g., 'pt-PT', 'en-US', 'es-ES'). Null if uncertain.\n\n"
+        "If a value cannot be extracted, use '$UNKNOWN$'. "
         "Do not guess or hallucinate values. "
-        "For 'reasoning', briefly explain your choices and any uncertainties. "
-        "This tool is most often used to classify recent documents. "
-        "If you are unsure between multiple possible dates, prefer the one closest to today's date."
+        "For 'reasoning', briefly explain your choices. "
+        "Prefer dates closest to today when uncertain."
     )
 
     if pre_extracted:
@@ -149,97 +144,48 @@ def get_system_prompt_raw_extraction(pre_extracted: dict[str, Any] | None = None
     return prompt
 
 
-def normalize_metadata(
-    raw_metadata: DocumentMetadataRaw,
+def normalize_issuing_party(
+    raw_name: str,
     client,
     model_id: Optional[str] = None,
-    doc_logger: Optional[DocumentLogger] = None,
-) -> tuple[str, str]:
-    """Normalize raw values to canonical forms via LLM. Returns (doc_type, issuing_party).
+) -> str:
+    """Lightweight LLM call to normalize a single issuing party name.
 
-    When no good match exists in the known lists, the LLM suggests a new slug-cased
-    name instead of falling back to $UNKNOWN$. New values are auto-accepted.
+    Used only for NIF enrichment (rare — first encounter of each NIF).
+    Returns normalized slug-cased name or '$UNKNOWN$'.
     """
-    # Use live lists (includes session-confirmed values)
-    doc_types = get_document_types()
     issuing_parties = get_issuing_parties()
 
-    normalization_prompt = f"""You are a metadata normalization assistant. Your job is to map extracted document values to their canonical forms.
-
-Given:
-- Raw document_type: "{raw_metadata.document_type}"
-- Raw issuing_party: "{raw_metadata.issuing_party}"
-
-Known document types:
-{', '.join(doc_types)}
-
-Known issuing parties:
-{', '.join(p for p in issuing_parties if p != '$UNKNOWN$')}
-
-Task:
-1. Map the raw document_type to the MOST APPROPRIATE known document type from the list above
-2. Map the raw issuing_party to the MOST APPROPRIATE known issuing party from the list above, or normalize to a clean canonical form
-
-Rules for document_type:
-- If a good match exists in the known list, use the EXACT canonical value (case-sensitive)
-- If no good match exists, suggest the best slug-cased name following the naming convention (lowercase, hyphen-separated, English, namespace-prefixed where appropriate e.g. tax-*, bank-*, invoice-*)
-- Only use "$UNKNOWN$" if the raw value is empty or truly unidentifiable
-
-Rules for issuing_party:
-- If a good match exists in the known list, use the EXACT canonical value (case-sensitive)
-- If no good match exists, produce a clean, short company/entity name (e.g., "Anthropic, PBC" -> "anthropic", "Amazon Web Services, Inc." -> "amazon")
-- Lowercase, strip legal suffixes (Inc., Ltd., S.A., Lda., PBC, etc.)
-- Use the most recognizable short form of the name
-- Only use "$UNKNOWN$" if the raw value is empty or truly unidentifiable
-
-Respond in JSON format:
-{{
-    "document_type": "canonical_value",
-    "issuing_party": "normalized_name",
-    "reasoning": "Brief explanation of mappings"
-}}
-"""
+    prompt = (
+        f"Normalize this company name to a canonical slug form.\n\n"
+        f"Raw name: \"{raw_name}\"\n\n"
+        f"Known parties: {', '.join(p for p in issuing_parties if p != '$UNKNOWN$')}\n\n"
+        "If a known party matches, use it EXACTLY. Otherwise produce a clean short name: "
+        "lowercase, strip legal suffixes (Inc., Ltd., S.A., Lda., PBC), use the most "
+        "recognizable form.\n\n"
+        "Respond in JSON: {{\"issuing_party\": \"normalized_name\"}}"
+    )
 
     try:
         response = client.chat.completions.create(
             model=model_id,
-            max_tokens=1024,
+            max_tokens=256,
             temperature=0,
-            messages=[{"role": "user", "content": normalization_prompt}]
+            messages=[{"role": "user", "content": prompt}],
         )
 
-        if doc_logger and response.usage:
-            doc_logger.log_llm_usage(
-                model_id,
-                response.usage.prompt_tokens,
-                response.usage.completion_tokens,
-            )
-
         content = response.choices[0].message.content
-
         if not content:
-            logger.debug("Empty response from normalization LLM")
-            logger.debug(f"Full response: {response}")
-            return "$UNKNOWN$", "$UNKNOWN$"
+            return "$UNKNOWN$"
 
         content = _extract_json_from_response(content)
         result = json.loads(content)
-        doc_type = result.get("document_type", "$UNKNOWN$")
-        issuing_party = result.get("issuing_party", "$UNKNOWN$")
-
-        # Log the normalization result (no rejection — new values are confirmed downstream)
-        if doc_type not in doc_types:
-            logger.debug(f"LLM suggested new doc_type '{doc_type}' (not in known list)")
-        if issuing_party not in issuing_parties and issuing_party != "$UNKNOWN$":
-            logger.debug(f"LLM suggested new issuing_party '{issuing_party}' (not in known list)")
-
-        if doc_logger:
-            doc_logger.log_normalization("document_type", raw_metadata.document_type, doc_type)
-            doc_logger.log_normalization("issuing_party", raw_metadata.issuing_party, issuing_party)
-
-        return doc_type, issuing_party
+        return result.get("issuing_party", "$UNKNOWN$")
 
     except Exception as e:
-        logger.error(f"Normalization failed: {e}, using $UNKNOWN$ for both fields")
-        logger.debug("Traceback:", exc_info=True)
-        return "$UNKNOWN$", "$UNKNOWN$"
+        logger.error(f"NIF normalization failed: {e}")
+        return "$UNKNOWN$"
+
+
+# Backwards compatibility alias
+get_system_prompt_raw_extraction = get_system_prompt_classify
