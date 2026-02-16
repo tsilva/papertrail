@@ -27,6 +27,7 @@ dependencies = [
     "archive-extractor",
     "rich>=13.0.0",
     "pdf-gluer",
+    "typer>=0.9.0",
 ]
 requires-python = ">=3.12"
 
@@ -34,14 +35,10 @@ requires-python = ">=3.12"
 similarity = ["cohere>=5.0", "numpy"]
 
 [project.scripts]
-papertrail = "main:main"
-check-hash = "scripts.check_hash:main"
-find-similar = "scripts.find_similar:main"
+papertrail = "main:app"
 
 [tool.hatch.build.targets.wheel]
 include = [
     "main.py",
     "papertrail/**",
-    "config/**",
-    "scripts/**"
 ]
