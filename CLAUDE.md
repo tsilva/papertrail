@@ -25,24 +25,21 @@ These are core constraints that must be preserved in all changes:
 
 ## Architecture
 
-### Four-Phase Extraction Pipeline
+### Single-Call Classification Pipeline
 1. **Phase 0 - QR Extraction** (optional): Scans PDF for QR codes, extracts metadata with 100% confidence (e.g., Portuguese invoice QR codes)
-2. **Phase 1 - Raw Extraction** (`classify_pdf_document`): Renders first 2 pages as JPEG, sends to LLM with vision. For multi-QR PDFs, the LLM prompt includes context about sub-document count and issuer NIFs so it classifies the aggregator/wrapper document rather than an embedded invoice. For `issuing_party`, extracts EXACTLY as appears. For `document_type`, extracts only the core type label (strips dates, billing periods, reference numbers). For `document_title`, extracts the specific subject/product/service/transaction (e.g., "YouTube Premium", "Claude API")
-3. **Phase 2 - Normalization** (`normalize_metadata`): LLM maps raw values to known types/parties from processed files. For new values, suggests a slug-cased name instead of falling back to `$UNKNOWN$`
-4. **Phase 3 - Merge**: QR-extracted values override LLM values (QR is 100% accurate)
-5. **Phase 2b - Interactive Confirmation** (`confirm_classification`): If normalized value is not in known types/parties, prompts user to accept, pick existing, enter custom, or skip. Bypassed for QR-overridden document_type and QR-sourced NIF-enriched issuing_party (both 100% accurate). LLM-extracted NIFs still go through interactive confirmation after NIF enrichment. Session caching prevents re-asking for the same value within a run.
-6. **Phase 4 - NIF Enrichment** (optional): If tax number present, looks up official issuer name via nif.pt web scraping. Auto-accepted only when NIF came from QR code (machine-readable, 100% accurate). LLM-extracted NIFs go through interactive confirmation (LLM may misread account numbers or other entities' NIFs as the issuer's).
+2. **Phase 1 - Classify** (`classify_pdf_document`): Single LLM vision call that extracts raw text AND normalizes to canonical forms in one step. Renders first 2 pages as JPEG, sends to LLM with the full list of known types/parties. Returns both raw fields (`document_type_raw`, `issuing_party_raw`) and normalized fields (`document_type`, `issuing_party`). For multi-QR PDFs, the LLM prompt includes context about sub-document count and issuer NIFs.
+3. **Phase 2 - Merge**: QR-extracted values override LLM values (QR is 100% accurate)
+4. **Phase 3 - NIF Enrichment** (optional): If tax number present, looks up official issuer name via nif.pt web scraping. Uses a lightweight `normalize_issuing_party()` LLM call (rare — only first encounter of each NIF) to normalize the official name to slug form.
 
-### Normalization (LLM + Interactive)
-Every extraction uses the LLM to normalize raw values. Known values (from processed files) are matched directly. New values trigger interactive confirmation:
+New values are auto-accepted. A batch summary at the end of extraction reports new types/parties. Use `sync --pattern` to fix mistakes.
 
-```
-Raw: "Anthropic, PBC" → LLM → "anthropic" (known) → auto-accepted
-Raw: "New Vendor Inc" → LLM → "new-vendor" (new) → interactive prompt → user confirms
-Raw: "Unknown Corp" → LLM → "unknown-corp" (new) → user picks [s]kip → "$UNKNOWN$"
-```
+### Normalization
+The single LLM call receives all known document types and issuing parties (scanned from processed JSON files). No fixed canonical list — processed files are the sole source of truth. Known values are matched exactly; new values get a slug-cased name suggested by the LLM.
 
-The LLM receives all known document types and issuing parties (scanned from processed JSON files). No fixed canonical list — processed files are the sole source of truth. Session-confirmed values are remembered within a run to avoid repeated prompts.
+### Three-Phase Pipeline (`pipeline` command)
+1. **Phase 1 — Ingest**: Gather files from all sources (Gmail, mbox, archives) into raw folders
+2. **Phase 2 — Classify**: Process each new file (dedup, classify, rename) + sync orphans
+3. **Phase 3 — Organize**: Export to Excel, export by date, reconcile bank statements, merge PDFs
 
 ### Three-Tier Hashing
 - **Fast hash** (`hash_file_fast`): SHA256 of raw bytes, 8 chars - for quick duplicate filtering (Stage 1)
@@ -189,7 +186,7 @@ reconciliation:
 
 Transactions matching no rule are classified as `"unclassified"` (validation error). Sub-documents are transparent to validation (treated as regular documents). Default rules (if none configured) replicate the previous 3-category behavior (bank-fee, default-credit, default-debit).
 
-In the pipeline, reconciliation runs as the **last step** (Stage 8) — after all validation is complete.
+In the pipeline, reconciliation runs in Phase 3 (Organize) — after all classification is complete.
 
 ### NIF Lookup (`papertrail/nif_lookup.py`)
 Enriches issuer information using Portuguese tax numbers (NIFs) extracted from QR codes.
@@ -221,7 +218,7 @@ nif_api:
 **Logging markers:** `[NIF-CACHE-HIT]`, `[NIF-WEB-LOOKUP]`, `[NIF-NOT-FOUND]`, `[NIF-ENRICH]`
 
 ### Dynamic Enums
-Document types and issuing parties are loaded dynamically from existing metadata JSON files in the processed directory. No fixed canonical list — processed files are the sole source of truth. Session-confirmed values (from interactive prompts within a run) are also included. Always includes `$UNKNOWN$` sentinel.
+Document types and issuing parties are loaded dynamically from existing metadata JSON files in the processed directory. No fixed canonical list — processed files are the sole source of truth. Always includes `$UNKNOWN$` sentinel.
 
 ## Key Files
 
@@ -229,10 +226,9 @@ Document types and issuing parties are loaded dynamically from existing metadata
 |------|---------|-----------|
 | `main.py` | Core app | Entry point, CLI tasks |
 | `papertrail/models.py` | Pydantic models | `DocumentMetadataRaw`, `DocumentMetadata`, `SubDocumentMetadata` |
-| `papertrail/llm.py` | LLM classification | `normalize_metadata` with LLM normalization |
+| `papertrail/llm.py` | LLM classification | `get_system_prompt_classify`, `normalize_issuing_party` |
 | `papertrail/logging_utils.py` | Logging infrastructure | `setup_task_logging`, `DocumentLogger`, `setup_logging` |
 | `papertrail/hashing.py` | File hashing | `HashCache`, `hash_file_fast`, `hash_file_text`, `hash_file_content` |
-| `papertrail/interactive.py` | Interactive classification prompts | `confirm_classification`, `set_interactive` |
 | `papertrail/nif_lookup.py` | NIF → issuer lookup | `NIFLookupCache` class |
 | `scripts/check_hash.py` | Verify hashes | CLI: `check-hash` |
 | `scripts/deduplicate.py` | Text-hash deduplication | `plan` + `execute` two-phase workflow |
@@ -250,8 +246,7 @@ Document types and issuing parties are loaded dynamically from existing metadata
 ## Data Models (Pydantic)
 
 ```python
-DocumentMetadataRaw    # Phase 1: exact text from document
-DocumentMetadataInput  # With enum validation
+DocumentMetadataRaw    # Single-call: raw text + normalized fields from LLM
 DocumentMetadata       # Full: hashes, timestamps, raw values
 ```
 
@@ -288,9 +283,9 @@ Non-bank-statement documents have `"bank_statement": null`.
 
 The `source_extension` field stores the original file extension when it's not `.pdf` (e.g., `".xlsx"` for bank statements). When `null`, defaults to `.pdf`. Used by `file_name_from_metadata()` and `find_companion_file()` to resolve the correct document file.
 
-The `hash_text` field stores the text-based hash of a PDF document (first 8 hex chars of SHA256 of normalized text). `null` for scanned/image-only PDFs and XLSX files. Used as an intermediate dedup tier between `hash_file` (byte-level) and `hash_content` (pixel-level) to catch compression duplicates cheaply. Backfill: `python main.py backfill text-hash <processed_path>`.
+The `hash_text` field stores the text-based hash of a PDF document (first 8 hex chars of SHA256 of normalized text). `null` for scanned/image-only PDFs and XLSX files. Used as an intermediate dedup tier between `hash_file` (byte-level) and `hash_content` (pixel-level) to catch compression duplicates cheaply.
 
-The `file_size_kb` field stores the companion document file size in kilobytes (rounded integer). Set during extraction for both PDFs and XLSX files. When `null`, the file size hasn't been backfilled yet. Backfill: `python main.py backfill file-size <processed_path>`.
+The `file_size_kb` field stores the companion document file size in kilobytes (rounded integer). Set during extraction for both PDFs and XLSX files.
 
 The `sub_documents` field stores metadata for individual invoices within a multi-invoice PDF (e.g., Shared Toll toll aggregator PDFs with multiple QR codes from different issuers). When 2+ Portuguese invoice QR codes are detected, each is stored as a sub-document with independently NIF-enriched metadata. The parent document gets LLM-classified metadata (aggregator info) while `qrcode` is set to `null`. Each sub-document participates individually in reconciliation matching.
 ```json
@@ -312,7 +307,7 @@ The `sub_documents` field stores metadata for individual invoices within a multi
     ]
 }
 ```
-Documents with 0-1 QR codes have `"sub_documents": null`. `SubDocumentMetadata` model used for construction, `.model_dump()` for storage. Backfill: `python main.py backfill sub-documents <processed_path>` (QR-only, no NIF enrichment). Use `sync --pattern "*shared-toll*"` afterward for full NIF-enriched sub-documents.
+Documents with 0-1 QR codes have `"sub_documents": null`. `SubDocumentMetadata` model used for construction, `.model_dump()` for storage.
 
 ## File Naming Convention
 
@@ -329,26 +324,22 @@ The hash component is `hash_file` (SHA256 of raw bytes, 8 chars). This ensures e
 | `pipeline` | Full end-to-end workflow (default) | `--months`, `--export_date` |
 | `extract` | Process new PDFs/XLSX from raw folder | `processed_path?`, `--raw_path` |
 | `sync` | Sync metadata (default: orphans only) | `processed_path?`, `--pattern`, `--dry_run`, `--all_unknown`, `-w`, `--all` |
+| `check` | Verify integrity, fill missing fields, audit report | `processed_path?`, `--verify-hashes`, `--dry_run` |
 | `reconcile` | Reconcile bank transactions against documents | `--export_path`, `--excel_path`, `--dry_run` |
 | `gmail` | Download email attachments from Gmail | `--months` |
 | `rename` | Rename files based on metadata | `processed_path?` |
-| `audit` | Audit processed files (10-section report) | `processed_path?`, `--verify-hashes` |
 | `archive` | Archive documents by hash digest | `digest...` (required), `processed_path?`, `--dry_run` |
 | `export excel` | Export metadata to Excel | `processed_path?`, `--output` (required) |
 | `export dates` | Export files by date range | `processed_path?`, `--base_dir`, `--run_merge` |
 | `export copy` | Copy files matching pattern | `processed_path?`, `--pattern` (req), `--dest` (req) |
-| `backfill page-count` | Add page_count to existing metadata | `processed_path?` |
-| `backfill file-size` | Add file_size_kb to existing metadata | `processed_path?` |
-| `backfill text-hash` | Add hash_text to existing metadata | `processed_path?` |
-| `backfill sub-documents` | Detect multi-QR PDFs, populate sub_documents | `processed_path?` |
 
-`processed_path?` = optional positional, defaults from profile. Global options: `--profile`, `-v`/`--verbose`, `-i`/`--interactive`.
+`processed_path?` = optional positional, defaults from profile. Global options: `--profile`, `-v`/`--verbose`.
 
 ## Configuration
 
 ### Profile-Based (Recommended)
 
-Each profile is a self-contained folder under `profiles/` (or an external directory via `PAPERTRAIL_PROFILES_DIR` env var). Current setup: `profiles/default/profile.yaml`
+Each profile is a self-contained folder under `profiles/` (or an external directory via `PAPERTRAIL_PROFILES_DIR` env var). Profiles are loaded as `Config` objects — a thin dict wrapper with dot-path access (`profile.openrouter.model_id`). No typed dataclasses; the YAML structure is the schema. Current setup: `profiles/default/profile.yaml`
 
 ```yaml
 profile:
@@ -412,7 +403,7 @@ export:
 ### Logs Directory
 
 Task runs create timestamped log files in `{processed_path}/logs/`:
-- `logs/extract_new_YYYYMMDD_HHMMSS.log` — per-document extraction details with `[QR-EXTRACT]`, `[QR-MERGE]`, `[NIF-CACHE-HIT]`, `[NIF-WEB-LOOKUP]`, `[NIF-ENRICH]`, `[RAW]`, `[NORM]`, `[TIMING]`, `[FINAL]` markers
+- `logs/extract_new_YYYYMMDD_HHMMSS.log` — per-document extraction details with `[QR-EXTRACT]`, `[QR-MERGE]`, `[NIF-CACHE-HIT]`, `[NIF-WEB-LOOKUP]`, `[NIF-ENRICH]`, `[CLASSIFY]`, `[TIMING]`, `[FINAL]` markers
 - `logs/sync_YYYYMMDD_HHMMSS.log` — sync with before/after diffs
 - `logs/pipeline_YYYYMMDD_HHMMSS.log` — full pipeline run
 - `logs/classification_failures.log` — failure tracebacks (appended)
