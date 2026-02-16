@@ -15,7 +15,7 @@ import fitz  # PyMuPDF
 import gradio as gr
 
 from papertrail.config import load_profile
-from scripts.deduplicate import PLAN_FILENAME, scan_directory
+from papertrail.hashing import PLAN_FILENAME, scan_directory
 
 # ── Module-level cache (single-user local tool) ──────────────────
 

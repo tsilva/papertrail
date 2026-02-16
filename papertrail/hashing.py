@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import time
 import unicodedata
+from datetime import datetime
 from pathlib import Path
 from typing import Callable, Optional, TypeVar
 
@@ -211,3 +213,128 @@ def dedup_batch(
             seen.add(h)
             result.append(item)
     return result, removed
+
+
+# --- Directory dedup scanning ---
+
+PLAN_FILENAME = "_dupes_plan.json"
+
+
+def scan_directory(directory: Path) -> dict:
+    """Scan directory for duplicate files and return a deduplication plan dict.
+
+    Groups files by hash_content (primary) or hash_text (fallback).
+    Each group has a `decision` field (initially None).
+    """
+    json_files = sorted(directory.rglob("*.json"))
+
+    file_records: list[dict] = []
+    scanned = 0
+    skipped_no_hash = 0
+
+    for json_path in json_files:
+        if "/logs/" in str(json_path) or json_path.name.startswith("_"):
+            continue
+        if json_path.name.endswith((".reconciliation.json", ".embeddings.json")):
+            continue
+        if any(part.startswith("_dupes") for part in json_path.parts):
+            continue
+
+        try:
+            with open(json_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+        except Exception:
+            continue
+
+        scanned += 1
+
+        content_hash = data.get("hash_content")
+        text_hash = data.get("hash_text")
+        if not text_hash:
+            # Try to compute for PDFs
+            ext = data.get("source_extension")
+            companion = json_path.with_suffix(ext) if ext else None
+            if companion is None or not companion.exists():
+                for fb_ext in (".pdf", ".xlsx"):
+                    candidate = json_path.with_suffix(fb_ext)
+                    if candidate.exists():
+                        companion = candidate
+                        break
+            if companion and companion.suffix.lower() == ".pdf":
+                text_hash = hash_file_text(companion)
+
+        if not content_hash and not text_hash:
+            skipped_no_hash += 1
+            continue
+
+        size_kb = data.get("file_size_kb")
+        if size_kb is None:
+            ext = data.get("source_extension")
+            companion = json_path.with_suffix(ext) if ext else None
+            if companion is None or not companion.exists():
+                for fb_ext in (".pdf", ".xlsx"):
+                    candidate = json_path.with_suffix(fb_ext)
+                    if candidate.exists():
+                        companion = candidate
+                        break
+            if companion and companion.exists():
+                size_kb = round(companion.stat().st_size / 1024)
+
+        file_records.append({
+            "json": json_path.name,
+            "json_path": str(json_path),
+            "size_kb": size_kb,
+            "hash_content": content_hash,
+            "hash_text": text_hash,
+        })
+
+    raw_groups = group_duplicates(file_records)
+
+    dupe_groups = []
+    total_files_to_move = 0
+    space_savings_kb = 0
+
+    for g in raw_groups:
+        entries = g["entries"]
+        keep = entries[0]
+        move = entries[1:]
+
+        group = {
+            "group_hash": g["group_hash"],
+            "group_hash_type": g["group_hash_type"],
+            "decision": None,
+            "keep": {
+                "json": keep["json"],
+                "size_kb": keep["size_kb"],
+                "hash_content": keep.get("hash_content"),
+            },
+            "move": [
+                {
+                    "json": m["json"],
+                    "size_kb": m["size_kb"],
+                    "hash_content": m.get("hash_content"),
+                }
+                for m in move
+            ],
+        }
+        dupe_groups.append(group)
+        total_files_to_move += len(move)
+        space_savings_kb += sum((m["size_kb"] or 0) for m in move)
+
+    return {
+        "generated": datetime.now().isoformat(timespec="seconds"),
+        "directory": str(directory),
+        "scan_stats": {
+            "scanned": scanned,
+            "skipped_no_hash": skipped_no_hash,
+        },
+        "summary": {
+            "total_groups": len(dupe_groups),
+            "total_files_to_move": total_files_to_move,
+            "space_savings_kb": space_savings_kb,
+            "approved": 0,
+            "rejected": 0,
+            "pending": len(dupe_groups),
+        },
+        "groups": dupe_groups,
+    }
