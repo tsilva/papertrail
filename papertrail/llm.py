@@ -5,8 +5,7 @@ from datetime import datetime
 from typing import Any, Optional
 
 from papertrail.logging_utils import get_logger, DocumentLogger
-from papertrail.models import DocumentMetadataRaw
-from papertrail.enums import get_document_types, get_issuing_parties
+from papertrail.models import DocumentMetadataRaw, get_document_types, get_issuing_parties
 from papertrail.qr.models import QRExtractedMetadata
 
 logger = get_logger('llm')

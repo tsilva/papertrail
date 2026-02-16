@@ -9,7 +9,7 @@ from typing import Optional
 import openpyxl
 
 from papertrail.config import get_current_profile, get_openai_client
-from papertrail.text_utils import strip_diacritics
+from papertrail.utils import strip_diacritics
 from papertrail.console import get_console
 from papertrail.llm import _extract_json_from_response
 from papertrail.logging_utils import get_logger

@@ -1,15 +1,17 @@
-"""Hash functions for file deduplication."""
+"""Hash functions and deduplication for file processing."""
+
+from __future__ import annotations
 
 import hashlib
 import time
 import unicodedata
 from pathlib import Path
-from typing import Optional
+from typing import Callable, Optional, TypeVar
 
 import fitz  # PyMuPDF
 
 from papertrail.logging_utils import get_logger
-from papertrail.yaml_utils import load_yaml, save_yaml
+from papertrail.utils import load_yaml, save_yaml
 
 logger = get_logger('hashing')
 
@@ -149,3 +151,63 @@ def hash_file_text(path: Path) -> Optional[str]:
     except Exception as e:
         logger.debug(f"[HASH-TEXT] Failed for {path.name}: {e}")
         return None
+
+
+# --- Deduplication utilities ---
+
+T = TypeVar("T")
+
+
+def group_duplicates(file_records: list[dict]) -> list[dict]:
+    """Group file records into duplicate sets using three-tier hash hierarchy.
+
+    Primary grouping uses ``hash_content``. Files without it fall back to ``hash_text``.
+    Within each group, entries sorted by ``size_kb`` ascending (smallest first = "keep").
+    """
+    content_groups: dict[str, list[dict]] = {}
+    text_only_groups: dict[str, list[dict]] = {}
+
+    for record in file_records:
+        content_hash = record.get("hash_content")
+        text_hash = record.get("hash_text")
+        if content_hash:
+            content_groups.setdefault(content_hash, []).append(record)
+        elif text_hash:
+            text_only_groups.setdefault(text_hash, []).append(record)
+
+    groups = []
+    for hash_val, entries in sorted(content_groups.items()):
+        if len(entries) >= 2:
+            entries.sort(key=lambda e: e.get("size_kb") or 0)
+            groups.append({"group_hash": hash_val, "group_hash_type": "hash_content", "entries": entries})
+    for hash_val, entries in sorted(text_only_groups.items()):
+        if len(entries) >= 2:
+            entries.sort(key=lambda e: e.get("size_kb") or 0)
+            groups.append({"group_hash": hash_val, "group_hash_type": "hash_text", "entries": entries})
+    return groups
+
+
+def dedup_batch(
+    items: list[T],
+    hash_fn: Callable[[T], str | None],
+    seen: set[str] | None = None,
+    label: str = "",
+) -> tuple[list[T], int]:
+    """Filter a list keeping only the first occurrence per hash value.
+
+    Items where ``hash_fn`` returns ``None`` pass through.
+    """
+    if seen is None:
+        seen = set()
+    result: list[T] = []
+    removed = 0
+    for item in items:
+        h = hash_fn(item)
+        if h is None:
+            result.append(item)
+        elif h in seen:
+            removed += 1
+        else:
+            seen.add(h)
+            result.append(item)
+    return result, removed

@@ -14,7 +14,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import fitz  # PyMuPDF
 import gradio as gr
 
-from papertrail.profiles import load_profile
+from papertrail.config import load_profile
 from scripts.deduplicate import PLAN_FILENAME, scan_directory
 
 # ── Module-level cache (single-user local tool) ──────────────────

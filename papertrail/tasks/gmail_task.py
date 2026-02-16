@@ -4,7 +4,7 @@ from pathlib import Path
 
 from papertrail.config import get_current_profile
 from papertrail.console import get_console
-from papertrail.dates import compute_month_range, month_to_date_range
+from papertrail.utils import compute_month_range, month_to_date_range
 from papertrail.logging_utils import get_logger, setup_task_logging
 
 logger = get_logger('cli')

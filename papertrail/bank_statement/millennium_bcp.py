@@ -8,7 +8,7 @@ import openpyxl
 
 from papertrail.bank_statement.models import BankFormat, BankStatementData
 from papertrail.logging_utils import get_logger
-from papertrail.text_utils import strip_diacritics
+from papertrail.utils import strip_diacritics
 
 logger = get_logger("bank_statement")
 

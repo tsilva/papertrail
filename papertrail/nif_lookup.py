@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Optional
 
 from papertrail.logging_utils import get_logger
-from papertrail.yaml_utils import load_yaml, save_yaml
+from papertrail.utils import load_yaml, save_yaml
 
 logger = get_logger('nif_lookup')
 

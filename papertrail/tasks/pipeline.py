@@ -64,7 +64,7 @@ def pipeline(months=2, export_date_arg=None, processed_path_override=None):
     if export_date_arg:
         export_dates = [export_date_arg]
     else:
-        from papertrail.dates import compute_month_range
+        from papertrail.utils import compute_month_range
         export_dates = compute_month_range(months)
 
     for ed in export_dates:
@@ -88,7 +88,7 @@ def pipeline(months=2, export_date_arg=None, processed_path_override=None):
         with console.step_progress("Download Gmail attachments") as step:
             try:
                 from papertrail.gmail import download_gmail_attachments
-                from papertrail.dates import month_to_date_range
+                from papertrail.utils import month_to_date_range
 
                 raw_path = Path(raw_dirs[0])
                 gmail_dir = raw_path / "gmail"

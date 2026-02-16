@@ -9,19 +9,17 @@ from typing import Optional
 
 from papertrail.config import (
     AppContext,
+    ConfigError,
+    ProfileNotFoundError,
     get_cache_dir,
     get_openai_client,
+    get_profiles_dir,
+    list_available_profiles,
+    load_profile,
     set_current_profile,
     set_ctx,
 )
-from papertrail.profiles import (
-    load_profile,
-    list_available_profiles,
-    get_profiles_dir,
-    ProfileNotFoundError,
-    ProfileError,
-)
-from papertrail.enums import reset_enum_cache, reset_session_cache
+from papertrail.models import reset_enum_cache, reset_session_cache
 from papertrail.nif_lookup import NIFLookupCache
 from papertrail.logging_utils import setup_logging, get_logger
 from papertrail.console import get_console
@@ -233,7 +231,7 @@ def main():
         initialize_config(args.profile)
     except ProfileNotFoundError as e:
         parser.error(str(e))
-    except ProfileError as e:
+    except ConfigError as e:
         parser.error(f"Failed to load profile: {e}")
 
     cmd = args.command
