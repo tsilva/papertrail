@@ -26,7 +26,7 @@ def _normalize_to_known(value, enum_name: str, getter, field_label: str):
         value_lower = value.lower()
         if value_lower in valid_lower:
             return valid_lower[value_lower]
-        # New value — pass through (will be confirmed interactively downstream)
+        # New value — pass through (auto-accepted)
         return value
     return value
 
