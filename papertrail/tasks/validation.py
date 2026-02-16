@@ -6,7 +6,7 @@ from pathlib import Path
 from papertrail.console import get_console
 from papertrail.hashing import hash_file_fast, hash_file_content, hash_file_text, HashCache
 from papertrail.logging_utils import get_logger, setup_task_logging
-from papertrail.metadata import load_validated_metadata, save_json_data
+from papertrail.metadata import load_validated_metadata, save_json_data, find_companion_file
 from papertrail.models import DocumentMetadata
 from papertrail.pdf import get_page_count
 
@@ -316,5 +316,113 @@ def task_backfill_sub_documents(processed_path: Path):
         update_fn=_update,
         skip_label="already processed",
     )
+
+
+def task_check(processed_path: Path, verify_hashes: bool = False, dry_run: bool = False) -> None:
+    """Unified check: fill missing fields, verify integrity, run audit report.
+
+    Combines all backfill operations + audit into one command:
+    1. Fill missing page_count, file_size_kb, hash_text, sub_documents
+    2. Optionally verify hash integrity (expensive)
+    3. Print full audit report
+    """
+    from papertrail.tasks.audit import task_audit
+
+    console = get_console()
+    setup_task_logging(processed_path, "check")
+
+    if not dry_run:
+        # Phase 1: Fill missing fields
+        console.step("Fill missing metadata fields")
+
+        now = datetime.now().strftime("%Y-%m-%d")
+        updated = 0
+        skipped = 0
+        errors = 0
+
+        for metadata_path, pdf_path, data in load_validated_metadata(
+            processed_path, require_pdf=False, validate=False,
+            show_progress=True, progress_desc="Checking metadata",
+        ):
+            try:
+                changed = False
+
+                # page_count
+                if data.get("page_count") is None:
+                    companion = find_companion_file(metadata_path, data)
+                    if companion and companion.suffix.lower() == ".pdf":
+                        data["page_count"] = get_page_count(companion)
+                        changed = True
+
+                # file_size_kb
+                if data.get("file_size_kb") is None:
+                    companion = find_companion_file(metadata_path, data)
+                    if companion and companion.exists():
+                        data["file_size_kb"] = round(companion.stat().st_size / 1024)
+                        changed = True
+
+                # hash_text
+                if "hash_text" not in data:
+                    companion = find_companion_file(metadata_path, data)
+                    if companion:
+                        if companion.suffix.lower() != ".pdf":
+                            data["hash_text"] = None
+                        else:
+                            data["hash_text"] = hash_file_text(companion)
+                        changed = True
+
+                # sub_documents
+                if data.get("sub_documents") is None and "sub_documents" not in data:
+                    companion = find_companion_file(metadata_path, data)
+                    if companion and companion.suffix.lower() == ".pdf":
+                        from papertrail.qr import extract_all_metadata_from_qr
+                        from papertrail.models import SubDocumentMetadata
+                        all_results = extract_all_metadata_from_qr(companion)
+                        if len(all_results) >= 2:
+                            sub_docs = []
+                            for qr_metadata, qr_raw_data in all_results:
+                                sub_doc = SubDocumentMetadata(
+                                    date_issued=qr_metadata.issue_date,
+                                    document_type=qr_metadata.document_type,
+                                    total_amount=qr_metadata.total_amount,
+                                    total_amount_currency=qr_metadata.total_amount_currency,
+                                    issuer_tax_number=qr_metadata.issuer_tax_number,
+                                    document_number=qr_metadata.document_number,
+                                    atcud=qr_metadata.atcud,
+                                    locale=qr_metadata.locale,
+                                    qrcode=qr_raw_data,
+                                )
+                                sub_docs.append(sub_doc.model_dump())
+                            data["sub_documents"] = sub_docs
+                            data["qrcode"] = None
+                            changed = True
+                        else:
+                            data["sub_documents"] = None
+                            changed = True
+                    elif companion:
+                        data["sub_documents"] = None
+                        changed = True
+
+                if changed:
+                    data["date_updated"] = now
+                    save_json_data(metadata_path, data)
+                    updated += 1
+                else:
+                    skipped += 1
+
+            except Exception as e:
+                logger.error(f"Failed to process {metadata_path.name}: {e}")
+                errors += 1
+
+        if updated > 0 or errors > 0:
+            if errors > 0:
+                console.warning(f"{updated} updated, {skipped} complete, {errors} errors", indent=False)
+            else:
+                console.success(f"{updated} updated, {skipped} already complete", indent=False)
+        elif skipped > 0:
+            console.success(f"{skipped} files already complete", indent=False)
+
+    # Phase 2: Audit report (always runs, even in dry_run mode)
+    task_audit(processed_path, verify_hashes=verify_hashes)
 
 
