@@ -34,24 +34,18 @@ from papertrail.tasks.extraction import (
     task_extract_new,
     task_sync,
 )
-from papertrail.tasks.organization import (
-    task_rename_files,
+from papertrail.tasks.organize import (
     copy_matching_files,
+    export_metadata_to_excel,
+    merge_reconciled_attachments,
+    task_archive,
+    task_export_all_dates,
+    task_gmail_download,
+    task_rename_files,
 )
-from papertrail.tasks.validation import (
+from papertrail.tasks.check import (
     validate_merged_pdf,
-    task_backfill_page_count,
-    task_backfill_file_size,
-    task_backfill_text_hash,
-    task_backfill_sub_documents,
     task_check,
 )
-from papertrail.tasks.export import (
-    export_metadata_to_excel,
-    task_export_all_dates,
-)
-from papertrail.tasks.gmail_task import task_gmail_download
 from papertrail.tasks.pipeline import pipeline
 from papertrail.tasks.reconciliation import task_reconcile
-from papertrail.tasks.audit import task_audit
-from papertrail.tasks.archive import task_archive
