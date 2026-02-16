@@ -176,97 +176,66 @@ def _phase1_llm_extract(pdf_path, exclude_fields, pre_extracted, ctx, doc_logger
     return raw_metadata
 
 
+def _enrich_nif(tax_number, ctx, doc_logger) -> tuple[str | None, str | None]:
+    """Shared NIF enrichment. Returns (normalized_party, raw_party) or (None, None)."""
+    if not (tax_number and ctx.nif_cache and NIFLookupCache.is_portuguese_nif(tax_number)):
+        return None, None
+
+    official_issuer, lookup_source, lookup_error = ctx.nif_cache.lookup(tax_number)
+
+    if not official_issuer:
+        if doc_logger:
+            if lookup_source == "web_error" and lookup_error:
+                doc_logger.log_nif_web_error(tax_number, lookup_error)
+            else:
+                doc_logger.log_nif_not_found(tax_number, lookup_source)
+        return None, None
+
+    if doc_logger:
+        if lookup_source == "cache":
+            doc_logger.log_nif_cache_hit(tax_number, official_issuer)
+        elif lookup_source == "web":
+            doc_logger.log_nif_web_lookup(tax_number, official_issuer)
+
+    cached_normalized = ctx.nif_cache.get_normalized(tax_number)
+    if cached_normalized:
+        if doc_logger:
+            doc_logger.log_nif_enrichment(tax_number, official_issuer, cached_normalized)
+        return cached_normalized, official_issuer
+
+    nif_normalized = normalize_issuing_party(official_issuer, ctx.openai_client, ctx.model_id)
+    if nif_normalized != "$UNKNOWN$":
+        ctx.nif_cache.set_normalized(tax_number, nif_normalized)
+        if doc_logger:
+            doc_logger.log_nif_enrichment(tax_number, official_issuer, nif_normalized)
+        return nif_normalized, official_issuer
+
+    logger.debug(f"[NIF-ENRICH] Keeping original issuer (NIF name didn't normalize): {official_issuer}")
+    return None, official_issuer
+
+
 def _phase4_nif_enrich(merged, raw_metadata, normalized_issuing_party, ctx, doc_logger):
     """Phase 4: Enrich issuing party using NIF tax number lookup."""
-    tax_number = merged["issuer_tax_number"]
-    if not (tax_number and ctx.nif_cache and merged["locale"] == "pt-PT"
-            and NIFLookupCache.is_portuguese_nif(tax_number)):
+    if merged["locale"] != "pt-PT":
         return normalized_issuing_party
 
     t0 = _time.monotonic()
-    official_issuer, lookup_source, lookup_error = ctx.nif_cache.lookup(tax_number)
-
-    if official_issuer:
-        if doc_logger:
-            if lookup_source == "cache":
-                doc_logger.log_nif_cache_hit(tax_number, official_issuer)
-            elif lookup_source == "web":
-                doc_logger.log_nif_web_lookup(tax_number, official_issuer)
-
-        # Check if we already have a cached normalized form
-        cached_normalized = ctx.nif_cache.get_normalized(tax_number)
-        if cached_normalized:
-            if doc_logger:
-                doc_logger.log_nif_enrichment(tax_number, official_issuer, cached_normalized)
-            normalized_issuing_party = cached_normalized
-        else:
-            # Normalize the official name via lightweight LLM call
-            nif_normalized_issuer = normalize_issuing_party(
-                official_issuer, ctx.openai_client, ctx.model_id,
-            )
-
-            if nif_normalized_issuer != "$UNKNOWN$":
-                ctx.nif_cache.set_normalized(tax_number, nif_normalized_issuer)
-                if doc_logger:
-                    doc_logger.log_nif_enrichment(tax_number, official_issuer, nif_normalized_issuer)
-                normalized_issuing_party = nif_normalized_issuer
-            else:
-                logger.debug(f"[NIF-ENRICH] Keeping original issuer (NIF name didn't normalize): {official_issuer}")
-    elif doc_logger:
-        if lookup_source == "web_error" and lookup_error:
-            doc_logger.log_nif_web_error(tax_number, lookup_error)
-        else:
-            doc_logger.log_nif_not_found(tax_number, lookup_source)
-
+    enriched, _ = _enrich_nif(merged["issuer_tax_number"], ctx, doc_logger)
+    if enriched:
+        normalized_issuing_party = enriched
     if doc_logger:
         doc_logger.log_timing("nif_enrichment", _time.monotonic() - t0)
-
     ctx.nif_cache.save()
     return normalized_issuing_party
 
 
 def _build_sub_documents(all_qr_results, ctx, doc_logger):
-    """Build sub-document metadata list from multiple QR results.
-
-    Each sub-document gets independent NIF enrichment since issuers differ.
-    Returns list[dict] suitable for storing in DocumentMetadata.sub_documents.
-    """
+    """Build sub-document metadata list from multiple QR results."""
     sub_docs = []
     for qr_metadata, qr_raw_data in all_qr_results:
-        issuing_party = None
-        issuing_party_raw = None
-
-        # NIF enrichment for this sub-document's issuer
-        tax_number = qr_metadata.issuer_tax_number
-        if tax_number and ctx.nif_cache and NIFLookupCache.is_portuguese_nif(tax_number):
-            official_issuer, lookup_source, lookup_error = ctx.nif_cache.lookup(tax_number)
-
-            if official_issuer:
-                issuing_party_raw = official_issuer
-                if doc_logger:
-                    if lookup_source == "cache":
-                        doc_logger.log_nif_cache_hit(tax_number, official_issuer)
-                    elif lookup_source == "web":
-                        doc_logger.log_nif_web_lookup(tax_number, official_issuer)
-
-                # Check if we already have a cached normalized form
-                cached_normalized = ctx.nif_cache.get_normalized(tax_number)
-                if cached_normalized:
-                    issuing_party = cached_normalized
-                    add_session_party(issuing_party)
-                    if doc_logger:
-                        doc_logger.log_nif_enrichment(tax_number, official_issuer, cached_normalized)
-                else:
-                    # Normalize the official name via lightweight LLM call
-                    nif_normalized = normalize_issuing_party(
-                        official_issuer, ctx.openai_client, ctx.model_id,
-                    )
-                    if nif_normalized != "$UNKNOWN$":
-                        ctx.nif_cache.set_normalized(tax_number, nif_normalized)
-                        issuing_party = nif_normalized
-                        add_session_party(issuing_party)
-                        if doc_logger:
-                            doc_logger.log_nif_enrichment(tax_number, official_issuer, nif_normalized)
+        enriched, raw_issuer = _enrich_nif(qr_metadata.issuer_tax_number, ctx, doc_logger)
+        if enriched:
+            add_session_party(enriched)
 
         sub_doc = SubDocumentMetadata(
             date_issued=qr_metadata.issue_date,
@@ -274,8 +243,8 @@ def _build_sub_documents(all_qr_results, ctx, doc_logger):
             total_amount=qr_metadata.total_amount,
             total_amount_currency=qr_metadata.total_amount_currency,
             issuer_tax_number=qr_metadata.issuer_tax_number,
-            issuing_party=issuing_party,
-            issuing_party_raw=issuing_party_raw,
+            issuing_party=enriched,
+            issuing_party_raw=raw_issuer,
             document_number=qr_metadata.document_number,
             atcud=qr_metadata.atcud,
             locale=qr_metadata.locale,
@@ -433,7 +402,7 @@ def _process_xlsx_files(xlsx_paths: list[Path], known_file_hashes: set,
     """Process XLSX files (bank statements). Returns (processed, skipped)."""
     import warnings
     from papertrail.bank_statement import classify_bank_statement
-    from papertrail.tasks.organization import file_name_from_metadata
+    from papertrail.tasks.organize import file_name_from_metadata
 
     processed_count = 0
     skipped_count = 0
@@ -473,7 +442,7 @@ def _process_xlsx_files(xlsx_paths: list[Path], known_file_hashes: set,
 
 def _task_extract_new_locked(processed_path: Path, raw_paths: list[Path], quiet: bool = False) -> dict:
     """Extract and classify new PDF files (lock already held)."""
-    from papertrail.tasks.organization import rename_pdf_files
+    from papertrail.tasks.organize import rename_pdf_files
 
     console = get_console()
 
@@ -863,7 +832,7 @@ def task_sync(processed_path: Path, dry_run: bool = False,
             if not dry_run:
                 save_metadata_json(metadata_path.with_suffix(".pdf"), new_metadata)
 
-                from papertrail.tasks.organization import file_name_from_metadata
+                from papertrail.tasks.organize import file_name_from_metadata
                 new_filename = file_name_from_metadata(new_metadata, new_metadata.hash_file)
                 new_pdf_path = metadata_path.parent / new_filename
                 old_pdf_path = metadata_path.with_suffix(".pdf")

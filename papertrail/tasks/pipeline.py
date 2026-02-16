@@ -23,7 +23,7 @@ from contextlib import redirect_stdout, redirect_stderr
 from papertrail.logging_utils import get_logger, setup_task_logging, suppress_console_logging
 from papertrail.mbox import extract_mbox_attachments
 from papertrail.metadata import load_json_data
-from papertrail.tasks.validation import validate_merged_pdf
+from papertrail.tasks.check import validate_merged_pdf
 
 logger = get_logger('cli')
 
@@ -162,7 +162,7 @@ def pipeline(months=2, export_date_arg=None, processed_path_override=None):
     # ── Phase 2: Classify ────────────────────────────────────────────
 
     from papertrail.tasks.extraction import task_extract_new, task_sync
-    from papertrail.tasks.organization import task_rename_files
+    from papertrail.tasks.organize import task_rename_files
 
     console.step("Classify new documents")
     try:
@@ -230,10 +230,8 @@ def pipeline(months=2, export_date_arg=None, processed_path_override=None):
 
     # ── Phase 3: Organize ────────────────────────────────────────────
 
-    from papertrail.tasks.export import export_metadata_to_excel
-    from papertrail.tasks.organization import copy_matching_files
+    from papertrail.tasks.organize import export_metadata_to_excel, copy_matching_files, merge_reconciled_attachments
     from papertrail.tasks.reconciliation import _discover_bank_statements, _reconcile_single
-    from papertrail.tasks.merge_attachments import merge_reconciled_attachments
 
     with console.step_progress("Export to Excel") as step:
         try:
