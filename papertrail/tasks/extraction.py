@@ -23,16 +23,14 @@ from papertrail.llm import (
     build_extraction_tools,
     get_qr_exclusions,
 )
-from papertrail.enums import (
-    get_document_types,
-    get_issuing_parties,
+from papertrail.models import (
     add_session_type,
     add_session_party,
 )
 from papertrail.pdf import render_pdf_to_images, find_pdf_files, find_document_files, get_page_count, is_image_file
 from papertrail.metadata import build_hash_index, save_metadata_json, load_json_data, iter_json_files
 from papertrail.hashing import hash_file_fast, hash_file_content, hash_file_text
-from papertrail.dedup import dedup_batch
+from papertrail.hashing import dedup_batch
 
 from papertrail.tasks import task_log_context
 from papertrail.qr import extract_all_metadata_from_qr, QRExtractedMetadata
@@ -704,7 +702,7 @@ def _task_extract_new_locked(processed_path: Path, raw_paths: list[Path], quiet:
 def _collect_sync_targets(processed_path: Path, all_unknown: bool = False,
                           pattern: str = None, orphans_only: bool = False) -> list[tuple]:
     """Collect files to sync. Returns list of (metadata_path, pdf_path, old_data_or_None)."""
-    from papertrail.pattern_utils import make_matcher
+    from papertrail.utils import make_matcher
 
     console = get_console()
 

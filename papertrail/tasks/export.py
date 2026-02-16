@@ -11,7 +11,7 @@ from papertrail.console import get_console
 from papertrail.hashing import hash_file_fast
 from papertrail.logging_utils import get_logger, setup_task_logging
 from papertrail.metadata import get_unique_dates
-from papertrail.enums import clean_enum_string
+from papertrail.models import clean_enum_string
 from papertrail.tasks.organization import copy_matching_files
 from papertrail.tasks.validation import validate_merged_pdf
 
