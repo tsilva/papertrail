@@ -1,4 +1,9 @@
-"""Pipeline task."""
+"""Pipeline task — three-phase document processing workflow.
+
+Phase 1 — Ingest: Gather files from all sources into raw folders
+Phase 2 — Classify: Process each new file (dedup, classify, rename)
+Phase 3 — Organize: Export, reconcile, merge
+"""
 
 import os
 import re
@@ -54,7 +59,6 @@ def pipeline(months=2, export_date_arg=None, processed_path_override=None):
     logger.debug("=== PIPELINE STARTED ===")
     logger.debug(f"Log: {log_file_path}")
 
-    # Display pipeline header
     console.pipeline_header(profile.profile.name, str(log_file_path))
 
     if export_date_arg:
@@ -74,12 +78,11 @@ def pipeline(months=2, export_date_arg=None, processed_path_override=None):
 
     processed_files_excel_path = Path(PROCESSED_FILES_DIR) / "processed_files.xlsx"
 
-    # Footer accumulators
     pipeline_warnings: list[str] = []
     summary: dict[str, str] = {}
     output_paths: list[tuple[str, str]] = []
 
-    # ── Stage 1: Ingest raw files ──
+    # ── Phase 1: Ingest ──────────────────────────────────────────────
 
     if profile.gmail.enabled:
         with console.step_progress("Download Gmail attachments") as step:
@@ -128,26 +131,17 @@ def pipeline(months=2, export_date_arg=None, processed_path_override=None):
                 logger.warning(f"Gmail download failed (non-fatal): {e}")
 
     for rd in raw_dirs:
-        # Mbox extraction
         with console.step_progress("Extract mbox attachments") as step:
-            logger.debug("### Extract mbox attachments...")
             stats = extract_mbox_attachments(rd)
             if stats['mbox_files'] > 0:
                 step.success(f"{stats['mbox_files']} mbox file(s), {stats['attachments_extracted']} attachment(s)")
-                logger.debug(f"Processed {stats['mbox_files']} mbox file(s), extracted {stats['attachments_extracted']} attachment(s)")
             else:
-                msg = "No mbox files found"
-                step.warning(msg)
-                pipeline_warnings.append(msg)
+                step.warning("No mbox files found")
             if stats['errors']:
                 step.error(f"{len(stats['errors'])} error(s)")
-                logger.error(f"Extract mbox attachments encountered {len(stats['errors'])} error(s)")
                 sys.exit(1)
-            logger.debug("### Extract mbox attachments... Finished.")
 
-        # Archive extraction
         with console.step_progress("Extract compressed archives") as step:
-            logger.debug("### Extract compressed archives...")
             with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()), warnings.catch_warnings():
                 warnings.simplefilter("ignore")
                 results = extract_archives(rd, passwords=passwords if passwords else None)
@@ -156,21 +150,19 @@ def pipeline(months=2, export_date_arg=None, processed_path_override=None):
             for archive_path, count in results.items():
                 if count == -1:
                     failures += 1
-                    logger.debug(f"Failed to extract: {archive_path}")
                 else:
                     total_extracted += count
-                    logger.debug(f"Extracted {count} files from {archive_path}")
             if total_extracted > 0:
                 step.success(f"{total_extracted} files from {len(results) - failures} archive(s)")
             elif failures > 0:
                 step.warning(f"{failures} archive(s) failed")
             else:
                 step.warning("No archives found")
-            logger.debug("### Extract compressed archives... Finished.")
 
-    # ── Stage 2: Extract new documents ──
+    # ── Phase 2: Classify ────────────────────────────────────────────
 
-    from papertrail.tasks.extraction import task_extract_new
+    from papertrail.tasks.extraction import task_extract_new, task_sync
+    from papertrail.tasks.organization import task_rename_files
 
     console.step("Classify new documents")
     try:
@@ -185,7 +177,6 @@ def pipeline(months=2, export_date_arg=None, processed_path_override=None):
         console.error(str(e))
         sys.exit(1)
 
-    # Notable items below extraction step
     if extract_stats and extract_stats.get("bundles_split", 0) > 0:
         console.notable(
             f"Split {extract_stats['bundles_split']} PDF bundles into {extract_stats['split_pages']} pages"
@@ -203,16 +194,11 @@ def pipeline(months=2, export_date_arg=None, processed_path_override=None):
             console.notable(unknown_msg)
             pipeline_warnings.append(f"{unknown_msg} in extracted documents")
 
-        # Update summary
         if extract_stats["new"] > 0 or extract_stats["duplicates"] > 0:
             classified_parts = [f"{extract_stats['new']} new", f"{extract_stats['duplicates']} duplicates"]
             if extract_stats.get("batch_duplicates", 0) > 0:
                 classified_parts.append(f"{extract_stats['batch_duplicates']} batch dupes")
             summary["Classified"] = ", ".join(classified_parts)
-
-    # ── Stage 3: Sync orphans ──
-
-    from papertrail.tasks.extraction import task_sync
 
     console.step("Sync orphaned metadata")
     try:
@@ -226,10 +212,6 @@ def pipeline(months=2, export_date_arg=None, processed_path_override=None):
     except Exception as e:
         console.error(str(e))
         sys.exit(1)
-
-    # ── Stage 4: Rename files ──
-
-    from papertrail.tasks.organization import task_rename_files
 
     with console.step_progress("Sync filenames to metadata") as step:
         try:
@@ -246,9 +228,12 @@ def pipeline(months=2, export_date_arg=None, processed_path_override=None):
             step.error(str(e))
             sys.exit(1)
 
-    # ── Stage 5: Export to Excel ──
+    # ── Phase 3: Organize ────────────────────────────────────────────
 
     from papertrail.tasks.export import export_metadata_to_excel
+    from papertrail.tasks.organization import copy_matching_files
+    from papertrail.tasks.reconciliation import _discover_bank_statements, _reconcile_single
+    from papertrail.tasks.merge_attachments import merge_reconciled_attachments
 
     with console.step_progress("Export to Excel") as step:
         try:
@@ -264,18 +249,10 @@ def pipeline(months=2, export_date_arg=None, processed_path_override=None):
             step.error(str(e))
             sys.exit(1)
 
-    from papertrail.tasks.organization import copy_matching_files
-
     export_file_config = profile.export
-
     profile_context = None
     if profile.profile.tax_number:
         profile_context = {"tax_number": profile.profile.tax_number}
-
-    # ── Stage 6-8: Export, Reconcile, Merge per export month ──
-
-    from papertrail.tasks.reconciliation import _discover_bank_statements, _reconcile_single
-    from papertrail.tasks.merge_attachments import merge_reconciled_attachments
 
     recon_stats_all: list[dict] = []
     merge_rules = export_file_config.merge_rules
@@ -285,8 +262,6 @@ def pipeline(months=2, export_date_arg=None, processed_path_override=None):
 
         if os.path.exists(export_date_dir):
             shutil.rmtree(export_date_dir)
-
-        # ── Stage 6: Export documents ──
 
         with console.step_progress(f"Export documents ({export_date})") as step:
             try:
@@ -310,8 +285,6 @@ def pipeline(months=2, export_date_arg=None, processed_path_override=None):
             except Exception as e:
                 step.error(str(e))
                 sys.exit(1)
-
-        # ── Stage 7: Reconcile bank statements ──
 
         all_recon_matches = []
         bank_statements = _discover_bank_statements(Path(export_date_dir))
@@ -348,8 +321,6 @@ def pipeline(months=2, export_date_arg=None, processed_path_override=None):
                     step.warning(f"Reconciliation failed: {e}")
                     logger.warning(f"Reconciliation failed for {bs_path.name}: {e}")
 
-        # ── Stage 7b: Merge attachments (e.g., bank-note → at-irs) ──
-
         if merge_rules and all_recon_matches:
             with console.step_progress(f"Merge attachments ({export_date})") as step:
                 try:
@@ -368,10 +339,7 @@ def pipeline(months=2, export_date_arg=None, processed_path_override=None):
                     step.warning(f"Merge attachments failed: {e}")
                     logger.warning(f"Merge attachments failed: {e}")
 
-        # ── Stage 8: Merge all PDFs (final combined files) ──
-
         with console.step_progress(f"Merge PDFs ({export_date})") as step:
-            logger.debug("### Merge PDFs...")
             try:
                 from pdf_gluer import merge_all_pdfs
                 with suppress_console_logging():
@@ -386,8 +354,6 @@ def pipeline(months=2, export_date_arg=None, processed_path_override=None):
                     step.success(f"{len(merged_files)} merged PDFs ({', '.join(prefixes)})")
                 else:
                     step.success("0 merged PDFs")
-
-                logger.debug("### Merge PDFs... Finished.")
             except Exception as e:
                 step.error(f"PDF merge failed: {e}")
                 logger.error(f"Merge PDFs failed: {e}")
@@ -398,7 +364,8 @@ def pipeline(months=2, export_date_arg=None, processed_path_override=None):
 
         output_paths.append(("Export", str(export_date_dir)))
 
-    # Build reconciliation summary
+    # ── Summary ──────────────────────────────────────────────────────
+
     if recon_stats_all:
         total_statements = len(recon_stats_all)
         total_reconciled = sum(s["reconciled"] for s in recon_stats_all)
@@ -410,11 +377,9 @@ def pipeline(months=2, export_date_arg=None, processed_path_override=None):
                 f"{avg_rate:.0f}% reconciled ({total_reconciled}/{total_txns})"
             )
 
-    # Add output paths
     output_paths.append(("Excel", str(processed_files_excel_path)))
     output_paths.append(("Log", str(log_file_path)))
 
-    # Show pipeline footer
     elapsed = time.time() - start_time
     console.pipeline_footer(
         elapsed_seconds=elapsed,
