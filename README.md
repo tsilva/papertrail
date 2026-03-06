@@ -15,6 +15,8 @@
 
 ## Overview
 
+[![CI](https://github.com/tsilva/papertrail/actions/workflows/release.yml/badge.svg)](https://github.com/tsilva/papertrail/actions/workflows/release.yml)
+
 papertrail uses vision LLMs to "read" your PDFs and automatically extract metadata like dates, document types, and issuing parties. It renders PDF pages as images, sends them to AI models for analysis, and organizes your files with consistent naming.
 
 **Before:** `scan_2024_001.pdf`, `document(3).pdf`, `IMG_4521.pdf`
