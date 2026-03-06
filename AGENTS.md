@@ -47,7 +47,7 @@ The single LLM call receives all known document types and issuing parties (scann
 - **Content hash** (`hash_file_content`): Renders all pages at 150 DPI, hashes pixel data - detects true duplicates even if PDF metadata differs (~1-2s per file). Fallback for PDFs without extractable text (Stage 3)
 
 ### Hash Caching (`HashCache`)
-Content hashing is expensive (~1-2s per file). The `HashCache` class caches hash_file → hash_content and hash_file → hash_text mappings in `.cache/hash_cache.yaml`:
+Content hashing is expensive (~1-2s per file). The `HashCache` class caches hash_file → hash_content and hash_file → hash_text mappings in `~/.config/papertrail/cache/hash_cache.yaml`:
 
 1. Compute fast file hash (cheap, ~0.05s)
 2. Check cache for existing mapping
@@ -213,7 +213,7 @@ nif_api:
   enabled: true  # No API key required - uses public nif.pt URLs
 ```
 
-**Cache file:** `.cache/nif_cache.yaml` - stores NIF → issuer mappings to avoid repeated web lookups
+**Cache file:** `~/.config/papertrail/cache/nif_cache.yaml` - stores NIF → issuer mappings to avoid repeated web lookups
 
 **Logging markers:** `[NIF-CACHE-HIT]`, `[NIF-WEB-LOOKUP]`, `[NIF-NOT-FOUND]`, `[NIF-ENRICH]`
 
@@ -339,7 +339,7 @@ The hash component is `hash_file` (SHA256 of raw bytes, 8 chars). This ensures e
 
 ### Profile-Based (Recommended)
 
-Each profile is a self-contained folder under `profiles/` (or an external directory via `PAPERTRAIL_PROFILES_DIR` env var). Profiles are loaded as `Config` objects — a thin dict wrapper with dot-path access (`profile.openrouter.model_id`). No typed dataclasses; the YAML structure is the schema. Current setup: `profiles/default/profile.yaml`
+Each profile is a self-contained folder under `~/.config/papertrail/profiles/`. Profiles are loaded as `Config` objects — a thin dict wrapper with dot-path access (`profile.openrouter.model_id`). No typed dataclasses; the YAML structure is the schema. Current setup: `~/.config/papertrail/profiles/default/profile.yaml`
 
 ```yaml
 profile:
@@ -364,9 +364,7 @@ python main.py --profile personal pipeline
 python main.py extract /path/to/processed  # Auto-uses default profile if available
 ```
 
-**Multiple environments**: Create `profiles/personal/profile.yaml`, `profiles/work/profile.yaml`, etc. from templates in `profiles/profile.yaml.example`
-
-**External profiles directory**: Set `PAPERTRAIL_PROFILES_DIR` to load profiles from an external directory (e.g., a private git repo). Falls back to repo `profiles/` if unset or directory doesn't exist.
+**Multiple environments**: Create `~/.config/papertrail/profiles/personal/profile.yaml`, `~/.config/papertrail/profiles/work/profile.yaml`, etc. from templates in `profiles/profile.yaml.example`
 
 **Full docs**: See `profiles/README.md` for complete YAML schema and examples
 
@@ -410,13 +408,17 @@ Task runs create timestamped log files in `{processed_path}/logs/`:
 
 ### Profile Data Files
 
-**Profile-specific files** in `profiles/<name>/` (gitignored):
-- `profile.yaml` - Profile configuration (copy from `profiles/profile.yaml.example`)
+**Profile-specific files** in `~/.config/papertrail/profiles/<name>/`:
+- `profile.yaml` - Profile configuration (copy from `~/.config/papertrail/profiles/profile.yaml.example` or repo `profiles/profile.yaml.example`)
 
-**Cache files** in `.cache/` (gitignored, auto-generated):
+**Cache files** in `~/.config/papertrail/cache/` (auto-generated):
 - `hash_cache.yaml` - File hash → content hash cache for fast validation
 - `nif_cache.yaml` - NIF → issuer name cache for fast lookups
 - `.extract.lock` - Extraction lock file (runtime state)
+
+**Credentials** in `~/.config/papertrail/credentials/`:
+- `gmail_credentials.json` - Gmail OAuth2 client credentials
+- `gmail_token.json` - Gmail OAuth2 refresh token
 
 ## Code Patterns
 

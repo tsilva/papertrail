@@ -40,7 +40,7 @@ from papertrail.tasks import (
     task_log_context,
 )
 
-logger = get_logger('cli')
+logger = get_logger("cli")
 
 app = typer.Typer(
     help="AI-powered document classification and organization.",
@@ -54,6 +54,7 @@ app.add_typer(export_app, name="export")
 
 # ── Helpers ──────────────────────────────────────────────────────
 
+
 def _fail(msg: str):
     typer.echo(f"Error: {msg}", err=True)
     raise typer.Exit(1)
@@ -62,11 +63,16 @@ def _fail(msg: str):
 def _profile_path(name: str) -> Optional[str]:
     """Get a named path ('processed', 'raw', 'export') from the current profile."""
     from papertrail.config import get_current_profile
+
     profile = get_current_profile()
     if not profile:
         return None
     paths = profile.paths
-    return {"processed": paths.processed, "raw": paths.raw[0] if paths.raw else None, "export": paths.export}.get(name)
+    return {
+        "processed": paths.processed,
+        "raw": paths.raw[0] if paths.raw else None,
+        "export": paths.export,
+    }.get(name)
 
 
 def _resolve_processed(processed_path: Optional[str] = None) -> Path:
@@ -93,16 +99,16 @@ def _resolve_dir(path_str: Optional[str], name: str, create: bool = False) -> Pa
 
 # ── Initialization ───────────────────────────────────────────────
 
+
 def initialize_config(profile_name: Optional[str] = None) -> None:
     """Initialize configuration from profile."""
     profiles_dir = get_profiles_dir()
-    if os.environ.get("PAPERTRAIL_PROFILES_DIR"):
-        logger.info(f"Using external profiles directory: {profiles_dir}")
 
     if not (profiles_dir.exists() and list_available_profiles()):
         _fail(
-            "No profiles found. Create a profile directory (e.g. profiles/default/) "
-            "with a profile.yaml file. See profiles/README.md for documentation."
+            "No profiles found in ~/.config/papertrail/profiles/. "
+            "Profiles have been migrated from the repo to ~/.config/papertrail/profiles/. "
+            "If this is a fresh install, copy profiles/profile.yaml.example to ~/.config/papertrail/profiles/default/profile.yaml and configure it."
         )
 
     if profile_name is not None:
@@ -127,13 +133,18 @@ def initialize_config(profile_name: Optional[str] = None) -> None:
     reset_session_cache()
 
     from papertrail.config import check_api_accessibility
+
     base_url = profile.openrouter.base_url
     api_accessible = check_api_accessibility(base_url)
     if not api_accessible:
         console = get_console()
         console.warning(f"API base URL is not accessible: {base_url}", indent=False)
-        console.warning("LLM-dependent tasks will fail. Offline tasks (rename, check, export) will work.", indent=False)
+        console.warning(
+            "LLM-dependent tasks will fail. Offline tasks (rename, check, export) will work.",
+            indent=False,
+        )
         from rich.prompt import Confirm
+
         if not Confirm.ask("Proceed without API access?", default=True):
             raise SystemExit(0)
 
@@ -143,14 +154,17 @@ def initialize_config(profile_name: Optional[str] = None) -> None:
         nif_cache = NIFLookupCache(cache_dir / "nif_cache.yaml")
         logger.info(f"NIF lookup enabled with {len(nif_cache)} cached entries")
 
-    set_ctx(AppContext(
-        model_id=profile.openrouter.model_id,
-        openai_client=get_openai_client() if api_accessible else None,
-        nif_cache=nif_cache,
-    ))
+    set_ctx(
+        AppContext(
+            model_id=profile.openrouter.model_id,
+            openai_client=get_openai_client() if api_accessible else None,
+            nif_cache=nif_cache,
+        )
+    )
 
 
 # ── App callback (global options + default command) ──────────────
+
 
 @app.callback()
 def main(
@@ -172,6 +186,7 @@ def main(
 
 
 # ── Commands ─────────────────────────────────────────────────────
+
 
 @app.command("pipeline")
 def pipeline_cmd(
@@ -195,6 +210,7 @@ def extract(
     pp = _resolve_processed(processed_path)
     if not raw_path:
         from papertrail.config import get_current_profile
+
         profile = get_current_profile()
         if profile and profile.paths.raw:
             raw_path = ";".join(profile.paths.raw)
@@ -218,8 +234,11 @@ def sync(
     """Sync metadata."""
     task_sync(
         _resolve_processed(processed_path),
-        dry_run=dry_run, all_unknown=all_unknown,
-        pattern=pattern, workers=workers, all=all_pdfs,
+        dry_run=dry_run,
+        all_unknown=all_unknown,
+        pattern=pattern,
+        workers=workers,
+        all=all_pdfs,
     )
 
 
@@ -259,7 +278,9 @@ def rename(
 @app.command()
 def check(
     processed_path: Optional[str] = typer.Argument(None, help="Path to processed folder."),
-    verify_hashes: bool = typer.Option(False, "--verify-hashes", help="Verify file hashes match metadata."),
+    verify_hashes: bool = typer.Option(
+        False, "--verify-hashes", help="Verify file hashes match metadata."
+    ),
     dry_run: bool = typer.Option(False, help="Report only, don't fix."),
 ):
     """Verify integrity, fill missing fields, audit report."""
@@ -277,6 +298,7 @@ def archive(
 
 
 # ── Export subcommands ───────────────────────────────────────────
+
 
 @export_app.command("excel")
 def export_excel(
@@ -300,14 +322,19 @@ def export_dates(
     """Export files by date range."""
     pp = _resolve_processed(processed_path)
     from papertrail.config import get_current_profile
+
     profile = get_current_profile()
-    export_base = base_dir or (profile.paths.export if profile else None) or os.getenv("EXPORT_FILES_DIR")
+    export_base = (
+        base_dir or (profile.paths.export if profile else None) or os.getenv("EXPORT_FILES_DIR")
+    )
     export_dir = _resolve_dir(export_base, "base_dir", create=True)
     profile_context = None
     if profile and profile.profile.tax_number:
         profile_context = {"tax_number": profile.profile.tax_number}
     task_export_all_dates(
-        pp, export_dir, run_merge,
+        pp,
+        export_dir,
+        run_merge,
         export_config=profile.export if profile else None,
         profile_context=profile_context,
     )
