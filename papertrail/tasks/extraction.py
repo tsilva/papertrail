@@ -3,18 +3,20 @@
 import fcntl
 import json
 import shutil
+import tempfile
 import time as _time
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 
+from papertrail.app import get_app
 from papertrail.console import get_console
 from papertrail.logging_utils import (
     setup_failure_logger,
     log_failure,
     get_logger,
     DocumentLogger,
-    setup_task_logging,
 )
 from papertrail.models import DocumentMetadata, DocumentMetadataRaw, SubDocumentMetadata
 from papertrail.llm import (
@@ -27,14 +29,22 @@ from papertrail.models import (
     add_session_type,
     add_session_party,
 )
-from papertrail.pdf import render_pdf_to_images, find_pdf_files, find_document_files, get_page_count, is_image_file
+from papertrail.naming import file_name_from_metadata
+from papertrail.pdf import (
+    convert_image_to_pdf,
+    find_document_files,
+    get_page_count,
+    is_image_file,
+    is_splittable_bundle,
+    render_pdf_to_images,
+    split_pdf_bundle,
+)
 from papertrail.metadata import build_hash_index, save_metadata_json, load_json_data, iter_json_files
 from papertrail.hashing import hash_file_fast, hash_file_content, hash_file_text
-from papertrail.hashing import dedup_batch
-
 from papertrail.tasks import task_log_context
 from papertrail.qr import extract_all_metadata_from_qr, QRExtractedMetadata
 from papertrail.nif_lookup import NIFLookupCache
+from papertrail.store import DocumentStore
 
 logger = get_logger('cli')
 
@@ -258,14 +268,23 @@ def _build_sub_documents(all_qr_results, ctx, doc_logger):
     return sub_docs
 
 
-def classify_pdf_document(pdf_path: Path, file_hash: str, failure_logger=None,
-                          doc_logger: DocumentLogger = None) -> DocumentMetadata:
+def classify_pdf_document(
+    pdf_path: Path,
+    file_hash: str,
+    failure_logger=None,
+    doc_logger: DocumentLogger = None,
+    app=None,
+) -> DocumentMetadata:
     """Classify a PDF document using QR extraction and LLM.
 
     Pipeline: QR extract -> LLM classify (single call) -> Merge QR overrides -> NIF enrich
     """
-    from papertrail.config import get_ctx
-    ctx = get_ctx()
+    if app is not None:
+        ctx = app
+    else:
+        from papertrail.config import get_ctx
+
+        ctx = get_ctx()
 
     if doc_logger:
         doc_logger.start_document(pdf_path)
@@ -378,6 +397,625 @@ def classify_pdf_document(pdf_path: Path, file_hash: str, failure_logger=None,
         raise RuntimeError(f"Classification failed for: {pdf_path}") from e
 
 
+@dataclass
+class UpsertResult:
+    """Result of a document upsert operation."""
+
+    source_path: Path
+    mode: str
+    outputs: list[Path] = field(default_factory=list)
+    processed: int = 0
+    duplicates: int = 0
+    batch_duplicates: int = 0
+    skipped: int = 0
+    failed: int = 0
+    images_converted: int = 0
+    bundles_split: int = 0
+    split_pages: int = 0
+    reason: str | None = None
+    metadata: DocumentMetadata | None = None
+
+    def absorb(self, other: "UpsertResult") -> "UpsertResult":
+        self.outputs.extend(other.outputs)
+        self.processed += other.processed
+        self.duplicates += other.duplicates
+        self.batch_duplicates += other.batch_duplicates
+        self.skipped += other.skipped
+        self.failed += other.failed
+        self.images_converted += other.images_converted
+        self.bundles_split += other.bundles_split
+        self.split_pages += other.split_pages
+        if self.reason is None:
+            self.reason = other.reason
+        return self
+
+
+class DocumentService:
+    """Shared document lifecycle service."""
+
+    def __init__(self, app=None, store: DocumentStore | None = None):
+        self.app = app or get_app()
+        self.store = store or DocumentStore(self.app)
+
+    def classify_pdf_document(
+        self,
+        pdf_path: Path,
+        file_hash: str,
+        failure_logger=None,
+        doc_logger: DocumentLogger | None = None,
+    ) -> DocumentMetadata:
+        return classify_pdf_document(
+            pdf_path,
+            file_hash,
+            failure_logger=failure_logger,
+            doc_logger=doc_logger,
+            app=self.app,
+        )
+
+    def _load_known_hashes(
+        self,
+        processed_path: Path,
+        known_file_hashes: set[str] | None,
+        known_content_hashes: set[str] | None,
+        known_text_hashes: set[str] | None,
+    ) -> tuple[set[str], set[str], set[str]]:
+        if (
+            known_file_hashes is not None
+            and known_content_hashes is not None
+            and known_text_hashes is not None
+        ):
+            return known_file_hashes, known_content_hashes, known_text_hashes
+
+        content_idx, file_idx, text_idx, _ = self.store.build_indexes(processed_path)
+        return (
+            known_file_hashes if known_file_hashes is not None else set(file_idx.keys()),
+            known_content_hashes if known_content_hashes is not None else set(content_idx.keys()),
+            known_text_hashes if known_text_hashes is not None else set(text_idx.keys()),
+        )
+
+    def upsert_document(
+        self,
+        source_path: Path,
+        mode: str,
+        existing_metadata=None,
+        *,
+        processed_path: Path | None = None,
+        known_file_hashes: set[str] | None = None,
+        known_content_hashes: set[str] | None = None,
+        known_text_hashes: set[str] | None = None,
+        failure_logger=None,
+        doc_logger: DocumentLogger | None = None,
+        dry_run: bool = False,
+    ) -> UpsertResult:
+        """Insert or refresh a document while preserving metadata invariants."""
+        processed_path = processed_path or self.app.require_processed_path()
+        result = UpsertResult(source_path=source_path, mode=mode)
+
+        if mode not in {"ingest", "resync", "backfill"}:
+            raise ValueError(f"Unsupported upsert mode: {mode}")
+
+        if mode == "backfill":
+            data = existing_metadata
+            if isinstance(data, DocumentMetadata):
+                data = data.model_dump()
+            if data is None:
+                data = {}
+
+            changed = False
+            if data.get("page_count") is None and source_path.exists() and source_path.suffix.lower() == ".pdf":
+                data["page_count"] = get_page_count(source_path)
+                changed = True
+
+            if data.get("file_size_kb") is None and source_path.exists():
+                data["file_size_kb"] = round(source_path.stat().st_size / 1024)
+                changed = True
+
+            if "hash_text" not in data and source_path.exists():
+                data["hash_text"] = (
+                    hash_file_text(source_path) if source_path.suffix.lower() == ".pdf" else None
+                )
+                changed = True
+
+            if data.get("sub_documents") is None and "sub_documents" not in data:
+                if source_path.exists() and source_path.suffix.lower() == ".pdf":
+                    all_results = extract_all_metadata_from_qr(source_path)
+                    if len(all_results) >= 2:
+                        sub_docs = []
+                        for qr_metadata, qr_raw_data in all_results:
+                            sub_doc = SubDocumentMetadata(
+                                date_issued=qr_metadata.issue_date,
+                                document_type=qr_metadata.document_type,
+                                total_amount=qr_metadata.total_amount,
+                                total_amount_currency=qr_metadata.total_amount_currency,
+                                issuer_tax_number=qr_metadata.issuer_tax_number,
+                                document_number=qr_metadata.document_number,
+                                atcud=qr_metadata.atcud,
+                                locale=qr_metadata.locale,
+                                qrcode=qr_raw_data,
+                            )
+                            sub_docs.append(sub_doc.model_dump())
+                        data["sub_documents"] = sub_docs
+                        data["qrcode"] = None
+                    else:
+                        data["sub_documents"] = None
+                    changed = True
+                elif source_path.exists():
+                    data["sub_documents"] = None
+                    changed = True
+
+            if changed:
+                data["date_updated"] = self.app.today
+                if not dry_run:
+                    self.store.save_json(source_path.with_suffix(".json"), data)
+                result.processed = 1
+                result.outputs.append(source_path)
+            else:
+                result.skipped = 1
+            return result
+
+        known_file_hashes, known_content_hashes, known_text_hashes = self._load_known_hashes(
+            processed_path,
+            known_file_hashes,
+            known_content_hashes,
+            known_text_hashes,
+        )
+
+        suffix = source_path.suffix.lower()
+        if mode == "ingest" and is_image_file(source_path):
+            with tempfile.TemporaryDirectory() as tmp_dir:
+                converted_path = convert_image_to_pdf(source_path, Path(tmp_dir))
+                result.images_converted = 1
+                return result.absorb(
+                    self.upsert_document(
+                        converted_path,
+                        "ingest",
+                        processed_path=processed_path,
+                        known_file_hashes=known_file_hashes,
+                        known_content_hashes=known_content_hashes,
+                        known_text_hashes=known_text_hashes,
+                        failure_logger=failure_logger,
+                        doc_logger=doc_logger,
+                        dry_run=dry_run,
+                    )
+                )
+
+        if mode == "ingest" and suffix == ".pdf" and is_splittable_bundle(source_path):
+            with tempfile.TemporaryDirectory() as tmp_dir:
+                split_paths = split_pdf_bundle(source_path, Path(tmp_dir))
+                result.bundles_split = 1
+                result.split_pages = len(split_paths)
+                for split_path in split_paths:
+                    result.absorb(
+                        self.upsert_document(
+                            split_path,
+                            "ingest",
+                            processed_path=processed_path,
+                            known_file_hashes=known_file_hashes,
+                            known_content_hashes=known_content_hashes,
+                            known_text_hashes=known_text_hashes,
+                            failure_logger=failure_logger,
+                            doc_logger=doc_logger,
+                            dry_run=dry_run,
+                        )
+                    )
+                return result
+
+        if suffix == ".xlsx":
+            from papertrail.bank_statement import classify_bank_statement
+
+            file_hash = hash_file_fast(source_path)
+            if mode == "ingest" and file_hash in known_file_hashes:
+                result.duplicates = 1
+                result.reason = "hash_file"
+                return result
+
+            metadata = classify_bank_statement(source_path, file_hash)
+            if metadata is None:
+                result.skipped = 1
+                result.reason = "unrecognized_xlsx"
+                return result
+
+            metadata.file_size_kb = round(source_path.stat().st_size / 1024)
+            if mode == "resync" and existing_metadata:
+                old_data = (
+                    existing_metadata.model_dump()
+                    if isinstance(existing_metadata, DocumentMetadata)
+                    else existing_metadata
+                )
+                metadata.date_created = old_data.get("date_created") or self.app.today
+                metadata.date_updated = self.app.today
+
+            dest_path = source_path
+            if mode == "ingest":
+                dest_path = processed_path / file_name_from_metadata(metadata, file_hash)
+                if dest_path.exists():
+                    result.skipped = 1
+                    result.reason = "destination_exists"
+                    return result
+
+            if not dry_run:
+                if mode == "ingest":
+                    shutil.copy2(source_path, dest_path)
+                self.store.save_document(dest_path, metadata)
+
+            known_file_hashes.add(file_hash)
+            known_content_hashes.add(file_hash)
+            result.processed = 1
+            result.outputs.append(dest_path)
+            result.metadata = metadata
+            return result
+
+        if suffix != ".pdf":
+            result.skipped = 1
+            result.reason = "unsupported_extension"
+            return result
+
+        old_data = None
+        if existing_metadata:
+            old_data = (
+                existing_metadata.model_dump()
+                if isinstance(existing_metadata, DocumentMetadata)
+                else existing_metadata
+            )
+
+        file_hash = old_data.get("hash_file") if old_data else None
+        if not file_hash:
+            file_hash = hash_file_fast(source_path)
+
+        if mode == "ingest" and file_hash in known_file_hashes:
+            result.duplicates = 1
+            result.reason = "hash_file"
+            return result
+
+        text_hash = hash_file_text(source_path)
+        if mode == "ingest" and text_hash and text_hash in known_text_hashes:
+            result.duplicates = 1
+            result.reason = "hash_text"
+            return result
+
+        content_hash = old_data.get("hash_content") if old_data else None
+        if not content_hash:
+            content_hash = hash_file_content(source_path)
+
+        if mode == "ingest" and content_hash in known_content_hashes:
+            result.duplicates = 1
+            result.reason = "hash_content"
+            return result
+
+        metadata = self.classify_pdf_document(
+            source_path,
+            content_hash,
+            failure_logger=failure_logger,
+            doc_logger=doc_logger,
+        )
+        metadata.hash_file = file_hash
+        metadata.hash_text = text_hash
+        metadata.file_size_kb = round(source_path.stat().st_size / 1024)
+        if old_data:
+            metadata.date_created = old_data.get("date_created") or self.app.today
+            metadata.date_updated = self.app.today
+
+        dest_path = source_path
+        if mode == "ingest":
+            dest_path = processed_path / file_name_from_metadata(metadata, file_hash)
+            if dest_path.exists():
+                result.skipped = 1
+                result.reason = "destination_exists"
+                return result
+
+        if not dry_run:
+            if mode == "ingest":
+                shutil.copy2(source_path, dest_path)
+            self.store.save_document(dest_path, metadata)
+
+            if mode == "resync":
+                new_filename = file_name_from_metadata(metadata, metadata.hash_file)
+                new_doc_path = source_path.parent / new_filename
+                if new_doc_path != source_path:
+                    new_json_path = new_doc_path.with_suffix(".json")
+                    source_path.rename(new_doc_path)
+                    source_path.with_suffix(".json").rename(new_json_path)
+                    dest_path = new_doc_path
+
+        known_file_hashes.add(file_hash)
+        if text_hash:
+            known_text_hashes.add(text_hash)
+        known_content_hashes.add(content_hash)
+        result.processed = 1
+        result.outputs.append(dest_path)
+        result.metadata = metadata
+        return result
+
+    def extract_new(
+        self,
+        processed_path: Path,
+        raw_paths: list[Path],
+        quiet: bool = False,
+        failure_logger=None,
+    ) -> dict:
+        """Process new raw documents into the processed store."""
+        console = self.app.console
+        doc_logger = DocumentLogger()
+        run_start = _time.monotonic()
+
+        logger.debug("Building hash index from metadata files...")
+        known_content_hashes_idx, known_file_hashes_idx, known_text_hashes_idx, known_issuers_before = self.store.build_indexes(processed_path)
+        known_content_hashes = set(known_content_hashes_idx.keys())
+        known_file_hashes = set(known_file_hashes_idx.keys())
+        known_text_hashes = set(known_text_hashes_idx.keys())
+        hashes_before = set(known_content_hashes)
+
+        all_doc_paths = find_document_files(raw_paths)
+        pdf_scanned = sum(1 for path in all_doc_paths if path.suffix.lower() == ".pdf")
+        xlsx_scanned = sum(1 for path in all_doc_paths if path.suffix.lower() == ".xlsx")
+        logger.debug(
+            f"Found {pdf_scanned} PDFs, {xlsx_scanned} XLSX, and "
+            f"{sum(1 for path in all_doc_paths if is_image_file(path))} images in raw directories"
+        )
+
+        totals = {
+            "new": 0,
+            "duplicates": 0,
+            "batch_duplicates": 0,
+            "failed": 0,
+            "xlsx_new": 0,
+            "pdf_new": 0,
+            "images_converted": 0,
+            "bundles_split": 0,
+            "split_pages": 0,
+        }
+
+        for doc_path in console.track(all_doc_paths, "Processing documents"):
+            try:
+                upsert = self.upsert_document(
+                    doc_path,
+                    "ingest",
+                    processed_path=processed_path,
+                    known_file_hashes=known_file_hashes,
+                    known_content_hashes=known_content_hashes,
+                    known_text_hashes=known_text_hashes,
+                    failure_logger=failure_logger,
+                    doc_logger=doc_logger,
+                )
+            except Exception as exc:
+                logger.error(f"Failed to process {doc_path.name}: {exc}")
+                totals["failed"] += 1
+                continue
+            totals["new"] += upsert.processed
+            totals["duplicates"] += upsert.duplicates
+            totals["batch_duplicates"] += upsert.batch_duplicates
+            totals["failed"] += upsert.failed
+            totals["images_converted"] += upsert.images_converted
+            totals["bundles_split"] += upsert.bundles_split
+            totals["split_pages"] += upsert.split_pages
+            if upsert.processed > 0:
+                if doc_path.suffix.lower() == ".xlsx":
+                    totals["xlsx_new"] += upsert.processed
+                else:
+                    totals["pdf_new"] += upsert.processed
+
+        elapsed = _time.monotonic() - run_start
+
+        new_hashes = known_content_hashes - hashes_before
+        new_issuers: set[str] = set()
+        unknown_dt_count = 0
+        unknown_ip_count = 0
+        if new_hashes:
+            for _, data in self.store.iter_sidecars(processed_path):
+                content_hash = data.get("hash_content")
+                if content_hash not in new_hashes:
+                    continue
+                issuing_party = data.get("issuing_party")
+                if issuing_party and issuing_party != "$UNKNOWN$" and issuing_party not in known_issuers_before:
+                    new_issuers.add(issuing_party)
+                if data.get("document_type") == "$UNKNOWN$":
+                    unknown_dt_count += 1
+                if issuing_party == "$UNKNOWN$":
+                    unknown_ip_count += 1
+
+        if not quiet and (pdf_scanned > 0 or xlsx_scanned > 0):
+            console.success(
+                f"{pdf_scanned} PDFs scanned, {totals['pdf_new']} processed successfully",
+                indent=False,
+            )
+            if totals["xlsx_new"] > 0:
+                console.success(f"{totals['xlsx_new']} XLSX file(s) processed", indent=False)
+            if totals["failed"] > 0:
+                console.warning(
+                    f"{totals['new']} processed, {totals['failed']} failed",
+                    indent=False,
+                )
+
+        logger.debug(
+            f"=== SUMMARY: {totals['new']} success, {totals['failed']} failed, "
+            f"{elapsed:.1f}s total ==="
+        )
+
+        return {
+            "pdf_scanned": pdf_scanned,
+            "xlsx_scanned": xlsx_scanned,
+            "new": totals["new"],
+            "duplicates": totals["duplicates"],
+            "batch_duplicates": totals["batch_duplicates"],
+            "failed": totals["failed"],
+            "xlsx_new": totals["xlsx_new"],
+            "pdf_new": totals["pdf_new"],
+            "images_converted": totals["images_converted"],
+            "bundles_split": totals["bundles_split"],
+            "split_pages": totals["split_pages"],
+            "new_issuers": sorted(new_issuers),
+            "unknown_document_type": unknown_dt_count,
+            "unknown_issuing_party": unknown_ip_count,
+        }
+
+    def sync(
+        self,
+        processed_path: Path,
+        dry_run: bool = False,
+        all_unknown: bool = False,
+        pattern: str | None = None,
+        workers: int = 1,
+        all: bool = False,
+        quiet: bool = False,
+    ) -> dict:
+        """Sync processed documents by reclassifying in place."""
+        console = self.app.console
+        orphans_only = not all and not all_unknown and pattern is None
+        targets = _collect_sync_targets(
+            processed_path,
+            all_unknown=all_unknown,
+            pattern=pattern,
+            orphans_only=orphans_only,
+        )
+        if not targets:
+            if not quiet:
+                console.warning("No files to sync", indent=False)
+            return {"targets": 0}
+
+        fixed_count = 0
+        still_unknown_count = 0
+        failed_count = 0
+        new_count = 0
+        renamed_count = 0
+
+        def classify_one(item):
+            metadata_path, pdf_path, old_data = item
+            thread_service = DocumentService(self.app)
+            thread_doc_logger = DocumentLogger()
+            try:
+                upsert = thread_service.upsert_document(
+                    pdf_path,
+                    "resync",
+                    existing_metadata=old_data,
+                    processed_path=processed_path,
+                    doc_logger=thread_doc_logger,
+                    dry_run=dry_run,
+                )
+                if upsert.processed == 0:
+                    return metadata_path, old_data, upsert.metadata, None, pdf_path
+
+                output_path = upsert.outputs[0] if upsert.outputs else pdf_path
+                new_metadata = upsert.metadata
+                return metadata_path, old_data, new_metadata, None, output_path
+            except Exception as exc:
+                return metadata_path, old_data, None, str(exc), pdf_path
+
+        def process_result(metadata_path, old_data, new_metadata, error, output_path):
+            nonlocal fixed_count, still_unknown_count, failed_count, new_count, renamed_count
+            if error:
+                logger.error(f"Failed {metadata_path.name}: {error}")
+                failed_count += 1
+                return
+
+            if old_data is None:
+                new_count += 1
+            elif new_metadata is not None:
+                changes = []
+                if old_data.get("document_type", "") != new_metadata.document_type:
+                    changes.append("document_type")
+                if old_data.get("issuing_party", "") != new_metadata.issuing_party:
+                    changes.append("issuing_party")
+                if old_data.get("date_issued", "") != new_metadata.date_issued:
+                    changes.append("date_issued")
+                if changes:
+                    fixed_count += 1
+                else:
+                    still_unknown_count += 1
+            else:
+                still_unknown_count += 1
+
+            if output_path != metadata_path.with_suffix(".pdf"):
+                renamed_count += 1
+
+        def _truncated_name(path: Path) -> str:
+            name = path.stem
+            return name[:37] + "..." if len(name) > 40 else name
+
+        if workers == 1:
+            for index, item in enumerate(targets, 1):
+                logger.debug(f"Syncing [{index}/{len(targets)}] {_truncated_name(item[1])}")
+                process_result(*classify_one(item))
+        else:
+            with ThreadPoolExecutor(max_workers=workers) as executor:
+                futures = {executor.submit(classify_one, item): item for item in targets}
+                with console.progress("Syncing", total=len(futures)) as progress:
+                    task = progress.add_task("Syncing", total=len(futures))
+                    for future in as_completed(futures):
+                        item = futures[future]
+                        progress.update(task, description=f"[dim]{_truncated_name(item[1])}[/dim]")
+                        process_result(*future.result())
+                        progress.update(task, advance=1)
+
+        if not quiet:
+            parts = []
+            if new_count > 0:
+                parts.append(f"{new_count} new")
+            if fixed_count > 0:
+                parts.append(f"{fixed_count} changed")
+            if renamed_count > 0:
+                parts.append(f"{renamed_count} renamed")
+            if still_unknown_count > 0:
+                parts.append(f"{still_unknown_count} unchanged")
+            if failed_count > 0:
+                parts.append(f"{failed_count} failed")
+            summary = ", ".join(parts) if parts else "No files processed"
+            if failed_count > 0:
+                console.warning(summary, indent=False)
+            elif new_count > 0 or fixed_count > 0:
+                console.success(summary, indent=False)
+            else:
+                console.info(f"No changes ({still_unknown_count} files checked)", indent=False)
+            if dry_run:
+                console.detail("(dry run - no files were modified)", indent=False)
+
+        logger.debug(
+            f"New: {new_count}, Changed: {fixed_count}, Renamed: {renamed_count}, "
+            f"Unchanged: {still_unknown_count}, Failed: {failed_count}"
+        )
+        return {
+            "targets": len(targets),
+            "new": new_count,
+            "changed": fixed_count,
+            "renamed": renamed_count,
+            "unchanged": still_unknown_count,
+            "failed": failed_count,
+        }
+
+    def backfill_processed(self, processed_path: Path, dry_run: bool = False) -> dict:
+        """Fill derived metadata fields without using the LLM."""
+        updated = 0
+        skipped = 0
+        errors = 0
+        for metadata_path, doc_path, data in self.store.iter_documents(
+            processed_path,
+            validate=False,
+            require_companion=False,
+            show_progress=True,
+            progress_desc="Checking metadata",
+        ):
+            try:
+                result = self.upsert_document(
+                    doc_path,
+                    "backfill",
+                    existing_metadata=data,
+                    processed_path=processed_path,
+                    dry_run=dry_run,
+                )
+                if result.processed > 0:
+                    updated += 1
+                else:
+                    skipped += 1
+            except Exception as exc:
+                logger.error(f"Failed to process {metadata_path.name}: {exc}")
+                errors += 1
+        return {"updated": updated, "skipped": skipped, "errors": errors}
+
+
+def upsert_document(source_path: Path, mode: str, existing_metadata=None) -> UpsertResult:
+    """Compatibility entry point for the document lifecycle service."""
+    return DocumentService().upsert_document(source_path, mode, existing_metadata=existing_metadata)
+
+
 def task_extract_new(processed_path: Path, raw_paths: list[Path], quiet: bool = False) -> dict | None:
     """Extract and classify new PDF files."""
     lock_path = Path(__file__).parents[1].parent / ".cache" / ".extract.lock"
@@ -390,7 +1028,17 @@ def task_extract_new(processed_path: Path, raw_paths: list[Path], quiet: bool = 
         lock_file.close()
         return None
     try:
-        return _task_extract_new_locked(processed_path, raw_paths, quiet=quiet)
+        with task_log_context(processed_path, "extract_new", show_header=not quiet):
+            logs_dir = processed_path / "logs"
+            failure_log_path = logs_dir / "classification_failures.log"
+            failure_logger = setup_failure_logger(failure_log_path)
+            logger.debug(f"Logging failures to: {failure_log_path}")
+            return DocumentService().extract_new(
+                processed_path,
+                raw_paths,
+                quiet=quiet,
+                failure_logger=failure_logger,
+            )
     finally:
         fcntl.flock(lock_file, fcntl.LOCK_UN)
         lock_file.close()
@@ -747,158 +1395,13 @@ def task_sync(processed_path: Path, dry_run: bool = False,
               all_unknown: bool = False, pattern: str = None,
               workers: int = 1, all: bool = False, quiet: bool = False) -> dict:
     """Sync metadata by running classification. Default: orphans only."""
-    console = get_console()
-
-    orphans_only = not all and not all_unknown and pattern is None
-
     with task_log_context(processed_path, "sync", show_header=not quiet):
-        targets = _collect_sync_targets(processed_path, all_unknown=all_unknown,
-                                        pattern=pattern, orphans_only=orphans_only)
-        if not targets:
-            if not quiet:
-                console.warning("No files to sync", indent=False)
-            return {"targets": 0}
-
-        logger.debug(f"Found {len(targets)} files to sync (workers={workers})")
-
-        def classify_one(item):
-            metadata_path, pdf_path, old_data = item
-            thread_doc_logger = DocumentLogger()
-            try:
-                if old_data is None:
-                    content_hash = hash_file_content(pdf_path)
-                    file_hash = hash_file_fast(pdf_path)
-                    create_date = datetime.now().strftime("%Y-%m-%d")
-                else:
-                    content_hash = old_data.get("hash_content")
-                    if not content_hash:
-                        return (metadata_path, old_data, None, "No hash_content in metadata")
-                    file_hash = old_data.get("hash_file")
-                    create_date = old_data.get("date_created")
-
-                new_metadata = classify_pdf_document(pdf_path, content_hash, doc_logger=thread_doc_logger)
-                new_metadata.hash_file = file_hash
-                new_metadata.hash_text = hash_file_text(pdf_path)
-                new_metadata.date_created = create_date
-                new_metadata.date_updated = datetime.now().strftime("%Y-%m-%d")
-                return (metadata_path, old_data, new_metadata, None)
-            except Exception as e:
-                return (metadata_path, old_data, None, str(e))
-
-        logger.debug("Running sync...")
-
-        # Counters for summary statistics
-        fixed_count = 0
-        still_unknown_count = 0
-        failed_count = 0
-        new_count = 0
-        renamed_count = 0
-
-        def process_result(metadata_path, old_data, new_metadata, error):
-            nonlocal fixed_count, still_unknown_count, failed_count, new_count, renamed_count
-
-            if error:
-                logger.error(f"Failed {metadata_path.name}: {error}")
-                failed_count += 1
-                return
-
-            new_doc_type = new_metadata.document_type
-            new_issuer = new_metadata.issuing_party
-            new_date = new_metadata.date_issued
-
-            if old_data is None:
-                logger.debug(f"New extraction: {metadata_path.name} -> {new_doc_type}, {new_issuer}, {new_date}")
-                new_count += 1
-            else:
-                changes = []
-                old_doc_type = old_data.get("document_type", "")
-                old_issuer = old_data.get("issuing_party", "")
-                old_date = old_data.get("date_issued", "")
-
-                if old_doc_type != new_doc_type:
-                    changes.append(f"document_type: {old_doc_type} -> {new_doc_type}")
-                if old_issuer != new_issuer:
-                    changes.append(f"issuing_party: {old_issuer} -> {new_issuer}")
-                if old_date != new_date:
-                    changes.append(f"date_issued: {old_date} -> {new_date}")
-
-                if changes:
-                    logger.debug(f"Changed {metadata_path.name}: {', '.join(changes)}")
-                    fixed_count += 1
-                else:
-                    logger.debug(f"No changes: {metadata_path.name}")
-                    still_unknown_count += 1
-
-            if not dry_run:
-                save_metadata_json(metadata_path.with_suffix(".pdf"), new_metadata)
-
-                from papertrail.tasks.organize import file_name_from_metadata
-                new_filename = file_name_from_metadata(new_metadata, new_metadata.hash_file)
-                new_pdf_path = metadata_path.parent / new_filename
-                old_pdf_path = metadata_path.with_suffix(".pdf")
-                if old_pdf_path != new_pdf_path:
-                    new_json_path = new_pdf_path.with_suffix(".json")
-                    shutil.move(str(old_pdf_path), str(new_pdf_path))
-                    shutil.move(str(metadata_path), str(new_json_path))
-                    logger.debug(f"Renamed: {old_pdf_path.name} -> {new_pdf_path.name}")
-                    renamed_count += 1
-
-        def _truncated_name(path: Path) -> str:
-            name = path.stem
-            return name[:37] + "..." if len(name) > 40 else name
-
-        if workers == 1:
-            for i, item in enumerate(targets, 1):
-                logger.debug(f"Syncing [{i}/{len(targets)}] {_truncated_name(item[1])}")
-                metadata_path, old_data, new_metadata, error = classify_one(item)
-                process_result(metadata_path, old_data, new_metadata, error)
-        else:
-            with ThreadPoolExecutor(max_workers=workers) as executor:
-                futures = {executor.submit(classify_one, item): item for item in targets}
-                with console.progress("Syncing", total=len(futures)) as progress:
-                    task = progress.add_task("Syncing", total=len(futures))
-                    for future in as_completed(futures):
-                        item = futures[future]
-                        progress.update(task, description=f"[dim]{_truncated_name(item[1])}[/dim]")
-                        metadata_path, old_data, new_metadata, error = future.result()
-                        process_result(metadata_path, old_data, new_metadata, error)
-                        progress.update(task, advance=1)
-
-        # Summary output
-        if not quiet:
-            parts = []
-            if new_count > 0:
-                parts.append(f"{new_count} new")
-            if fixed_count > 0:
-                parts.append(f"{fixed_count} changed")
-            if renamed_count > 0:
-                parts.append(f"{renamed_count} renamed")
-            if still_unknown_count > 0:
-                parts.append(f"{still_unknown_count} unchanged")
-            if failed_count > 0:
-                parts.append(f"{failed_count} failed")
-
-            summary = ", ".join(parts) if parts else "No files processed"
-
-            if failed_count > 0:
-                console.warning(summary, indent=False)
-            elif new_count > 0 or fixed_count > 0:
-                console.success(summary, indent=False)
-            else:
-                console.info(f"No changes ({still_unknown_count} files checked)", indent=False)
-
-            if dry_run:
-                console.detail("(dry run - no files were modified)", indent=False)
-
-        logger.debug(f"New: {new_count}, Changed: {fixed_count}, Renamed: {renamed_count}, Unchanged: {still_unknown_count}, Failed: {failed_count}")
-
-        return {
-            "targets": len(targets),
-            "new": new_count,
-            "changed": fixed_count,
-            "renamed": renamed_count,
-            "unchanged": still_unknown_count,
-            "failed": failed_count,
-        }
-
-
+        return DocumentService().sync(
+            processed_path,
+            dry_run=dry_run,
+            all_unknown=all_unknown,
+            pattern=pattern,
+            workers=workers,
+            all=all,
+            quiet=quiet,
+        )

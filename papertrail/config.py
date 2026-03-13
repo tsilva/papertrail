@@ -95,6 +95,55 @@ Profile = Config
 # --- Profile loading ---
 
 
+class ProfileLoader:
+    """Profile discovery and loading with migration support."""
+
+    @property
+    def profiles_dir(self) -> Path:
+        return get_profiles_dir()
+
+    def list_available_profiles(self) -> list[str]:
+        profiles_dir = self.profiles_dir
+
+        if not list(profiles_dir.iterdir()):
+            _migrate_from_repo()
+
+        if not profiles_dir.exists():
+            return []
+
+        return sorted(
+            [d.name for d in profiles_dir.iterdir() if d.is_dir() and (d / "profile.yaml").exists()]
+        )
+
+    def load_profile(self, name: str) -> Config:
+        if yaml is None:
+            raise ConfigError("PyYAML is not installed.")
+
+        profile_path = self.profiles_dir / name / "profile.yaml"
+        if not profile_path.exists():
+            available = self.list_available_profiles()
+            raise ProfileNotFoundError(
+                f"Profile '{name}' not found at {profile_path}. "
+                f"Available: {', '.join(available) or 'none'}"
+            )
+
+        try:
+            with open(profile_path, "r", encoding="utf-8") as f:
+                data = yaml.safe_load(f)
+        except yaml.YAMLError as e:
+            raise ProfileParseError(f"Failed to parse profile '{name}': {e}")
+
+        if not isinstance(data, dict):
+            raise ProfileParseError(f"Profile '{name}' must be a YAML mapping")
+        if "profile" not in data or not isinstance(data.get("profile"), dict):
+            raise ConfigError("Missing required field: profile")
+        if "name" not in data["profile"]:
+            raise ConfigError("Missing required field: profile.name")
+
+        _normalize_data(data, profile_path)
+        return Config(data)
+
+
 def _resolve_path(path_str, profile_path):
     """Resolve a path string relative to the profile file location."""
     if not path_str:
@@ -337,49 +386,12 @@ def _migrate_from_repo():
 
 def list_available_profiles():
     """List all available profile names."""
-    profiles_dir = get_profiles_dir()
-
-    # Trigger migration if profiles directory is empty and repo has profiles
-    if not list(profiles_dir.iterdir()):
-        _migrate_from_repo()
-
-    if not profiles_dir.exists():
-        return []
-    return sorted(
-        [d.name for d in profiles_dir.iterdir() if d.is_dir() and (d / "profile.yaml").exists()]
-    )
+    return ProfileLoader().list_available_profiles()
 
 
 def load_profile(name):
     """Load a profile by name from the profiles directory."""
-    if yaml is None:
-        raise ConfigError("PyYAML is not installed.")
-
-    profiles_dir = get_profiles_dir()
-    profile_path = profiles_dir / name / "profile.yaml"
-
-    if not profile_path.exists():
-        available = list_available_profiles()
-        raise ProfileNotFoundError(
-            f"Profile '{name}' not found at {profile_path}. "
-            f"Available: {', '.join(available) or 'none'}"
-        )
-
-    try:
-        with open(profile_path, "r", encoding="utf-8") as f:
-            data = yaml.safe_load(f)
-    except yaml.YAMLError as e:
-        raise ProfileParseError(f"Failed to parse profile '{name}': {e}")
-
-    if not isinstance(data, dict):
-        raise ProfileParseError(f"Profile '{name}' must be a YAML mapping")
-    if "profile" not in data or not isinstance(data.get("profile"), dict):
-        raise ConfigError("Missing required field: profile")
-    if "name" not in data["profile"]:
-        raise ConfigError("Missing required field: profile.name")
-
-    _normalize_data(data, profile_path)
-    return Config(data)
+    return ProfileLoader().load_profile(name)
 
 
 def get_passwords_from_profile(profile):

@@ -9,6 +9,7 @@ from typing import Optional
 import openpyxl
 
 from papertrail.config import get_current_profile, get_openai_client
+from papertrail.rules import RuleEngine
 from papertrail.utils import strip_diacritics
 from papertrail.console import get_console
 from papertrail.llm import _extract_json_from_response
@@ -425,8 +426,7 @@ def _normalize_for_match(s: str) -> str:
 
 def _match_type_pattern(doc_type: str, pattern: str) -> bool:
     """Check if doc_type matches a pipe-separated pattern (case-insensitive)."""
-    doc_lower = doc_type.lower()
-    return any(alt.strip().lower() == doc_lower for alt in pattern.split("|"))
+    return RuleEngine().match_doc_type(doc_type, pattern)
 
 
 def _parse_cardinality(value) -> tuple[int, int | None]:
@@ -448,20 +448,7 @@ def _classify_transaction(
     rules: list,
 ) -> tuple[str, object | None]:
     """Classify transaction by first-match-wins rules. Returns (category_name, rule)."""
-    normalized = strip_diacritics(txn.description).upper()
-    for rule in rules:
-        # Check direction filter
-        if rule.direction is not None:
-            if rule.direction == "credit" and txn.amount <= 0:
-                continue
-            if rule.direction == "debit" and txn.amount > 0:
-                continue
-        # Check description keywords
-        if rule.match_description:
-            if not any(kw.upper() in normalized for kw in rule.match_description):
-                continue
-        return (rule.name, rule)
-    return ("unclassified", None)
+    return RuleEngine().classify_transaction(txn, rules)
 
 
 def _validate_required_documents(
@@ -469,42 +456,10 @@ def _validate_required_documents(
     rules: list,
 ) -> dict[int, list[str]]:
     """Validate matched documents against rule requirements. Returns {row: [errors]}."""
+    engine = RuleEngine()
     errors: dict[int, list[str]] = {}
     for m in matches:
-        category, rule = _classify_transaction(m.transaction, rules)
-        if rule is None:
-            errors[m.transaction.row_number] = [f"unclassified transaction"]
-            continue
-
-        row_errors: list[str] = []
-        for pattern, cardinality in rule.required_types.items():
-            min_count, max_count = _parse_cardinality(cardinality)
-            count = sum(
-                1 for c in m.pdf_candidates
-                if c.document_type and _match_type_pattern(c.document_type, pattern)
-            )
-            display_pattern = pattern.replace("|", "/")
-            if count < min_count:
-                row_errors.append(f"missing {display_pattern} (expected {min_count}, found {count})")
-            elif max_count is not None and count > max_count:
-                row_errors.append(f"too many {display_pattern} (expected max {max_count}, found {count})")
-
-        # Check for unexpected document types (not matching any required or shared pattern)
-        all_patterns = list(rule.required_types.keys()) + list(rule.shared_types.keys())
-        for c in m.pdf_candidates:
-            if c.document_type is None:
-                row_errors.append(f"unexpected document with unknown type ({c.pdf_filename})")
-            elif not any(_match_type_pattern(c.document_type, p) for p in all_patterns):
-                row_errors.append(f"unexpected {c.document_type} ({c.pdf_filename})")
-
-        # Page count validation per document type
-        if rule.expected_page_count:
-            for c in m.pdf_candidates:
-                if c.document_type and c.page_count is not None:
-                    for type_pattern, expected in rule.expected_page_count.items():
-                        if _match_type_pattern(c.document_type, type_pattern) and c.page_count != expected:
-                            row_errors.append(f"{c.document_type} has {c.page_count} pages (expected {expected})")
-
+        row_errors = engine.validate_match(m, rules)
         if row_errors:
             errors[m.transaction.row_number] = row_errors
     return errors

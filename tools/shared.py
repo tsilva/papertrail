@@ -6,15 +6,15 @@ import warnings
 from pathlib import Path
 
 import fitz  # PyMuPDF
-import openpyxl
 
-from papertrail.config import load_profile
+from papertrail.config import ProfileLoader
+from papertrail.metadata import find_companion_file
 
 
 def get_processed_dir() -> str:
     """Get the processed directory from the default profile."""
     try:
-        profile = load_profile("default")
+        profile = ProfileLoader().load_profile("default")
         if profile.paths.processed:
             p = Path(profile.paths.processed)
             if p.is_dir():
@@ -26,16 +26,7 @@ def get_processed_dir() -> str:
 
 def find_companion(json_path: Path, metadata: dict) -> Path | None:
     """Find companion document file for a JSON sidecar."""
-    ext = metadata.get("source_extension")
-    if ext:
-        c = json_path.with_suffix(ext)
-        if c.exists():
-            return c
-    for ext in (".pdf", ".xlsx"):
-        c = json_path.with_suffix(ext)
-        if c.exists():
-            return c
-    return None
+    return find_companion_file(json_path, metadata)
 
 
 def render_pdf_page_html(pdf_path, page_num=0):
@@ -54,6 +45,8 @@ def render_pdf_page_html(pdf_path, page_num=0):
 
 def render_xlsx_as_html(xlsx_path, max_rows=100):
     """Render XLSX worksheet as HTML table."""
+    import openpyxl
+
     warnings.filterwarnings("ignore", message="Workbook contains no default style")
     try:
         wb = openpyxl.load_workbook(str(xlsx_path), data_only=True)

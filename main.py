@@ -8,37 +8,10 @@ from typing import Optional
 
 import typer
 
-from papertrail.config import (
-    AppContext,
-    ConfigError,
-    ProfileNotFoundError,
-    get_cache_dir,
-    get_openai_client,
-    get_profiles_dir,
-    list_available_profiles,
-    load_profile,
-    set_current_profile,
-    set_ctx,
-)
-from papertrail.models import reset_enum_cache, reset_session_cache
-from papertrail.nif_lookup import NIFLookupCache
-from papertrail.logging_utils import setup_logging, get_logger
-from papertrail.console import get_console
-
-from papertrail.tasks import (
-    task_extract_new,
-    task_rename_files,
-    task_sync,
-    export_metadata_to_excel,
-    copy_matching_files,
-    task_export_all_dates,
-    task_gmail_download,
-    pipeline,
-    task_reconcile,
-    task_check,
-    task_archive,
-    task_log_context,
-)
+from papertrail.app import create_app
+from papertrail.config import ConfigError, ProfileNotFoundError
+from papertrail.logging_utils import get_logger
+import papertrail.tasks as tasks
 
 logger = get_logger("cli")
 
@@ -102,65 +75,7 @@ def _resolve_dir(path_str: Optional[str], name: str, create: bool = False) -> Pa
 
 def initialize_config(profile_name: Optional[str] = None) -> None:
     """Initialize configuration from profile."""
-    profiles_dir = get_profiles_dir()
-
-    if not (profiles_dir.exists() and list_available_profiles()):
-        _fail(
-            "No profiles found in ~/.config/papertrail/profiles/. "
-            "Profiles have been migrated from the repo to ~/.config/papertrail/profiles/. "
-            "If this is a fresh install, copy profiles/profile.yaml.example to ~/.config/papertrail/profiles/default/profile.yaml and configure it."
-        )
-
-    if profile_name is not None:
-        profile = load_profile(profile_name)
-        logger.info(f"Using profile: {profile.profile.name}")
-    else:
-        available = list_available_profiles()
-        if "default" in available:
-            profile = load_profile("default")
-            logger.info(f"Using profile: {profile.profile.name} (auto-detected)")
-        else:
-            _fail(
-                f"No 'default' profile found. Available profiles: {', '.join(available)}. "
-                "Use --profile to specify one, or create profiles/default/profile.yaml."
-            )
-
-    if profile.profile.description:
-        logger.info(f"  {profile.profile.description}")
-
-    set_current_profile(profile)
-    reset_enum_cache()
-    reset_session_cache()
-
-    from papertrail.config import check_api_accessibility
-
-    base_url = profile.openrouter.base_url
-    api_accessible = check_api_accessibility(base_url)
-    if not api_accessible:
-        console = get_console()
-        console.warning(f"API base URL is not accessible: {base_url}", indent=False)
-        console.warning(
-            "LLM-dependent tasks will fail. Offline tasks (rename, check, export) will work.",
-            indent=False,
-        )
-        from rich.prompt import Confirm
-
-        if not Confirm.ask("Proceed without API access?", default=True):
-            raise SystemExit(0)
-
-    cache_dir = get_cache_dir()
-    nif_cache = None
-    if profile.nif_api.enabled:
-        nif_cache = NIFLookupCache(cache_dir / "nif_cache.yaml")
-        logger.info(f"NIF lookup enabled with {len(nif_cache)} cached entries")
-
-    set_ctx(
-        AppContext(
-            model_id=profile.openrouter.model_id,
-            openai_client=get_openai_client() if api_accessible else None,
-            nif_cache=nif_cache,
-        )
-    )
+    create_app(profile_name=profile_name, verbose=False)
 
 
 # ── App callback (global options + default command) ──────────────
@@ -173,12 +88,11 @@ def main(
     verbose: bool = typer.Option(False, "-v", "--verbose", help="Enable verbose output."),
 ):
     """AI-powered document classification and organization."""
-    setup_logging(verbose=verbose)
     # Skip heavy initialization when showing subcommand help
     if "--help" in sys.argv or "-h" in sys.argv:
         return
     try:
-        initialize_config(profile)
+        create_app(profile_name=profile, verbose=verbose)
     except (ProfileNotFoundError, ConfigError) as e:
         _fail(str(e))
     if ctx.invoked_subcommand is None:
@@ -198,7 +112,7 @@ def pipeline_cmd(
         _fail("--months must be >= 1.")
     if export_date and not re.match(r"^\d{4}-\d{2}$", export_date):
         _fail("--export_date must be in YYYY-MM format.")
-    pipeline(months=months, export_date_arg=export_date)
+    tasks.pipeline(months=months, export_date_arg=export_date)
 
 
 @app.command()
@@ -219,7 +133,7 @@ def extract(
     raw_paths = [_resolve_dir(p, "raw_path") for p in raw_path.split(";") if p]
     if not raw_paths:
         _fail("--raw_path must contain at least one path.")
-    task_extract_new(pp, raw_paths)
+    tasks.task_extract_new(pp, raw_paths)
 
 
 @app.command()
@@ -232,7 +146,7 @@ def sync(
     all_pdfs: bool = typer.Option(False, "--all", help="Process all PDFs, not just orphans."),
 ):
     """Sync metadata."""
-    task_sync(
+    tasks.task_sync(
         _resolve_processed(processed_path),
         dry_run=dry_run,
         all_unknown=all_unknown,
@@ -251,7 +165,7 @@ def reconcile(
     """Reconcile bank transactions against documents."""
     export = _resolve_dir(export_path or _profile_path("export"), "export_path")
     excel = Path(excel_path) if excel_path else None
-    task_reconcile(export, excel_path=excel, dry_run=dry_run)
+    tasks.task_reconcile(export, excel_path=excel, dry_run=dry_run)
 
 
 @app.command()
@@ -262,7 +176,7 @@ def gmail(
     if months < 1:
         _fail("--months must be >= 1.")
     try:
-        task_gmail_download(months=months)
+        tasks.task_gmail_download(months=months)
     except RuntimeError:
         sys.exit(1)
 
@@ -272,7 +186,7 @@ def rename(
     processed_path: Optional[str] = typer.Argument(None, help="Path to processed folder."),
 ):
     """Rename files based on metadata."""
-    task_rename_files(_resolve_processed(processed_path))
+    tasks.task_rename_files(_resolve_processed(processed_path))
 
 
 @app.command()
@@ -284,7 +198,7 @@ def check(
     dry_run: bool = typer.Option(False, help="Report only, don't fix."),
 ):
     """Verify integrity, fill missing fields, audit report."""
-    task_check(_resolve_processed(processed_path), verify_hashes=verify_hashes, dry_run=dry_run)
+    tasks.task_check(_resolve_processed(processed_path), verify_hashes=verify_hashes, dry_run=dry_run)
 
 
 @app.command()
@@ -294,7 +208,7 @@ def archive(
     dry_run: bool = typer.Option(False, help="Preview without moving."),
 ):
     """Archive documents by hash digest."""
-    task_archive(_resolve_processed(processed_path), digest, dry_run=dry_run)
+    tasks.task_archive(_resolve_processed(processed_path), digest, dry_run=dry_run)
 
 
 # ── Export subcommands ───────────────────────────────────────────
@@ -309,8 +223,8 @@ def export_excel(
     if not output.endswith(".xlsx"):
         _fail("--output must end with '.xlsx'.")
     pp = _resolve_processed(processed_path)
-    with task_log_context(pp, "export_excel"):
-        export_metadata_to_excel(pp, output)
+    with tasks.task_log_context(pp, "export_excel"):
+        tasks.export_metadata_to_excel(pp, output)
 
 
 @export_app.command("dates")
@@ -331,7 +245,7 @@ def export_dates(
     profile_context = None
     if profile and profile.profile.tax_number:
         profile_context = {"tax_number": profile.profile.tax_number}
-    task_export_all_dates(
+    tasks.task_export_all_dates(
         pp,
         export_dir,
         run_merge,
@@ -349,8 +263,8 @@ def export_copy(
     """Copy files matching pattern."""
     pp = _resolve_processed(processed_path)
     dest_path = _resolve_dir(dest, "dest", create=True)
-    with task_log_context(pp, "copy_matching"):
-        copy_matching_files(pp, pattern, dest_path)
+    with tasks.task_log_context(pp, "copy_matching"):
+        tasks.copy_matching_files(pp, pattern, dest_path)
 
 
 if __name__ == "__main__":

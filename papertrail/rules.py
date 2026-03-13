@@ -1,0 +1,195 @@
+"""Shared rule matching for export and reconciliation flows."""
+
+from __future__ import annotations
+
+from typing import Optional
+
+from papertrail.utils import strip_diacritics
+
+
+class RuleEngine:
+    """Unified rule evaluation across export and reconciliation."""
+
+    def __init__(self, profile=None, profile_context: Optional[dict] = None):
+        self.profile = profile
+        self.profile_context = profile_context or {}
+
+    def get_nested_value(self, metadata: dict, key: str):
+        """Get a nested value using dot notation."""
+        current = metadata
+        for part in key.split("."):
+            if not isinstance(current, dict) or part not in current:
+                return None
+            current = current[part]
+        return current
+
+    def resolve_profile_value(self, pattern: str):
+        """Resolve ${profile.*} values using profile_context."""
+        if not isinstance(pattern, str):
+            return pattern
+        if not pattern.startswith("${profile.") or not pattern.endswith("}"):
+            return pattern
+        key = pattern[len("${profile."):-1]
+        return self.profile_context.get(key, pattern)
+
+    def match_value(self, actual, pattern: str) -> bool:
+        """Match a value against a wildcard or numeric pattern."""
+        if actual is None:
+            return False
+
+        pattern = str(self.resolve_profile_value(pattern))
+        for operator in (">=", "<=", "!=", ">", "<"):
+            if pattern.startswith(operator):
+                try:
+                    actual_float = float(actual)
+                    expected_float = float(pattern[len(operator):])
+                except (TypeError, ValueError):
+                    return False
+                return {
+                    ">": actual_float > expected_float,
+                    "<": actual_float < expected_float,
+                    ">=": actual_float >= expected_float,
+                    "<=": actual_float <= expected_float,
+                    "!=": actual_float != expected_float,
+                }[operator]
+
+        actual_str = str(actual).lower()
+        pattern_str = pattern.lower()
+        if pattern_str.endswith("*"):
+            return actual_str.startswith(pattern_str[:-1])
+        if isinstance(actual, (int, float)):
+            try:
+                return float(actual) == float(pattern)
+            except (TypeError, ValueError):
+                return False
+        return actual_str == pattern_str
+
+    def match_doc_type(self, doc_type: str, pattern: str) -> bool:
+        """Check if a document type matches a pipe-separated pattern."""
+        if not doc_type:
+            return False
+        doc_lower = doc_type.lower()
+        for alternative in pattern.split("|"):
+            alt = alternative.strip().lower()
+            if alt.endswith("*"):
+                if doc_lower.startswith(alt[:-1]):
+                    return True
+            elif doc_lower == alt:
+                return True
+        return False
+
+    def evaluate_export_prefix(self, metadata: dict, file_mappings=None) -> str:
+        """Evaluate file mapping rules. First match wins."""
+        if file_mappings is None:
+            if self.profile is None:
+                raise RuntimeError("RuleEngine requires a profile or file_mappings")
+            config = self.profile.export.file_mappings
+        else:
+            config = file_mappings
+        for rule in config.rules:
+            if all(
+                self.match_value(self.get_nested_value(metadata, key), value)
+                for key, value in rule.match.items()
+            ):
+                return rule.prefix
+        return config.default_prefix
+
+    def classify_transaction(self, txn, rules=None):
+        """Classify a transaction using first-match-wins rules."""
+        if rules is None:
+            if self.profile is None:
+                raise RuntimeError("RuleEngine requires a profile or explicit rules")
+            rules = self.profile.reconciliation.rules
+        normalized = strip_diacritics(txn.description).upper()
+        for rule in rules:
+            if rule.direction is not None:
+                if rule.direction == "credit" and txn.amount <= 0:
+                    continue
+                if rule.direction == "debit" and txn.amount > 0:
+                    continue
+            if rule.match_description and not any(keyword.upper() in normalized for keyword in rule.match_description):
+                continue
+            return rule.name, rule
+        return "unclassified", None
+
+    def parse_cardinality(self, value) -> tuple[int, int | None]:
+        """Parse cardinality config into (min, max)."""
+        if isinstance(value, int):
+            return value, value
+        if isinstance(value, list) and len(value) == 2:
+            minimum = value[0] if value[0] is not None else 0
+            maximum = value[1]
+            return int(minimum), int(maximum) if maximum is not None else None
+        return 0, None
+
+    def validate_match(self, match, rules=None) -> list[str]:
+        """Validate a single reconciliation match."""
+        if rules is None:
+            if self.profile is None:
+                raise RuntimeError("RuleEngine requires a profile or explicit rules")
+            rules = self.profile.reconciliation.rules
+        category, rule = self.classify_transaction(match.transaction, rules)
+        if rule is None:
+            return ["unclassified transaction"]
+
+        errors: list[str] = []
+        for pattern, cardinality in rule.required_types.items():
+            min_count, max_count = self.parse_cardinality(cardinality)
+            count = sum(
+                1
+                for candidate in match.pdf_candidates
+                if candidate.document_type and self.match_doc_type(candidate.document_type, pattern)
+            )
+            display_pattern = pattern.replace("|", "/")
+            if count < min_count:
+                errors.append(f"missing {display_pattern} (expected {min_count}, found {count})")
+            elif max_count is not None and count > max_count:
+                errors.append(
+                    f"too many {display_pattern} (expected max {max_count}, found {count})"
+                )
+
+        all_patterns = list(rule.required_types.keys()) + list(rule.shared_types.keys())
+        for candidate in match.pdf_candidates:
+            if candidate.document_type is None:
+                errors.append(f"unexpected document with unknown type ({candidate.pdf_filename})")
+            elif not any(self.match_doc_type(candidate.document_type, pattern) for pattern in all_patterns):
+                errors.append(f"unexpected {candidate.document_type} ({candidate.pdf_filename})")
+
+        if rule.expected_page_count:
+            for candidate in match.pdf_candidates:
+                if candidate.document_type and candidate.page_count is not None:
+                    for pattern, expected in rule.expected_page_count.items():
+                        if self.match_doc_type(candidate.document_type, pattern) and candidate.page_count != expected:
+                            errors.append(
+                                f"{candidate.document_type} has {candidate.page_count} pages (expected {expected})"
+                            )
+
+        return errors
+
+    def select_merge_pairs(self, match, merge_rules=None) -> list[tuple[object, object]]:
+        """Select target and attachment candidates for merge rules."""
+        if merge_rules is None:
+            if self.profile is None:
+                raise RuntimeError("RuleEngine requires a profile or explicit merge_rules")
+            merge_rules = self.profile.export.merge_rules
+        pairs: list[tuple[object, object]] = []
+        for rule in merge_rules:
+            targets = [
+                candidate
+                for candidate in match.pdf_candidates
+                if candidate.document_type
+                and self.match_doc_type(candidate.document_type, rule.target_type)
+                and not candidate.is_sub_document
+            ]
+            attachments = [
+                candidate
+                for candidate in match.pdf_candidates
+                if candidate.document_type
+                and self.match_doc_type(candidate.document_type, rule.attach_type)
+                and not candidate.is_sub_document
+            ]
+            for target in targets:
+                for attachment in attachments:
+                    if target != attachment:
+                        pairs.append((target, attachment))
+        return pairs

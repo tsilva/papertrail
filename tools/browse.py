@@ -485,8 +485,7 @@ def build_ui():
 
     return app
 
-
-demo = build_ui()
-
 if __name__ == "__main__":
-    demo.launch(css=FULLSCREEN_CSS + _CSS, js=_JS + "\n" + FULLSCREEN_JS)
+    from tools.app import build_ui as build_tools_ui
+
+    build_tools_ui(initial_tab="browse").launch()

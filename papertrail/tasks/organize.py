@@ -1,14 +1,13 @@
 """Organize phase: renaming, export, archive, gmail download, merge attachments."""
 
 import hashlib
-import re
 import shutil
-import unicodedata
 from pathlib import Path
 from typing import Optional
 
 import pandas as pd
 
+from papertrail.app import get_app
 from papertrail.config import get_current_profile
 from papertrail.console import get_console
 from papertrail.hashing import hash_file_fast, hash_file_text
@@ -18,6 +17,12 @@ from papertrail.metadata import (
     load_json_data, save_json_data, save_metadata_json,
 )
 from papertrail.models import DocumentMetadata, clean_enum_string
+from papertrail.naming import (
+    file_name_from_metadata as build_file_name_from_metadata,
+    sanitize_filename_component as build_sanitize_filename_component,
+)
+from papertrail.rules import RuleEngine
+from papertrail.store import DocumentStore
 from papertrail.tasks import task_log_context
 
 logger = get_logger('cli')
@@ -27,33 +32,12 @@ logger = get_logger('cli')
 
 def sanitize_filename_component(s: str) -> str:
     """Sanitize a string for use in a filename."""
-    s = unicodedata.normalize('NFKD', s).encode('ascii', 'ignore').decode('ascii')
-    s = re.sub(r'[\\/*?:"<>|()\[\],]', '', s).strip()
-    return re.sub(r'\s+', ' ', s)
+    return build_sanitize_filename_component(s)
 
 
 def file_name_from_metadata(metadata: DocumentMetadata, file_hash: str) -> str:
     """Generate a filename from metadata."""
-    parts = [
-        sanitize_filename_component(metadata.date_issued),
-        sanitize_filename_component(metadata.document_type),
-        sanitize_filename_component(metadata.issuing_party)
-    ]
-
-    if metadata.document_title:
-        title = sanitize_filename_component(metadata.document_title)
-        if len(title) > 80:
-            title = title[:80].rsplit(" ", 1)[0]
-        parts.append(title)
-
-    if metadata.total_amount is not None:
-        amount = f"{metadata.total_amount:.0f}" if metadata.total_amount.is_integer() else f"{metadata.total_amount:.2f}"
-        currency = metadata.total_amount_currency or ""
-        parts.append(sanitize_filename_component(f"{amount} {currency}".strip()))
-
-    ext = getattr(metadata, 'source_extension', None) or '.pdf'
-    parts.append(f"{file_hash}{ext}")
-    return " - ".join(parts).lower()
+    return build_file_name_from_metadata(metadata, file_hash)
 
 
 # --- Rename ---
@@ -108,110 +92,44 @@ def rename_pdf_files(pdf_paths, file_hash_map, known_content_hashes, known_file_
 
 def task_rename_files(processed_path: Path, quiet: bool = False) -> dict:
     """Rename existing PDF files based on metadata."""
-    from papertrail.metadata import load_json_files_parallel
-
     console = get_console()
+    store = DocumentStore(get_app())
 
     with task_log_context(processed_path, "rename_files", show_header=not quiet):
         logger.debug("Renaming existing PDF files and metadata based on metadata...")
-
-        valid_entries = []
-        orphan_count = 0
-
-        for metadata_path, metadata in load_json_files_parallel(processed_path, validate=True, show_progress=not quiet, progress_desc="Validating metadata"):
-            doc_path = find_companion_file(metadata_path, metadata.model_dump())
-            if doc_path is None:
-                orphan_count += 1
-                logger.warning(f"Skipping {metadata_path.name}: companion file not found")
-                continue
-
-            valid_entries.append((doc_path, metadata))
-
-        logger.debug(f"Found {len(valid_entries)} files to validate")
-
-        renamed_count = 0
-        for old_pdf_path, metadata in valid_entries:
-            new_filename = file_name_from_metadata(metadata, metadata.hash_file)
-            new_pdf_path = processed_path / new_filename
-            new_metadata_path = new_pdf_path.with_suffix(".json")
-
-            if old_pdf_path == new_pdf_path:
-                continue
-
-            try:
-                old_metadata_path = old_pdf_path.with_suffix(".json")
-                shutil.move(old_pdf_path, new_pdf_path)
-                shutil.move(old_metadata_path, new_metadata_path)
-                renamed_count += 1
-                logger.debug(f"Renamed: {old_pdf_path.name} -> {new_filename}")
-            except Exception as e:
-                logger.error(f"Failed to rename {old_pdf_path.name}: {e}")
-
+        stats = store.repair_filenames(processed_path)
         if not quiet:
-            console.success(f"{len(valid_entries)} files validated, {renamed_count} renamed", indent=False)
-        logger.debug(f"Renaming complete. Renamed {renamed_count} files.")
-
-    return {'validated': len(valid_entries), 'renamed': renamed_count, 'orphans': orphan_count}
+            console.success(
+                f"{stats['validated']} files validated, {stats['renamed']} renamed",
+                indent=False,
+            )
+        logger.debug(f"Renaming complete. Renamed {stats['renamed']} files.")
+        return stats
 
 
 # --- Export prefix rules ---
 
 def _get_nested_value(metadata: dict, key: str):
     """Get a value from metadata using dot notation (e.g., 'qrcode.qr_type')."""
-    parts = key.split(".")
-    current = metadata
-    for part in parts:
-        if not isinstance(current, dict) or part not in current:
-            return None
-        current = current[part]
-    return current
+    return RuleEngine().get_nested_value(metadata, key)
 
 
 def _match_value(actual, pattern: str) -> bool:
     """Match a metadata value against a pattern (supports trailing wildcard and numeric operators)."""
-    if actual is None:
-        return False
-    for op in ('>=', '<=', '!=', '>', '<'):
-        if pattern.startswith(op):
-            try:
-                return {
-                    '>':  float(actual) > float(pattern[len(op):]),
-                    '<':  float(actual) < float(pattern[len(op):]),
-                    '>=': float(actual) >= float(pattern[len(op):]),
-                    '<=': float(actual) <= float(pattern[len(op):]),
-                    '!=': float(actual) != float(pattern[len(op):]),
-                }[op]
-            except (ValueError, TypeError):
-                return False
-    actual_str = str(actual).lower()
-    if pattern.endswith("*"):
-        return actual_str.startswith(pattern.lower()[:-1])
-    if isinstance(actual, (int, float)):
-        try:
-            return float(actual) == float(pattern)
-        except (ValueError, TypeError):
-            pass
-    return actual_str == pattern.lower()
+    return RuleEngine().match_value(actual, pattern)
 
 
 def _resolve_match_value(pattern: str, profile_context: Optional[dict]) -> str:
     """Resolve ${profile.*} variables in a match pattern."""
-    if not profile_context or not pattern.startswith("${profile."):
-        return pattern
-    key = pattern[len("${profile."):-1]
-    value = profile_context.get(key)
-    return value if value is not None else pattern
+    return RuleEngine(profile_context=profile_context).resolve_profile_value(pattern)
 
 
 def _evaluate_export_prefix(metadata: dict, config, profile_context: Optional[dict] = None) -> str:
     """Evaluate export prefix rules against metadata. First match wins."""
-    for rule in config.rules:
-        if all(
-            _match_value(_get_nested_value(metadata, k), _resolve_match_value(v, profile_context))
-            for k, v in rule.match.items()
-        ):
-            return rule.prefix
-    return config.default_prefix
+    return RuleEngine(profile_context=profile_context).evaluate_export_prefix(
+        metadata,
+        file_mappings=config,
+    )
 
 
 def _build_filename_from_fields(metadata: dict, fields: list, file_hash: str) -> str:
@@ -562,73 +480,22 @@ def task_export_all_dates(
 def task_archive(processed_path: Path, digests: list[str], dry_run: bool = False) -> None:
     """Archive documents by hash_file digest."""
     console = get_console()
-    archive_dir = processed_path.parent / "_archived"
-
-    hash_to_json: dict[str, Path] = {}
-    for json_path, data in iter_json_files(processed_path):
-        hf = data.get("hash_file")
-        if hf:
-            hash_to_json[hf] = json_path
-
-    if not dry_run:
-        archive_dir.mkdir(exist_ok=True)
+    store = DocumentStore(get_app())
 
     if dry_run:
         console.info("Dry run — no files will be moved", indent=False)
 
-    found = 0
-    moved = 0
-    not_found = []
-
-    for digest in digests:
-        json_path = hash_to_json.get(digest)
-        if not json_path:
-            not_found.append(digest)
-            console.warning(f"[NOT FOUND] {digest}", indent=False)
-            continue
-
-        found += 1
-        data = None
-        try:
-            data = load_json_data(json_path)
-        except Exception:
-            pass
-
-        files_to_move = [json_path]
-
-        companion = find_companion_file(json_path, data)
-        if companion and companion.exists():
-            files_to_move.append(companion)
-
-        stem = json_path.stem
-        for extra_suffix in (".embeddings.json", ".reconciliation.json"):
-            extra = json_path.parent / (stem + extra_suffix)
-            if extra.exists():
-                files_to_move.append(extra)
-
-        for src in files_to_move:
-            dst = archive_dir / src.name
-            if dst.exists():
-                base, suffix = dst.stem, dst.suffix
-                counter = 2
-                while dst.exists():
-                    dst = archive_dir / f"{base}_{counter}{suffix}"
-                    counter += 1
-
-            if dry_run:
-                console.detail(f"[WOULD MOVE] {src.name}", indent=False)
-            else:
-                src.rename(dst)
-                console.detail(f"[MOVED] {src.name}", indent=False)
-
-        moved += 1
+    stats = store.archive_by_hash_file(digests, dry_run=dry_run, scope=processed_path)
+    for digest in stats["not_found"]:
+        console.warning(f"[NOT FOUND] {digest}", indent=False)
 
     console.info(
-        f"Archive: {found} found, {moved} archived, {len(not_found)} not found",
+        f"Archive: {stats['found']} found, {stats['archived']} archived, "
+        f"{len(stats['not_found'])} not found",
         indent=False,
     )
-    if not dry_run and moved > 0:
-        console.detail(f"Archived to: {archive_dir}", indent=False)
+    if not dry_run and stats["archived"] > 0:
+        console.detail(f"Archived to: {stats['archive_dir']}", indent=False)
 
 
 # --- Gmail download ---
@@ -724,15 +591,7 @@ def task_gmail_download(months: int = 2):
 
 def _match_type_pattern(doc_type: str, pattern: str) -> bool:
     """Check if doc_type matches a pattern with pipe-separated alternatives and trailing * wildcard."""
-    doc_lower = doc_type.lower()
-    for alt in pattern.split("|"):
-        alt = alt.strip().lower()
-        if alt.endswith("*"):
-            if doc_lower.startswith(alt[:-1]):
-                return True
-        elif doc_lower == alt:
-            return True
-    return False
+    return RuleEngine().match_doc_type(doc_type, pattern)
 
 
 def merge_reconciled_attachments(
@@ -747,64 +606,47 @@ def merge_reconciled_attachments(
         return stats
 
     merged_attachments: set[str] = set()
+    engine = RuleEngine()
 
     for match in all_matches:
-        candidates = match.pdf_candidates
-
-        for rule in merge_rules:
-            targets = [
-                c for c in candidates
-                if c.document_type and _match_type_pattern(c.document_type, rule.target_type)
-                and not c.is_sub_document
-            ]
-            attachments = [
-                c for c in candidates
-                if c.document_type and _match_type_pattern(c.document_type, rule.attach_type)
-                and not c.is_sub_document
-            ]
-
-            if not targets or not attachments:
+        for target, attachment in engine.select_merge_pairs(match, merge_rules):
+            target_pdf = export_path / target.pdf_filename
+            if not target_pdf.exists() or target_pdf.suffix.lower() != ".pdf":
                 continue
 
-            for target in targets:
-                target_pdf = export_path / target.pdf_filename
-                if not target_pdf.exists() or target_pdf.suffix.lower() != ".pdf":
-                    continue
+            if attachment.pdf_filename in merged_attachments:
+                logger.debug(
+                    f"[MERGE] Skipping {attachment.pdf_filename} — already merged elsewhere"
+                )
+                stats["skipped"] += 1
+                continue
 
-                for attachment in attachments:
-                    if attachment.pdf_filename in merged_attachments:
-                        logger.debug(
-                            f"[MERGE] Skipping {attachment.pdf_filename} — already merged elsewhere"
-                        )
-                        stats["skipped"] += 1
-                        continue
+            attach_pdf = export_path / attachment.pdf_filename
+            if not attach_pdf.exists() or attach_pdf.suffix.lower() != ".pdf":
+                continue
 
-                    attach_pdf = export_path / attachment.pdf_filename
-                    if not attach_pdf.exists() or attach_pdf.suffix.lower() != ".pdf":
-                        continue
+            if target_pdf == attach_pdf:
+                continue
 
-                    if target_pdf == attach_pdf:
-                        continue
+            try:
+                import pikepdf
 
-                    try:
-                        import pikepdf
+                with pikepdf.open(target_pdf, allow_overwriting_input=True) as target_doc:
+                    with pikepdf.open(attach_pdf) as attach_doc:
+                        target_doc.pages.extend(attach_doc.pages)
+                    target_doc.save(target_pdf)
 
-                        with pikepdf.open(target_pdf, allow_overwriting_input=True) as target_doc:
-                            with pikepdf.open(attach_pdf) as attach_doc:
-                                target_doc.pages.extend(attach_doc.pages)
-                            target_doc.save(target_pdf)
-
-                        merged_attachments.add(attachment.pdf_filename)
-                        stats["merged"] += 1
-                        logger.debug(
-                            f"[MERGE] Appended {attachment.pdf_filename} "
-                            f"to {target.pdf_filename}"
-                        )
-                    except Exception as e:
-                        stats["errors"] += 1
-                        logger.error(
-                            f"[MERGE] Failed to append {attachment.pdf_filename} "
-                            f"to {target.pdf_filename}: {e}"
-                        )
+                merged_attachments.add(attachment.pdf_filename)
+                stats["merged"] += 1
+                logger.debug(
+                    f"[MERGE] Appended {attachment.pdf_filename} "
+                    f"to {target.pdf_filename}"
+                )
+            except Exception as e:
+                stats["errors"] += 1
+                logger.error(
+                    f"[MERGE] Failed to append {attachment.pdf_filename} "
+                    f"to {target.pdf_filename}: {e}"
+                )
 
     return stats

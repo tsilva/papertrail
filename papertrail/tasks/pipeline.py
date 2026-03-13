@@ -12,8 +12,6 @@ import sys
 import time
 from pathlib import Path
 
-from archive_extractor import extract_archives
-
 from papertrail.config import get_current_profile
 from papertrail.console import get_console
 import io
@@ -142,6 +140,8 @@ def pipeline(months=2, export_date_arg=None, processed_path_override=None):
                 sys.exit(1)
 
         with console.step_progress("Extract compressed archives") as step:
+            from archive_extractor import extract_archives
+
             with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()), warnings.catch_warnings():
                 warnings.simplefilter("ignore")
                 results = extract_archives(rd, passwords=passwords if passwords else None)

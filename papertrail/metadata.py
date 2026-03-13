@@ -8,6 +8,7 @@ from typing import Iterator
 
 from papertrail.console import get_console
 from papertrail.models import DocumentMetadata
+from papertrail.store import get_store
 
 try:
     import orjson
@@ -27,6 +28,11 @@ def _is_internal_path(path: Path) -> bool:
 
     Skips: logs/, _dupes*/ folders, and files starting with _.
     """
+    try:
+        return get_store().is_internal_path(path)
+    except Exception:
+        pass
+
     parts = path.parts
     return (
         any(part.startswith("_dupes") for part in parts)
@@ -40,6 +46,11 @@ def find_companion_file(json_path: Path, metadata: dict = None) -> Path | None:
 
     Checks source_extension from metadata first, then tries .pdf, .xlsx.
     """
+    try:
+        return get_store().find_companion(json_path, metadata)
+    except Exception:
+        pass
+
     if metadata:
         ext = metadata.get("source_extension")
         if ext:
@@ -57,7 +68,11 @@ def find_companion_file(json_path: Path, metadata: dict = None) -> Path | None:
 
 def load_json_data(json_path: Path) -> dict:
     """Load raw JSON data from a file."""
-    return _load_json_fast(json_path)
+    try:
+        data = get_store().load_metadata(json_path)
+        return data if isinstance(data, dict) else data.model_dump()
+    except Exception:
+        return _load_json_fast(json_path)
 
 
 def iter_json_files(
@@ -99,6 +114,17 @@ def load_json_files_parallel(
     progress_desc: str = "Loading metadata"
 ) -> list[tuple[Path, DocumentMetadata | dict]]:
     """Load all JSON files in parallel (I/O phase) then validate sequentially (CPU phase)."""
+    try:
+        return get_store().load_sidecars_parallel(
+            directory,
+            validate=validate,
+            max_workers=max_workers,
+            show_progress=show_progress,
+            progress_desc=progress_desc,
+        )
+    except Exception:
+        pass
+
     json_files = [f for f in directory.rglob("*.json") if not _is_internal_path(f)]
     if not json_files:
         return []
@@ -126,6 +152,11 @@ def load_json_files_parallel(
 
 def build_hash_index(directory: Path) -> tuple[dict[str, Path], dict[str, Path], dict[str, Path], set[str]]:
     """Build (content_hash_index, file_hash_index, text_hash_index, known_issuers) from metadata files."""
+    try:
+        return get_store().build_indexes(directory)
+    except Exception:
+        pass
+
     content_hash_index = {}
     file_hash_index = {}
     text_hash_index = {}
@@ -151,6 +182,11 @@ def build_hash_index(directory: Path) -> tuple[dict[str, Path], dict[str, Path],
 
 def get_unique_dates(directory: Path) -> list[str]:
     """Extract unique YYYY-MM dates from metadata files, sorted most recent first."""
+    try:
+        return get_store().unique_dates(directory)
+    except Exception:
+        pass
+
     dates_set = set()
 
     for _, data in iter_json_files(directory):
@@ -165,13 +201,19 @@ def get_unique_dates(directory: Path) -> list[str]:
 
 def save_json_data(json_path: Path, data: dict) -> None:
     """Save dict to JSON with consistent formatting."""
-    with open(json_path, "w", encoding="utf-8") as f:
-        json.dump(data, f, indent=4, ensure_ascii=False, sort_keys=True)
+    try:
+        get_store().save_json(json_path, data)
+    except Exception:
+        with open(json_path, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=4, ensure_ascii=False, sort_keys=True)
 
 
 def save_metadata_json(pdf_path: Path, metadata: DocumentMetadata) -> None:
     """Save metadata JSON alongside a PDF file."""
-    save_json_data(pdf_path.with_suffix('.json'), metadata.model_dump())
+    try:
+        get_store().save_document(pdf_path, metadata)
+    except Exception:
+        save_json_data(pdf_path.with_suffix('.json'), metadata.model_dump())
 
 
 def load_validated_metadata(

@@ -246,6 +246,12 @@ class PapertrailConsole:
 _console: PapertrailConsole | None = None
 
 
+def set_console(console: PapertrailConsole | None) -> None:
+    """Install a process-global console for compatibility helpers."""
+    global _console
+    _console = console
+
+
 def get_console() -> PapertrailConsole:
     global _console
     if _console is None:

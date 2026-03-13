@@ -10,8 +10,8 @@ from papertrail.logging_utils import get_logger, setup_task_logging
 from papertrail.metadata import (
     load_validated_metadata, save_json_data, find_companion_file, iter_json_files,
 )
-from papertrail.models import DocumentMetadata
 from papertrail.pdf import get_page_count
+from papertrail.tasks.extraction import DocumentService
 
 logger = get_logger('cli')
 
@@ -145,74 +145,10 @@ def task_check(processed_path: Path, verify_hashes: bool = False, dry_run: bool 
 
     if not dry_run:
         console.step("Fill missing metadata fields")
-        now = datetime.now().strftime("%Y-%m-%d")
-        updated = skipped = errors = 0
-
-        for metadata_path, pdf_path, data in load_validated_metadata(
-            processed_path, require_pdf=False, validate=False,
-            show_progress=True, progress_desc="Checking metadata",
-        ):
-            try:
-                changed = False
-
-                if data.get("page_count") is None:
-                    companion = find_companion_file(metadata_path, data)
-                    if companion and companion.suffix.lower() == ".pdf":
-                        data["page_count"] = get_page_count(companion)
-                        changed = True
-
-                if data.get("file_size_kb") is None:
-                    companion = find_companion_file(metadata_path, data)
-                    if companion and companion.exists():
-                        data["file_size_kb"] = round(companion.stat().st_size / 1024)
-                        changed = True
-
-                if "hash_text" not in data:
-                    companion = find_companion_file(metadata_path, data)
-                    if companion:
-                        data["hash_text"] = hash_file_text(companion) if companion.suffix.lower() == ".pdf" else None
-                        changed = True
-
-                if data.get("sub_documents") is None and "sub_documents" not in data:
-                    companion = find_companion_file(metadata_path, data)
-                    if companion and companion.suffix.lower() == ".pdf":
-                        from papertrail.qr import extract_all_metadata_from_qr
-                        from papertrail.models import SubDocumentMetadata
-                        all_results = extract_all_metadata_from_qr(companion)
-                        if len(all_results) >= 2:
-                            sub_docs = []
-                            for qr_metadata, qr_raw_data in all_results:
-                                sub_doc = SubDocumentMetadata(
-                                    date_issued=qr_metadata.issue_date,
-                                    document_type=qr_metadata.document_type,
-                                    total_amount=qr_metadata.total_amount,
-                                    total_amount_currency=qr_metadata.total_amount_currency,
-                                    issuer_tax_number=qr_metadata.issuer_tax_number,
-                                    document_number=qr_metadata.document_number,
-                                    atcud=qr_metadata.atcud,
-                                    locale=qr_metadata.locale,
-                                    qrcode=qr_raw_data,
-                                )
-                                sub_docs.append(sub_doc.model_dump())
-                            data["sub_documents"] = sub_docs
-                            data["qrcode"] = None
-                        else:
-                            data["sub_documents"] = None
-                        changed = True
-                    elif companion:
-                        data["sub_documents"] = None
-                        changed = True
-
-                if changed:
-                    data["date_updated"] = now
-                    save_json_data(metadata_path, data)
-                    updated += 1
-                else:
-                    skipped += 1
-
-            except Exception as e:
-                logger.error(f"Failed to process {metadata_path.name}: {e}")
-                errors += 1
+        stats = DocumentService().backfill_processed(processed_path, dry_run=False)
+        updated = stats["updated"]
+        skipped = stats["skipped"]
+        errors = stats["errors"]
 
         if updated > 0 or errors > 0:
             if errors > 0:

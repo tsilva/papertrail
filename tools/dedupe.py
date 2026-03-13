@@ -487,7 +487,7 @@ def on_cancel():
 def build_ui():
     default_dir = get_processed_dir()
 
-    with gr.Blocks(title="Papertrail Duplicate Review", css=FULLSCREEN_CSS + _CSS, js=_JS) as app:
+    with gr.Blocks(title="Papertrail Duplicate Review") as app:
         index_state = gr.State(0)
 
         gr.Markdown("## Papertrail Duplicate Review")
@@ -576,8 +576,7 @@ def build_ui():
 
     return app
 
-
-demo = build_ui()
-
 if __name__ == "__main__":
-    demo.launch()
+    from tools.app import build_ui as build_tools_ui
+
+    build_tools_ui(initial_tab="dedupe").launch()
