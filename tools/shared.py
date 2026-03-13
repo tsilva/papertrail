@@ -1,5 +1,7 @@
 """Shared helpers for Gradio tools."""
 
+from __future__ import annotations
+
 import base64
 import html as html_lib
 import warnings
@@ -8,70 +10,76 @@ from pathlib import Path
 
 import fitz  # PyMuPDF
 
-from papertrail.app import App, AppPaths
-from papertrail.config import ProfileLoader
-from papertrail.console import PapertrailConsole
-from papertrail.hashing import HashCache
-from papertrail.store import DocumentStore
+from papertrail.config import load_profile
+from papertrail.repository import DocumentRepository
+from papertrail.runtime import runtime_from_profile
 
 
 @lru_cache(maxsize=1)
-def _build_store() -> DocumentStore | None:
+def build_repository() -> DocumentRepository | None:
     try:
-        profile = ProfileLoader().load_profile("default")
+        profile = load_profile("default")
     except Exception:
         return None
 
-    processed = Path(profile.paths.processed) if profile.paths.processed else None
-    export = Path(profile.paths.export) if profile.paths.export else None
-    if processed is None:
+    if not profile.paths.processed:
         return None
 
-    cache_dir = Path.home() / ".config" / "papertrail" / "cache"
-    cache_dir.mkdir(parents=True, exist_ok=True)
-    app = App(
-        profile=profile,
-        profile_name=profile.profile.name,
-        paths=AppPaths(
-            raw=[Path(p) for p in profile.paths.raw or []],
-            processed=processed,
-            export=export,
-            cache=cache_dir,
-            profiles=Path.home() / ".config" / "papertrail" / "profiles",
-        ),
-        model_id=profile.openrouter.model_id,
-        openai_client=None,
-        nif_cache=None,
-        hash_cache=HashCache(cache_dir / "hash_cache.yaml"),
-        console=PapertrailConsole(),
-        api_accessible=False,
+    runtime = runtime_from_profile(
+        profile,
+        enable_client=False,
+        probe_api=False,
     )
-    return DocumentStore(app)
+    return DocumentRepository(runtime)
 
 
 def get_processed_dir() -> str:
-    """Get the processed directory from the default profile."""
     try:
-        profile = ProfileLoader().load_profile("default")
+        profile = load_profile("default")
         if profile.paths.processed:
-            p = Path(profile.paths.processed)
-            if p.is_dir():
-                return str(p)
+            path = Path(profile.paths.processed)
+            if path.is_dir():
+                return str(path)
+    except Exception:
+        pass
+    return ""
+
+
+def get_export_dir() -> str:
+    try:
+        profile = load_profile("default")
+        if profile.paths.export:
+            path = Path(profile.paths.export)
+            if path.is_dir():
+                return str(path)
     except Exception:
         pass
     return ""
 
 
 def find_companion(json_path: Path, metadata: dict) -> Path | None:
-    """Find companion document file for a JSON sidecar."""
-    store = _build_store()
-    if store is None:
+    repository = build_repository()
+    if repository is None:
         return None
-    return store.find_companion(json_path, metadata)
+    return repository.find_companion(json_path, metadata)
+
+
+def is_internal_path(path: Path) -> bool:
+    repository = build_repository()
+    if repository is None:
+        parts = path.parts
+        return any(part.startswith("_") or part == "logs" for part in parts)
+    return repository.is_internal_path(path)
+
+
+def iter_sidecars(root: Path):
+    repository = build_repository()
+    if repository is None:
+        return []
+    return repository.iter_sidecars(root)
 
 
 def render_pdf_page_html(pdf_path, page_num=0):
-    """Render a single PDF page as an HTML img tag. Returns (html, total_pages, clamped_page)."""
     try:
         with fitz.open(str(pdf_path)) as doc:
             total = len(doc)
@@ -85,41 +93,40 @@ def render_pdf_page_html(pdf_path, page_num=0):
 
 
 def render_xlsx_as_html(xlsx_path, max_rows=100):
-    """Render XLSX worksheet as HTML table."""
     import openpyxl
 
     warnings.filterwarnings("ignore", message="Workbook contains no default style")
     try:
-        wb = openpyxl.load_workbook(str(xlsx_path), data_only=True)
-        ws = wb.active
+        workbook = openpyxl.load_workbook(str(xlsx_path), data_only=True)
+        worksheet = workbook.active
         lines = [
             '<div style="overflow-x:auto;">',
             '<table style="border-collapse:collapse;font-size:13px;width:100%;">',
         ]
-        n = 0
-        for row in ws.iter_rows(values_only=True):
-            if n >= max_rows:
+        row_count = 0
+        for row in worksheet.iter_rows(values_only=True):
+            if row_count >= max_rows:
                 lines.append(
                     '<tr><td colspan="10" style="text-align:center;padding:8px;'
                     'color:var(--body-text-color-subdued,#888);">... truncated ...</td></tr>'
                 )
                 break
-            bg = "var(--table-even-background-fill,#2a2a2a)" if n % 2 == 0 else "var(--table-odd-background-fill,#333)"
+            bg = "var(--table-even-background-fill,#2a2a2a)" if row_count % 2 == 0 else "var(--table-odd-background-fill,#333)"
             lines.append(f'<tr style="background:{bg};">')
             for cell in row:
-                v = html_lib.escape(str(cell)) if cell is not None else ""
+                value = html_lib.escape(str(cell)) if cell is not None else ""
                 lines.append(
                     f'<td style="border:1px solid var(--border-color-primary,#444);'
                     f'padding:3px 6px;white-space:nowrap;'
-                    f'color:var(--body-text-color,#ddd);">{v}</td>'
+                    f'color:var(--body-text-color,#ddd);">{value}</td>'
                 )
             lines.append("</tr>")
-            n += 1
+            row_count += 1
         lines.append("</table></div>")
-        wb.close()
+        workbook.close()
         return "\n".join(lines)
-    except Exception as e:
-        return f'<p class="placeholder">Error reading XLSX: {html_lib.escape(str(e))}</p>'
+    except Exception as exc:
+        return f'<p class="placeholder">Error reading XLSX: {html_lib.escape(str(exc))}</p>'
 
 
 FULLSCREEN_CSS = """

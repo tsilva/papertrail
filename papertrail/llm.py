@@ -1,14 +1,16 @@
 """LLM prompts, tools, and classification utilities."""
 
+from __future__ import annotations
+
 import json
 from datetime import datetime
-from typing import Any, Optional
+from typing import Any
 
-from papertrail.logging_utils import get_logger, DocumentLogger
-from papertrail.models import DocumentMetadataRaw, get_document_types, get_issuing_parties
+from papertrail.logging_utils import get_logger
+from papertrail.models import DocumentMetadataRaw
 from papertrail.qr.models import QRExtractedMetadata
 
-logger = get_logger('llm')
+logger = get_logger("llm")
 
 
 def _extract_json_from_response(content: str) -> str:
@@ -21,15 +23,15 @@ def _extract_json_from_response(content: str) -> str:
 
 
 def build_extraction_tools(exclude_fields: set[str] | None = None) -> list[dict]:
-    """Build LLM tools list with classification schema, optionally excluding fields."""
+    """Build the structured extraction tool schema."""
     import copy
-    schema = copy.deepcopy(DocumentMetadataRaw.model_json_schema())
 
+    schema = copy.deepcopy(DocumentMetadataRaw.model_json_schema())
     if exclude_fields:
         for field in exclude_fields:
             schema["properties"].pop(field, None)
         if "required" in schema:
-            schema["required"] = [f for f in schema["required"] if f not in exclude_fields]
+            schema["required"] = [field for field in schema["required"] if field not in exclude_fields]
 
     return [
         {
@@ -44,7 +46,7 @@ def build_extraction_tools(exclude_fields: set[str] | None = None) -> list[dict]
 
 
 def get_qr_exclusions(qr_metadata: QRExtractedMetadata) -> tuple[set[str], dict[str, Any]]:
-    """Get (fields_to_exclude, pre_extracted_values) from QR metadata for LLM."""
+    """Return schema fields that QR extraction already supplied."""
     exclude = set()
     pre_extracted: dict[str, Any] = {}
 
@@ -65,13 +67,13 @@ def get_qr_exclusions(qr_metadata: QRExtractedMetadata) -> tuple[set[str], dict[
     return exclude, pre_extracted
 
 
-def get_system_prompt_classify(pre_extracted: dict[str, Any] | None = None,
-                               multi_qr_info: dict[str, Any] | None = None) -> str:
-    """Build system prompt for single-call classification (extract + normalize)."""
-    # Use live lists (includes session-confirmed values)
-    doc_types = get_document_types()
-    issuing_parties = get_issuing_parties()
-
+def get_system_prompt_classify(
+    known_document_types: list[str],
+    known_issuing_parties: list[str],
+    pre_extracted: dict[str, Any] | None = None,
+    multi_qr_info: dict[str, Any] | None = None,
+) -> str:
+    """Build the single-call document classification prompt."""
     prompt = (
         f"You are an expert document classification assistant. "
         f"Today's date is {datetime.now().strftime('%Y-%m-%d')}. "
@@ -84,22 +86,22 @@ def get_system_prompt_classify(pre_extracted: dict[str, Any] | None = None,
         "Examples: 'Anthropic, PBC', 'Amazon Web Services, Inc.', 'Utility Provider Portugal - Comunicações Pessoais, S.A.'\n\n"
         "For document_type_raw, extract ONLY the core document type label as written, "
         "stripped of dates/periods/numbers. Preserve original language and case. "
-        "Examples: 'Detalhe da Fatura de Abril 2024' → 'Fatura', "
-        "'Final Invoice for the August 2025 Billing Period' → 'Invoice', "
-        "'Nota de Crédito Abr 2022' → 'Nota de Crédito'.\n\n"
+        "Examples: 'Detalhe da Fatura de Abril 2024' -> 'Fatura', "
+        "'Final Invoice for the August 2025 Billing Period' -> 'Invoice', "
+        "'Nota de Crédito Abr 2022' -> 'Nota de Crédito'.\n\n"
         "## Normalized Fields (canonical slug-cased forms)\n\n"
         "For document_type, normalize the raw type to a canonical slug-cased value:\n"
-        f"- Known types: {', '.join(t for t in doc_types if t != '$UNKNOWN$')}\n"
+        f"- Known types: {', '.join(t for t in known_document_types if t != '$UNKNOWN$')}\n"
         "- If a known type matches, use it EXACTLY (case-sensitive)\n"
         "- If no match, suggest a new slug-cased name (lowercase, hyphen-separated, English, "
         "e.g. tax-*, bank-*, invoice-*)\n"
         "- Only use '$UNKNOWN$' if the raw value is empty or truly unidentifiable\n\n"
         "For issuing_party, normalize the raw issuer to a canonical slug-cased value:\n"
-        f"- Known parties: {', '.join(p for p in issuing_parties if p != '$UNKNOWN$')}\n"
+        f"- Known parties: {', '.join(p for p in known_issuing_parties if p != '$UNKNOWN$')}\n"
         "- If a known party matches, use it EXACTLY (case-sensitive)\n"
         "- If no match, produce a clean short name: lowercase, strip legal suffixes "
         "(Inc., Ltd., S.A., Lda., PBC), use the most recognizable form "
-        "(e.g., 'Anthropic, PBC' → 'anthropic', 'Amazon Web Services' → 'amazon')\n"
+        "(e.g., 'Anthropic, PBC' -> 'anthropic', 'Amazon Web Services' -> 'amazon')\n"
         "- Only use '$UNKNOWN$' if the raw value is empty or truly unidentifiable\n\n"
         "## Other Fields\n\n"
         "For document_title, extract the specific SUBJECT, PRODUCT, SERVICE, or TRANSACTION. "
@@ -146,23 +148,21 @@ def get_system_prompt_classify(pre_extracted: dict[str, Any] | None = None,
 def normalize_issuing_party(
     raw_name: str,
     client,
-    model_id: Optional[str] = None,
+    model_id: str | None,
+    known_issuing_parties: list[str],
 ) -> str:
-    """Lightweight LLM call to normalize a single issuing party name.
-
-    Used only for NIF enrichment (rare — first encounter of each NIF).
-    Returns normalized slug-cased name or '$UNKNOWN$'.
-    """
-    issuing_parties = get_issuing_parties()
+    """Normalize a single issuing party name against the known canonical list."""
+    if client is None:
+        return "$UNKNOWN$"
 
     prompt = (
-        f"Normalize this company name to a canonical slug form.\n\n"
-        f"Raw name: \"{raw_name}\"\n\n"
-        f"Known parties: {', '.join(p for p in issuing_parties if p != '$UNKNOWN$')}\n\n"
+        "Normalize this company name to a canonical slug form.\n\n"
+        f'Raw name: "{raw_name}"\n\n'
+        f"Known parties: {', '.join(p for p in known_issuing_parties if p != '$UNKNOWN$')}\n\n"
         "If a known party matches, use it EXACTLY. Otherwise produce a clean short name: "
         "lowercase, strip legal suffixes (Inc., Ltd., S.A., Lda., PBC), use the most "
         "recognizable form.\n\n"
-        "Respond in JSON: {{\"issuing_party\": \"normalized_name\"}}"
+        'Respond in JSON: {"issuing_party": "normalized_name"}'
     )
 
     try:
@@ -172,19 +172,15 @@ def normalize_issuing_party(
             temperature=0,
             messages=[{"role": "user", "content": prompt}],
         )
-
         content = response.choices[0].message.content
         if not content:
             return "$UNKNOWN$"
-
         content = _extract_json_from_response(content)
         result = json.loads(content)
         return result.get("issuing_party", "$UNKNOWN$")
-
-    except Exception as e:
-        logger.error(f"NIF normalization failed: {e}")
+    except Exception as exc:
+        logger.error(f"NIF normalization failed: {exc}")
         return "$UNKNOWN$"
 
 
-# Backwards compatibility alias
 get_system_prompt_raw_extraction = get_system_prompt_classify

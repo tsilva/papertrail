@@ -10,7 +10,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import gradio as gr
 
 from tools.shared import (
-    find_companion, get_processed_dir, render_pdf_page_html,
+    find_companion, get_processed_dir, iter_sidecars, render_pdf_page_html,
     render_xlsx_as_html, FULLSCREEN_CSS, FULLSCREEN_JS,
 )
 
@@ -133,41 +133,17 @@ _CSS = """
 """
 
 
-# ── Helpers ──────────────────────────────────────────────────────
-
-def _is_internal_path(path):
-    """Check if a path is inside internal directories that should be skipped."""
-    parts = path.parts
-    for part in parts:
-        if part.startswith("_") or part == "logs":
-            return True
-    return False
-
-
 # ── Data loading ─────────────────────────────────────────────────
 
 def _load_entries(processed_dir):
-    """Scan processed directory and build lightweight index entries."""
+    """Scan processed sidecars and build lightweight index entries."""
     root = Path(processed_dir)
     if not root.is_dir():
         return []
 
     entries = []
-    for json_path in root.rglob("*.json"):
-        # Skip internal paths
-        try:
-            rel = json_path.relative_to(root)
-        except ValueError:
-            continue
-        if _is_internal_path(rel):
-            continue
+    for json_path, metadata in iter_sidecars(root):
         if json_path.name.endswith(".reconciliation.json"):
-            continue
-
-        try:
-            with open(json_path, "r", encoding="utf-8") as f:
-                metadata = json.load(f)
-        except Exception:
             continue
 
         # Build search text from key fields

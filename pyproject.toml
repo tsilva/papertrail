@@ -24,15 +24,14 @@ dependencies = [
     "orjson>=3.9.0",
     "mbox-extractor",
     "pyzbar>=0.1.9",
-    "archive-extractor",
     "rich>=13.0.0",
-    "pdf-gluer",
     "typer>=0.9.0",
 ]
 requires-python = ">=3.12"
 
 [project.optional-dependencies]
 similarity = ["cohere>=5.0", "numpy"]
+dev = ["pytest"]
 
 [project.scripts]
 papertrail = "main:app"

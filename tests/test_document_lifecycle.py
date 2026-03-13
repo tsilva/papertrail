@@ -3,27 +3,25 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+from papertrail.engine import DocumentEngine
 from papertrail.models import DocumentMetadata, DocumentMetadataRaw
 from papertrail.qr.models import QRExtractedMetadata
-from papertrail.store import DocumentStore
-from papertrail.tasks.extraction import DocumentService, classify_pdf_document
+from papertrail.repository import DocumentRepository
 
-from tests.support import activate_test_app, create_millennium_statement, create_pdf, create_png, make_test_app
+from tests.support import create_millennium_statement, create_pdf, create_png, make_test_runtime
 
 
 class DocumentLifecycleTests(unittest.TestCase):
     def setUp(self):
         self.tmpdir = tempfile.TemporaryDirectory()
         self.root = Path(self.tmpdir.name)
-        self.app = make_test_app(self.root)
-        activate_test_app(self.app)
-        self.service = DocumentService(self.app)
-        self.store = DocumentStore(self.app)
-        self.raw = self.app.paths.raw[0]
-        self.processed = self.app.paths.processed
+        self.runtime = make_test_runtime(self.root)
+        self.engine = DocumentEngine(self.runtime)
+        self.repository = DocumentRepository(self.runtime)
+        self.raw = self.runtime.paths.raw[0]
+        self.processed = self.runtime.paths.processed
 
     def tearDown(self):
-        activate_test_app(None)
         self.tmpdir.cleanup()
 
     def _metadata(self, **overrides) -> DocumentMetadata:
@@ -63,13 +61,13 @@ class DocumentLifecycleTests(unittest.TestCase):
     def test_pdf_ingest_preserves_raw_fields_and_uses_hash_file_in_filename(self):
         pdf_path = self.raw / "invoice.pdf"
         create_pdf(pdf_path, ["Invoice body"])
-        self.service.classify_pdf_document = lambda *_args, **_kwargs: self._metadata(hash_content="content7777")
+        self.engine.classify_pdf_document = lambda *_args, **_kwargs: self._metadata(hash_content="content7777")
 
-        result = self.service.upsert_document(pdf_path, "ingest", processed_path=self.processed)
+        result = self.engine.upsert(pdf_path, "ingest", processed_path=self.processed)
 
         self.assertEqual(result.processed, 1)
         saved_path = result.outputs[0]
-        saved_metadata = self.store.load_metadata(saved_path.with_suffix(".json"), validate=True)
+        saved_metadata = self.repository.load_metadata(saved_path.with_suffix(".json"), validate=True)
         self.assertIn(saved_metadata.hash_file, saved_path.name)
         self.assertNotIn(saved_metadata.hash_content, saved_path.name)
         self.assertEqual(saved_metadata.document_type_raw, "Invoice")
@@ -78,7 +76,7 @@ class DocumentLifecycleTests(unittest.TestCase):
     def test_image_ingest_converts_to_pdf(self):
         image_path = self.raw / "receipt.png"
         create_png(image_path)
-        self.service.classify_pdf_document = lambda *_args, **_kwargs: self._metadata(
+        self.engine.classify_pdf_document = lambda *_args, **_kwargs: self._metadata(
             document_type="receipt",
             document_type_raw="Receipt",
             document_title=None,
@@ -87,7 +85,7 @@ class DocumentLifecycleTests(unittest.TestCase):
             total_amount=42.0,
         )
 
-        result = self.service.upsert_document(image_path, "ingest", processed_path=self.processed)
+        result = self.engine.upsert(image_path, "ingest", processed_path=self.processed)
 
         self.assertEqual(result.processed, 1)
         self.assertEqual(result.images_converted, 1)
@@ -104,9 +102,9 @@ class DocumentLifecycleTests(unittest.TestCase):
                 document_title=source_path.stem,
             )
 
-        self.service.classify_pdf_document = fake_classify
+        self.engine.classify_pdf_document = fake_classify
 
-        result = self.service.upsert_document(pdf_path, "ingest", processed_path=self.processed)
+        result = self.engine.upsert(pdf_path, "ingest", processed_path=self.processed)
 
         self.assertEqual(result.processed, 2)
         self.assertEqual(result.bundles_split, 1)
@@ -117,11 +115,11 @@ class DocumentLifecycleTests(unittest.TestCase):
         xlsx_path = self.raw / "statement.xlsx"
         create_millennium_statement(xlsx_path)
 
-        result = self.service.upsert_document(xlsx_path, "ingest", processed_path=self.processed)
+        result = self.engine.upsert(xlsx_path, "ingest", processed_path=self.processed)
 
         self.assertEqual(result.processed, 1)
         self.assertEqual(result.outputs[0].suffix.lower(), ".xlsx")
-        saved_metadata = self.store.load_metadata(result.outputs[0].with_suffix(".json"), validate=True)
+        saved_metadata = self.repository.load_metadata(result.outputs[0].with_suffix(".json"), validate=True)
         self.assertEqual(saved_metadata.source_extension, ".xlsx")
         self.assertIn(saved_metadata.hash_file, result.outputs[0].name)
 
@@ -150,9 +148,9 @@ class DocumentLifecycleTests(unittest.TestCase):
             locale="pt-PT",
         )
 
-        with patch("papertrail.tasks.extraction._phase0_qr_extract", return_value=(qr_metadata, {"qr_type": "portuguese_invoice"}, [])):
-            with patch("papertrail.tasks.extraction._phase1_llm_extract", return_value=raw_metadata):
-                metadata = classify_pdf_document(pdf_path, "content1234", app=self.app)
+        with patch("papertrail.engine._phase0_qr_extract", return_value=(qr_metadata, {"qr_type": "portuguese_invoice"}, [])):
+            with patch("papertrail.engine._phase1_llm_extract", return_value=raw_metadata):
+                metadata = self.engine.classify_pdf_document(pdf_path, "content1234")
 
         self.assertEqual(metadata.date_issued, "2026-01-15")
         self.assertEqual(metadata.document_type, "invoice")
@@ -203,9 +201,9 @@ class DocumentLifecycleTests(unittest.TestCase):
             ),
         ]
 
-        with patch("papertrail.tasks.extraction._phase0_qr_extract", return_value=(None, None, qr_results)):
-            with patch("papertrail.tasks.extraction._phase1_llm_extract", return_value=raw_metadata):
-                metadata = classify_pdf_document(pdf_path, "content9999", app=self.app)
+        with patch("papertrail.engine._phase0_qr_extract", return_value=(None, None, qr_results)):
+            with patch("papertrail.engine._phase1_llm_extract", return_value=raw_metadata):
+                metadata = self.engine.classify_pdf_document(pdf_path, "content9999")
 
         self.assertIsNone(metadata.qrcode)
         self.assertEqual(len(metadata.sub_documents), 2)

@@ -3,26 +3,24 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from papertrail.commands import copy_matching, reconcile
 from papertrail.hashing import hash_file_fast
 from papertrail.models import DocumentMetadata
-from papertrail.store import DocumentStore
-from papertrail.workflows import copy_matching, reconcile
+from papertrail.repository import DocumentRepository
 
-from tests.support import activate_test_app, create_millennium_statement, create_pdf, make_test_app
+from tests.support import create_millennium_statement, create_pdf, make_test_runtime
 
 
-class WorkflowTests(unittest.TestCase):
+class CommandTests(unittest.TestCase):
     def setUp(self):
         self.tmpdir = tempfile.TemporaryDirectory()
         self.root = Path(self.tmpdir.name)
-        self.app = make_test_app(self.root)
-        activate_test_app(self.app)
-        self.store = DocumentStore(self.app)
-        self.processed = self.app.paths.processed
-        self.export = self.app.paths.export
+        self.runtime = make_test_runtime(self.root)
+        self.repository = DocumentRepository(self.runtime)
+        self.processed = self.runtime.paths.processed
+        self.export = self.runtime.paths.export
 
     def tearDown(self):
-        activate_test_app(None)
         self.tmpdir.cleanup()
 
     def _metadata(self, hash_content: str, hash_file: str, **overrides) -> DocumentMetadata:
@@ -46,41 +44,41 @@ class WorkflowTests(unittest.TestCase):
         return DocumentMetadata(**data)
 
     def test_copy_matching_applies_prefix_rules_and_content_dedup(self):
-        self.app.profile.export.file_mappings.enabled = True
-        self.app.profile.export.file_mappings.default_prefix = "DIV_"
-        self.app.profile.export.file_mappings.rules = [
+        self.runtime.profile.export.file_mappings.enabled = True
+        self.runtime.profile.export.file_mappings.default_prefix = "DIV_"
+        self.runtime.profile.export.file_mappings.rules = [
             {"match": {"document_type": "invoice", "issuer_tax_number": "${profile.tax_number}"}, "prefix": "VND_"},
             {"match": {"document_type": "invoice"}, "prefix": "CMP_"},
         ]
-        self.app.profile.export.file_mappings.filename_fields = ["date_issued", "document_type", "issuing_party"]
-        self.app.profile.profile.tax_number = "TESTOWNER"
+        self.runtime.profile.export.file_mappings.filename_fields = ["date_issued", "document_type", "issuing_party"]
+        self.runtime.profile.profile.tax_number = "TESTOWNER"
 
         first_pdf = self.processed / "2026-01-02 - first.pdf"
         second_pdf = self.processed / "2026-01-02 - second.pdf"
         create_pdf(first_pdf, ["invoice one"])
         create_pdf(second_pdf, ["invoice two"])
-        self.store.save_document(
+        self.repository.save_document(
             first_pdf,
             self._metadata("shared123", "file1111", issuer_tax_number="TESTOWNER"),
         )
-        self.store.save_document(
+        self.repository.save_document(
             second_pdf,
             self._metadata("shared123", "file2222", issuer_tax_number="TESTUNKNOWN"),
         )
 
         dest = self.root / "copied"
         stats = copy_matching(
-            self.app,
+            self.runtime,
             self.processed,
             "2026-01",
             dest,
-            export_config=self.app.profile.export,
+            export_config=self.runtime.profile.export,
             profile_context={"tax_number": "TESTOWNER"},
             quiet=True,
         )
 
-        copied_docs = sorted(p.name for p in dest.glob("*.pdf"))
-        copied_sidecars = sorted(p.name for p in dest.glob("*.json"))
+        copied_docs = sorted(path.name for path in dest.glob("*.pdf"))
+        copied_sidecars = sorted(path.name for path in dest.glob("*.json"))
         self.assertEqual(stats["copied"], 1)
         self.assertEqual(stats["deduped"], 1)
         self.assertEqual(len(copied_docs), 1)
@@ -108,22 +106,22 @@ class WorkflowTests(unittest.TestCase):
 
         statement_hash = hash_file_fast(statement_path)
         statement_metadata = classify_bank_statement(statement_path, statement_hash)
-        self.store.save_document(statement_path, statement_metadata)
+        self.repository.save_document(statement_path, statement_metadata)
 
         bank_note_path = self.export / "bank-note.pdf"
         receipt_path = self.export / "receipt.pdf"
         create_pdf(bank_note_path, ["Bank note"])
         create_pdf(receipt_path, ["Receipt"])
-        self.store.save_document(
+        self.repository.save_document(
             bank_note_path,
             self._metadata("bank0001", "bank0001", document_type="bank-note", document_type_raw="Bank Note"),
         )
-        self.store.save_document(
+        self.repository.save_document(
             receipt_path,
             self._metadata("recv0001", "recv0001", document_type="receipt", document_type_raw="Receipt"),
         )
 
-        reconcile(self.app, self.export, dry_run=False)
+        reconcile(self.runtime, self.export, dry_run=False)
 
         sidecar_path = statement_path.with_suffix(".reconciliation.json")
         self.assertTrue(sidecar_path.exists())

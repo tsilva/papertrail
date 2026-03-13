@@ -1,4 +1,4 @@
-"""Canonical workflow entrypoints for the papertrail application."""
+"""Canonical command layer for papertrail."""
 
 from __future__ import annotations
 
@@ -11,35 +11,55 @@ import shutil
 import sys
 import time
 import warnings
-from contextlib import redirect_stderr, redirect_stdout
+from contextlib import contextmanager, redirect_stderr, redirect_stdout
 from pathlib import Path
 from typing import Optional
 
 import pandas as pd
 
-from papertrail.app import App
-from papertrail.console import get_console
-from papertrail.hashing import hash_file_fast
-from papertrail.logging_utils import get_logger, setup_failure_logger, setup_task_logging, suppress_console_logging
+from papertrail.config import get_gmail_config_paths, get_passwords_from_profile
+from papertrail.archive_extract import extract_archives
+from papertrail.engine import DocumentEngine
+from papertrail.gmail import download_gmail_attachments
+from papertrail.logging_utils import (
+    get_logger,
+    setup_failure_logger,
+    setup_task_logging,
+    suppress_console_logging,
+)
+from papertrail.mbox import extract_mbox_attachments
 from papertrail.models import DocumentMetadata, clean_enum_string
 from papertrail.naming import sanitize_filename_component
+from papertrail.pdf_merge import merge_all_pdfs
+from papertrail.repository import DocumentRepository
 from papertrail.rules import RuleEngine
-from papertrail.store import DocumentStore
-from papertrail.workflow_utils import task_log_context
+from papertrail.runtime import Runtime
+from papertrail.utils import compute_month_range, make_matcher, month_to_date_range
 
-logger = get_logger("cli")
+from .check import run_check, validate_merged_pdf
+from .reconcile import discover_bank_statements, reconcile_single
+
+logger = get_logger("commands")
+
+
+@contextmanager
+def _task_log_context(runtime: Runtime, processed_path: Path, task_name: str, *, show_header: bool = True):
+    log_file_path = setup_task_logging(processed_path, task_name)
+    logger.debug(f"=== {task_name.upper()} STARTED ===")
+    logger.debug(f"Log: {log_file_path}")
+    if show_header:
+        runtime.console.detail(f"Log: {log_file_path}", indent=False)
+    yield log_file_path
 
 
 def extract(
-    app: App,
+    runtime: Runtime,
     processed_path: Path,
     raw_paths: list[Path],
+    *,
     quiet: bool = False,
 ) -> dict | None:
-    """Extract and classify new PDF/XLSX/image files."""
-    from papertrail.tasks.extraction import DocumentService
-
-    lock_path = app.paths.cache / ".extract.lock"
+    lock_path = runtime.paths.cache / ".extract.lock"
     lock_path.parent.mkdir(parents=True, exist_ok=True)
     lock_file = open(lock_path, "w")
     try:
@@ -50,12 +70,11 @@ def extract(
         return None
 
     try:
-        with task_log_context(processed_path, "extract_new", show_header=not quiet):
+        with _task_log_context(runtime, processed_path, "extract_new", show_header=not quiet):
             logs_dir = processed_path / "logs"
             failure_log_path = logs_dir / "classification_failures.log"
             failure_logger = setup_failure_logger(failure_log_path)
-            logger.debug(f"Logging failures to: {failure_log_path}")
-            return DocumentService(app).extract_new(
+            return DocumentEngine(runtime).extract(
                 processed_path,
                 raw_paths,
                 quiet=quiet,
@@ -67,8 +86,9 @@ def extract(
 
 
 def sync(
-    app: App,
+    runtime: Runtime,
     processed_path: Path,
+    *,
     dry_run: bool = False,
     all_unknown: bool = False,
     pattern: str | None = None,
@@ -76,11 +96,8 @@ def sync(
     all: bool = False,
     quiet: bool = False,
 ) -> dict:
-    """Sync metadata by reclassifying in place."""
-    from papertrail.tasks.extraction import DocumentService
-
-    with task_log_context(processed_path, "sync", show_header=not quiet):
-        return DocumentService(app).sync(
+    with _task_log_context(runtime, processed_path, "sync", show_header=not quiet):
+        return DocumentEngine(runtime).sync(
             processed_path,
             dry_run=dry_run,
             all_unknown=all_unknown,
@@ -91,15 +108,12 @@ def sync(
         )
 
 
-def rename(app: App, processed_path: Path, quiet: bool = False) -> dict:
-    """Rename existing document files based on metadata."""
-    store = DocumentStore(app)
-    console = app.console
-
-    with task_log_context(processed_path, "rename_files", show_header=not quiet):
-        stats = store.repair_filenames(processed_path)
+def rename(runtime: Runtime, processed_path: Path, *, quiet: bool = False) -> dict:
+    repository = DocumentRepository(runtime)
+    with _task_log_context(runtime, processed_path, "rename_files", show_header=not quiet):
+        stats = repository.repair_filenames(processed_path)
         if not quiet:
-            console.success(
+            runtime.console.success(
                 f"{stats['validated']} files validated, {stats['renamed']} renamed",
                 indent=False,
             )
@@ -107,8 +121,8 @@ def rename(app: App, processed_path: Path, quiet: bool = False) -> dict:
         return stats
 
 
-def _build_filename_from_fields(metadata: dict, fields: list[str], file_hash: str) -> str:
-    engine = RuleEngine()
+def _build_filename_from_fields(metadata: dict, fields: list[str], file_hash: str, *, profile_context: dict | None = None) -> str:
+    engine = RuleEngine(profile_context=profile_context)
     parts = []
     for field_name in fields:
         value = engine.get_nested_value(metadata, field_name)
@@ -118,12 +132,14 @@ def _build_filename_from_fields(metadata: dict, fields: list[str], file_hash: st
             if len(component) > 80:
                 component = component[:80].rsplit(" ", 1)[0]
             parts.append(component)
-    ext = metadata.get("source_extension") or ".pdf"
-    parts.append(f"{file_hash}{ext}")
+    extension = metadata.get("source_extension") or ".pdf"
+    parts.append(f"{file_hash}{extension}")
     return " - ".join(parts).lower()
 
 
 def _should_skip_copy(src: Path, dst: Path) -> bool:
+    from papertrail.hashing import hash_file_fast
+
     return dst.exists() and src.stat().st_size == dst.stat().st_size and hash_file_fast(src) == hash_file_fast(dst)
 
 
@@ -138,20 +154,17 @@ def _check_file_size(src: Path, max_file_size_mb: float | None) -> None:
 
 
 def copy_matching(
-    app: App,
+    runtime: Runtime,
     processed_path: Path,
     pattern: str,
     dest_folder: Path,
+    *,
     incremental: bool = False,
     export_config=None,
     profile_context: Optional[dict] = None,
     quiet: bool = False,
 ) -> dict:
-    """Copy matching documents and their sidecars to a destination."""
-    from papertrail.utils import make_matcher
-
-    store = DocumentStore(app)
-    console = app.console
+    repository = DocumentRepository(runtime)
     matcher = make_matcher(pattern, use_search=True)
     dest_folder.mkdir(parents=True, exist_ok=True)
 
@@ -163,8 +176,8 @@ def copy_matching(
     stats = {"copied": 0, "skipped": 0, "deduped": 0, "total": 0}
     seen_content_hashes: set[str] = set()
 
-    documents = list(store.iter_documents(processed_path, validate=False, require_companion=True))
-    for json_path, doc_path, metadata in console.track(documents, "Copying files"):
+    documents = list(repository.iter_documents(processed_path, validate=False, require_companion=True))
+    for json_path, doc_path, metadata in runtime.console.track(documents, "Copying files"):
         metadata_dict = metadata.model_dump() if isinstance(metadata, DocumentMetadata) else metadata
         if not matcher(doc_path.name) and not matcher(json_path.name):
             continue
@@ -182,7 +195,12 @@ def copy_matching(
             prefix = engine.evaluate_export_prefix(metadata_dict, file_mappings=file_mappings)
             if file_mappings.filename_fields:
                 file_hash = metadata_dict.get("hash_file", doc_path.stem.split(" - ")[-1])
-                base_name = _build_filename_from_fields(metadata_dict, list(file_mappings.filename_fields), file_hash)
+                base_name = _build_filename_from_fields(
+                    metadata_dict,
+                    list(file_mappings.filename_fields),
+                    file_hash,
+                    profile_context=profile_context,
+                )
             else:
                 base_name = doc_path.name
             dest_doc = dest_folder / f"{prefix}{base_name}"
@@ -199,21 +217,19 @@ def copy_matching(
         shutil.copy2(doc_path, dest_doc)
         metadata_copy = dict(metadata_dict)
         metadata_copy["source_filename"] = doc_path.name
-        store.save_json(dest_json, metadata_copy)
+        repository.save_json(dest_json, metadata_copy)
         stats["copied"] += 1
 
     if not quiet:
-        console.success(f"Copied {stats['copied']} files to {dest_folder.name}", indent=False)
+        runtime.console.success(f"Copied {stats['copied']} files to {dest_folder.name}", indent=False)
     return stats
 
 
-def export_excel(app: App, processed_path: Path, excel_output_path: str, quiet: bool = False) -> dict:
-    """Export metadata to an Excel file."""
-    store = DocumentStore(app)
-    console = app.console
+def export_excel(runtime: Runtime, processed_path: Path, excel_output_path: str, *, quiet: bool = False) -> dict:
+    repository = DocumentRepository(runtime)
     metadata_list = []
 
-    for metadata_path, metadata in store.load_sidecars_parallel(
+    for metadata_path, metadata in repository.load_sidecars_parallel(
         processed_path,
         validate=True,
         show_progress=not quiet,
@@ -222,7 +238,7 @@ def export_excel(app: App, processed_path: Path, excel_output_path: str, quiet: 
         metadata_dict = metadata.model_dump()
         metadata_dict.pop("class_reasoning", None)
 
-        doc_path = store.find_companion(metadata_path, metadata_dict)
+        doc_path = repository.find_companion(metadata_path, metadata_dict)
         filename = doc_path.name if doc_path and doc_path.exists() else ""
         metadata_dict["filename"] = filename
         metadata_dict["filename_length"] = len(filename)
@@ -242,53 +258,67 @@ def export_excel(app: App, processed_path: Path, excel_output_path: str, quiet: 
 
     if not metadata_list:
         if not quiet:
-            console.warning("No valid metadata found to export", indent=False)
+            runtime.console.warning("No valid metadata found to export", indent=False)
         return {"exported": 0}
 
-    df = pd.DataFrame(metadata_list)
+    dataframe = pd.DataFrame(metadata_list)
     ordered_cols = [
-        "class_confidence", "date_issued", "year", "month", "hash_content", "hash_file",
-        "filename", "filename_length", "page_count", "document_type", "document_type_raw",
-        "document_title", "issuing_party", "issuing_party_raw",
-        "total_amount", "total_amount_currency",
+        "class_confidence",
+        "date_issued",
+        "year",
+        "month",
+        "hash_content",
+        "hash_file",
+        "filename",
+        "filename_length",
+        "page_count",
+        "document_type",
+        "document_type_raw",
+        "document_title",
+        "issuing_party",
+        "issuing_party_raw",
+        "total_amount",
+        "total_amount_currency",
     ]
-    extra_cols = [col for col in df.columns if col not in ordered_cols]
-    df = df[ordered_cols + extra_cols]
+    extra_cols = [col for col in dataframe.columns if col not in ordered_cols]
+    dataframe = dataframe[ordered_cols + extra_cols]
 
-    if "date_issued" in df.columns:
-        df = df.sort_values(by="date_issued", ascending=False)
+    if "date_issued" in dataframe.columns:
+        dataframe = dataframe.sort_values(by="date_issued", ascending=False)
 
     with pd.ExcelWriter(excel_output_path, engine="openpyxl") as writer:
-        df.to_excel(writer, index=False, sheet_name="Sheet1")
+        dataframe.to_excel(writer, index=False, sheet_name="Sheet1")
         worksheet = writer.sheets["Sheet1"]
         worksheet.freeze_panes = "A2"
 
         from openpyxl.utils import get_column_letter
 
         for col in ordered_cols:
-            if col in df.columns:
-                col_idx = df.columns.get_loc(col) + 1
+            if col in dataframe.columns:
+                col_idx = dataframe.columns.get_loc(col) + 1
                 col_letter = get_column_letter(col_idx)
-                values_lens = [len(str(val)) for val in df[col].values if val is not None]
-                max_len = max(values_lens + [len(col)])
+                value_lengths = [len(str(value)) for value in dataframe[col].values if value is not None]
+                max_len = max(value_lengths + [len(col)])
                 worksheet.column_dimensions[col_letter].width = min(max_len + 2, 102)
 
         for col in ("year", "month", "filename_length"):
-            if col in df.columns:
-                col_letter = get_column_letter(df.columns.get_loc(col) + 1)
+            if col in dataframe.columns:
+                col_letter = get_column_letter(dataframe.columns.get_loc(col) + 1)
                 worksheet.column_dimensions[col_letter].hidden = True
 
     if not quiet:
-        console.success(f"Exported {len(df)} entries", indent=False)
-    logger.debug(f"Exported {len(df)} entries to {excel_output_path}")
-    return {"exported": len(df)}
+        runtime.console.success(f"Exported {len(dataframe)} entries", indent=False)
+    logger.debug(f"Exported {len(dataframe)} entries to {excel_output_path}")
+    return {"exported": len(dataframe)}
 
 
 def _calculate_directory_hash(directory: Path) -> str:
+    from papertrail.hashing import hash_file_fast
+
     pdf_files = sorted(directory.glob("*.pdf"))
     if not pdf_files:
         return ""
-    combined = [f"{f.name}:{hash_file_fast(f)}" for f in pdf_files]
+    combined = [f"{path.name}:{hash_file_fast(path)}" for path in pdf_files]
     return hashlib.sha256("\n".join(combined).encode()).hexdigest()[:16]
 
 
@@ -308,37 +338,32 @@ def _directory_has_changed(directory: Path) -> bool:
 
 
 def export_dates(
-    app: App,
+    runtime: Runtime,
     processed_path: Path,
     export_base_dir: Path,
     run_merge: bool = False,
+    *,
     export_config=None,
     profile_context: dict | None = None,
 ) -> None:
-    """Export files for all unique dates found in processed files."""
-    from papertrail.tasks.check import validate_merged_pdf
+    repository = DocumentRepository(runtime)
 
-    store = DocumentStore(app)
-    console = app.console
-
-    with task_log_context(processed_path, "export_all_dates", show_header=False):
-        all_dates = store.unique_dates(processed_path)
+    with _task_log_context(runtime, processed_path, "export_all_dates", show_header=False):
+        all_dates = repository.unique_dates(processed_path)
         if not all_dates:
-            console.warning("No dates found in processed files", indent=False)
+            runtime.console.warning("No dates found in processed files", indent=False)
             return
 
         total_copied = 0
         total_skipped = 0
         changed_directories = []
-        for date in console.track(all_dates, "Exporting dates"):
+        for date in runtime.console.track(all_dates, "Exporting dates"):
             export_date_dir = export_base_dir / date
-            logger.debug(f"[{date}] Processing...")
-
             if export_date_dir.exists():
                 shutil.rmtree(export_date_dir)
 
             stats = copy_matching(
-                app,
+                runtime,
                 processed_path,
                 date,
                 export_date_dir,
@@ -355,54 +380,41 @@ def export_dates(
             elif stats["total"] > 0 and export_date_dir.exists() and _directory_has_changed(export_date_dir):
                 changed_directories.append(export_date_dir)
 
-        console.success(f"{len(all_dates)} dates exported, {total_copied} files copied", indent=False)
+        runtime.console.success(f"{len(all_dates)} dates exported, {total_copied} files copied", indent=False)
         logger.debug(
             f"Processed {len(all_dates)} date(s), Total files copied: {total_copied}, Skipped: {total_skipped}"
         )
 
         if run_merge and changed_directories:
-            from pdf_gluer import merge_all_pdfs
-
-            logger.debug("=== Running PDF Merge ===")
-            for export_dir in console.track(changed_directories, "Merging PDFs"):
-                logger.debug(f"Merging PDFs in {export_dir}...")
+            for export_dir in runtime.console.track(changed_directories, "Merging PDFs"):
                 try:
                     merge_all_pdfs(str(export_dir))
                     validate_merged_pdf(export_dir)
                 except Exception as exc:
                     logger.error(f"Merge failed: {exc}")
 
-            console.success(f"Merged {len(changed_directories)} directories", indent=False)
+            runtime.console.success(f"Merged {len(changed_directories)} directories", indent=False)
 
 
-def archive(app: App, processed_path: Path, digests: list[str], dry_run: bool = False) -> None:
-    """Archive documents by hash_file digest."""
-    console = app.console
-    store = DocumentStore(app)
-
+def archive(runtime: Runtime, processed_path: Path, digests: list[str], *, dry_run: bool = False) -> None:
+    repository = DocumentRepository(runtime)
     if dry_run:
-        console.info("Dry run - no files will be moved", indent=False)
-
-    stats = store.archive_by_hash_file(digests, dry_run=dry_run, scope=processed_path)
+        runtime.console.info("Dry run - no files will be moved", indent=False)
+    stats = repository.archive_by_hash_file(digests, dry_run=dry_run, scope=processed_path)
     for digest in stats["not_found"]:
-        console.warning(f"[NOT FOUND] {digest}", indent=False)
+        runtime.console.warning(f"[NOT FOUND] {digest}", indent=False)
 
-    console.info(
+    runtime.console.info(
         f"Archive: {stats['found']} found, {stats['archived']} archived, {len(stats['not_found'])} not found",
         indent=False,
     )
     if not dry_run and stats["archived"] > 0:
-        console.detail(f"Archived to: {stats['archive_dir']}", indent=False)
+        runtime.console.detail(f"Archived to: {stats['archive_dir']}", indent=False)
 
 
-def gmail(app: App, months: int = 2) -> None:
-    """Download email attachments from Gmail."""
-    from papertrail.gmail import download_gmail_attachments
-    from papertrail.utils import compute_month_range, month_to_date_range
-
-    console = app.console
-    raw_paths = app.profile.paths.raw
-    processed_path_str = app.profile.paths.processed
+def gmail(runtime: Runtime, *, months: int = 2) -> None:
+    raw_paths = runtime.profile.paths.raw
+    processed_path_str = runtime.profile.paths.processed
 
     if processed_path_str:
         setup_task_logging(Path(processed_path_str), "gmail_download")
@@ -413,11 +425,11 @@ def gmail(app: App, months: int = 2) -> None:
             missing.append("paths.raw")
         if not processed_path_str:
             missing.append("paths.processed")
-        console.error(f"Missing required profile settings: {', '.join(missing)}", indent=False)
+        runtime.console.error(f"Missing required profile settings: {', '.join(missing)}", indent=False)
         raise RuntimeError(f"Missing required profile settings: {', '.join(missing)}")
 
     raw_path = Path(raw_paths[0])
-    export_dates = compute_month_range(months)
+    export_dates_list = compute_month_range(months)
     totals = {
         "messages_found": 0,
         "messages_processed": 0,
@@ -426,9 +438,10 @@ def gmail(app: App, months: int = 2) -> None:
         "attachments_failed": 0,
         "bytes_downloaded": 0,
     }
-
     gmail_dir = raw_path / "gmail"
-    for month in export_dates:
+    paths = get_gmail_config_paths(runtime.profile)
+
+    for month in export_dates_list:
         month_dir = gmail_dir / month
         month_dir.mkdir(parents=True, exist_ok=True)
         start_date, end_date = month_to_date_range([month])
@@ -440,76 +453,123 @@ def gmail(app: App, months: int = 2) -> None:
                 start_date=start_date,
                 end_date=end_date,
                 tracking_dir=gmail_dir,
+                credentials_path=paths["credentials"],
+                token_path=paths["token"],
+                settings_path=paths["settings"],
+                settings=runtime.profile.gmail,
+                console=runtime.console,
             )
         except FileNotFoundError as exc:
-            console.error(f"Gmail credentials not found: {exc}", indent=False)
+            runtime.console.error(f"Gmail credentials not found: {exc}", indent=False)
             raise RuntimeError(f"Gmail credentials not found: {exc}") from exc
         except Exception as exc:
             error_type = type(exc).__name__
-            console.error(f"Gmail download failed ({error_type}): {exc}", indent=False)
+            runtime.console.error(f"Gmail download failed ({error_type}): {exc}", indent=False)
             raise RuntimeError(f"Gmail download failed ({error_type}): {exc}") from exc
 
         for key in totals:
             totals[key] += stats[key]
 
     if totals["attachments_downloaded"] > 0:
-        console.success(
+        runtime.console.success(
             f"{totals['messages_processed']} messages processed, {totals['attachments_downloaded']} new attachments",
             indent=False,
         )
     elif totals["messages_processed"] > 0:
-        console.success(
-            f"{totals['messages_processed']} messages processed, 0 new attachments",
-            indent=False,
-        )
+        runtime.console.success(f"{totals['messages_processed']} messages processed, 0 new attachments", indent=False)
     else:
-        date_range = f"{export_dates[0]} to {export_dates[-1]}"
-        console.warning(f"No messages found ({date_range})", indent=False)
+        date_range = f"{export_dates_list[0]} to {export_dates_list[-1]}"
+        runtime.console.warning(f"No messages found ({date_range})", indent=False)
 
 
-def check(app: App, processed_path: Path, verify_hashes: bool = False, dry_run: bool = False) -> None:
-    """Run the integrity and backfill checks."""
-    from papertrail.tasks.check import task_check as _task_check_impl
+def check(runtime: Runtime, processed_path: Path, *, verify_hashes: bool = False, dry_run: bool = False) -> None:
+    repository = DocumentRepository(runtime)
+    engine = DocumentEngine(runtime, repository)
+    run_check(runtime, repository, engine, processed_path, verify_hashes=verify_hashes, dry_run=dry_run)
 
-    _task_check_impl(processed_path, verify_hashes=verify_hashes, dry_run=dry_run)
 
+def merge_reconciled_attachments(runtime: Runtime, export_path: Path, all_matches: list, merge_rules: list) -> dict:
+    stats = {"merged": 0, "skipped": 0, "errors": 0}
+    if not merge_rules or not all_matches:
+        return stats
 
-def validate_merged_pdf(folder_path: Path) -> bool:
-    """Validate that a merged PDF has the expected page count."""
-    from papertrail.tasks.check import validate_merged_pdf as _validate_merged_pdf
+    merged_attachments: set[str] = set()
+    engine = RuleEngine()
 
-    return _validate_merged_pdf(folder_path)
+    for match in all_matches:
+        for target, attachment in engine.select_merge_pairs(match, merge_rules):
+            target_pdf = export_path / target.pdf_filename
+            if not target_pdf.exists() or target_pdf.suffix.lower() != ".pdf":
+                continue
+
+            if attachment.pdf_filename in merged_attachments:
+                stats["skipped"] += 1
+                continue
+
+            attach_pdf = export_path / attachment.pdf_filename
+            if not attach_pdf.exists() or attach_pdf.suffix.lower() != ".pdf":
+                continue
+            if target_pdf == attach_pdf:
+                continue
+
+            try:
+                import pikepdf
+
+                with pikepdf.open(target_pdf, allow_overwriting_input=True) as target_doc:
+                    with pikepdf.open(attach_pdf) as attach_doc:
+                        target_doc.pages.extend(attach_doc.pages)
+                    target_doc.save(target_pdf)
+                merged_attachments.add(attachment.pdf_filename)
+                stats["merged"] += 1
+            except Exception as exc:
+                stats["errors"] += 1
+                logger.error(
+                    f"[MERGE] Failed to append {attachment.pdf_filename} to {target.pdf_filename}: {exc}"
+                )
+
+    return stats
 
 
 def reconcile(
-    app: App,
+    runtime: Runtime,
     export_path: Path,
+    *,
     excel_path: Optional[Path] = None,
     dry_run: bool = False,
 ) -> None:
-    """Reconcile bank transactions against exported documents."""
-    from papertrail.tasks.reconciliation import task_reconcile as _task_reconcile_impl
+    repository = DocumentRepository(runtime)
+    with _task_log_context(runtime, export_path, "reconcile"):
+        if excel_path is not None:
+            excel_paths = [excel_path]
+        else:
+            excel_paths = discover_bank_statements(repository, export_path)
+            if not excel_paths:
+                fallback = export_path / "transactions.xlsx"
+                if fallback.exists():
+                    excel_paths = [fallback]
 
-    _task_reconcile_impl(export_path, excel_path=excel_path, dry_run=dry_run)
+        if not excel_paths:
+            runtime.console.warning("No bank statements found to reconcile", indent=False)
+            return
+
+        for path in excel_paths:
+            if not path.exists():
+                runtime.console.error(f"Excel file not found: {path}", indent=False)
+                continue
+            with runtime.console.task(f"Reconcile: {path.name}"):
+                reconcile_single(runtime, repository, export_path, path, dry_run=dry_run)
 
 
 def pipeline(
-    app: App,
+    runtime: Runtime,
+    *,
     months: int = 2,
     export_date_arg: Optional[str] = None,
     processed_path_override: Optional[Path] = None,
 ) -> None:
-    """Run the full document processing pipeline."""
-    from papertrail.config import get_passwords
-    from papertrail.mbox import extract_mbox_attachments
-    from papertrail.tasks.check import validate_merged_pdf
-    from papertrail.tasks.organize import merge_reconciled_attachments
-    from papertrail.tasks.reconciliation import _discover_bank_statements, _reconcile_single
-    from papertrail.utils import compute_month_range, month_to_date_range
-
-    console = app.console
+    console = runtime.console
     start_time = time.time()
-    profile = app.profile
+    profile = runtime.profile
 
     raw_dirs = profile.paths.raw
     processed_dir = str(processed_path_override or profile.paths.processed or "")
@@ -530,17 +590,13 @@ def pipeline(
     log_file_path = setup_task_logging(processed_path, "pipeline")
     console.pipeline_header(profile.profile.name, str(log_file_path))
 
-    if export_date_arg:
-        export_dates_list = [export_date_arg]
-    else:
-        export_dates_list = compute_month_range(months)
-
-    for ed in export_dates_list:
-        if not re.match(r"^\d{4}-\d{2}$", ed):
-            console.error(f"The export_date must be in YYYY-MM format: {ed}", indent=False)
+    export_dates_list = [export_date_arg] if export_date_arg else compute_month_range(months)
+    for export_date in export_dates_list:
+        if not re.match(r"^\d{4}-\d{2}$", export_date):
+            console.error(f"The export_date must be in YYYY-MM format: {export_date}", indent=False)
             sys.exit(1)
 
-    passwords, _ = get_passwords()
+    passwords, _ = get_passwords_from_profile(profile)
     if not passwords:
         logger.debug("No passwords configured. Password-protected archives will be skipped.")
 
@@ -552,39 +608,8 @@ def pipeline(
     if profile.gmail.enabled:
         with console.step_progress("Download Gmail attachments") as step:
             try:
-                from papertrail.gmail import download_gmail_attachments
-
-                raw_path = Path(raw_dirs[0])
-                gmail_dir = raw_path / "gmail"
-                totals = {
-                    "messages_found": 0,
-                    "messages_processed": 0,
-                    "messages_skipped": 0,
-                    "attachments_downloaded": 0,
-                    "attachments_failed": 0,
-                    "bytes_downloaded": 0,
-                }
-                for month in export_dates_list:
-                    month_dir = gmail_dir / month
-                    month_dir.mkdir(parents=True, exist_ok=True)
-                    gmail_start, gmail_end = month_to_date_range([month])
-                    month_stats = download_gmail_attachments(
-                        output_dir=month_dir,
-                        start_date=gmail_start,
-                        end_date=gmail_end,
-                        quiet=True,
-                        tracking_dir=gmail_dir,
-                    )
-                    for key in totals:
-                        totals[key] += month_stats[key]
-
-                if totals["attachments_downloaded"] > 0:
-                    step.success(f"{totals['messages_processed']} messages, {totals['attachments_downloaded']} new attachments")
-                elif totals["messages_processed"] > 0:
-                    step.success(f"{totals['messages_processed']} messages, 0 new attachments")
-                else:
-                    date_range = f"{export_dates_list[0]} to {export_dates_list[-1]}"
-                    step.warning(f"No messages found ({date_range})")
+                gmail(runtime, months=months)
+                step.success("Download completed")
             except Exception as exc:
                 msg = f"Gmail download failed, continuing pipeline ({exc})"
                 step.warning(msg)
@@ -603,8 +628,6 @@ def pipeline(
                 sys.exit(1)
 
         with console.step_progress("Extract compressed archives") as step:
-            from archive_extractor import extract_archives
-
             with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()), warnings.catch_warnings():
                 warnings.simplefilter("ignore")
                 results = extract_archives(raw_dir, passwords=passwords if passwords else None)
@@ -624,7 +647,7 @@ def pipeline(
 
     console.step("Classify new documents")
     try:
-        extract_stats = extract(app, processed_path, [Path(d) for d in raw_dirs], quiet=False)
+        extract_stats = extract(runtime, processed_path, [Path(directory) for directory in raw_dirs], quiet=False)
         if extract_stats is None:
             console.warning("Extraction locked by another process")
         elif extract_stats["failed"] > 0:
@@ -656,7 +679,7 @@ def pipeline(
 
     console.step("Sync orphaned metadata")
     try:
-        sync_stats = sync(app, processed_path, quiet=False)
+        sync_stats = sync(runtime, processed_path, quiet=False)
         orphans = sync_stats.get("targets", 0)
         if orphans == 0:
             console.success("0 orphans found")
@@ -669,7 +692,7 @@ def pipeline(
 
     with console.step_progress("Sync filenames to metadata") as step:
         try:
-            rename_stats = rename(app, processed_path, quiet=True)
+            rename_stats = rename(runtime, processed_path, quiet=True)
             step.success(f"{rename_stats['validated']} validated, {rename_stats['renamed']} renamed")
             if rename_stats["renamed"] > 0:
                 summary["Renamed"] = f"{rename_stats['renamed']} files"
@@ -684,7 +707,7 @@ def pipeline(
 
     with console.step_progress("Export to Excel") as step:
         try:
-            excel_stats = export_excel(app, processed_path, str(processed_files_excel_path), quiet=True)
+            excel_stats = export_excel(runtime, processed_path, str(processed_files_excel_path), quiet=True)
             if excel_stats["exported"]:
                 step.success(f"{excel_stats['exported']} entries")
                 summary["Exported"] = f"{excel_stats['exported']} entries"
@@ -707,7 +730,7 @@ def pipeline(
         with console.step_progress(f"Export documents ({export_date})") as step:
             try:
                 copy_stats = copy_matching(
-                    app,
+                    runtime,
                     processed_path,
                     export_date,
                     Path(export_date_dir),
@@ -718,10 +741,10 @@ def pipeline(
                 copied = copy_stats.get("copied", 0)
                 deduped = copy_stats.get("deduped", 0)
                 if copied:
-                    msg = f"{copied} files"
+                    message = f"{copied} files"
                     if deduped > 0:
-                        msg += f" ({deduped} content dupes skipped)"
-                    step.success(msg)
+                        message += f" ({deduped} content dupes skipped)"
+                    step.success(message)
                 else:
                     step.success("0 files")
             except Exception as exc:
@@ -729,13 +752,14 @@ def pipeline(
                 sys.exit(1)
 
         all_recon_matches = []
-        bank_statements = _discover_bank_statements(Path(export_date_dir))
+        repository = DocumentRepository(runtime)
+        bank_statements = discover_bank_statements(repository, Path(export_date_dir))
         for statement_path in bank_statements:
             statement_json = statement_path.with_suffix(".json")
             statement_info = {}
             if statement_json.exists():
                 try:
-                    statement_info = DocumentStore(app).load_metadata(statement_json).get("bank_statement", {}) or {}
+                    statement_info = repository.load_metadata(statement_json).get("bank_statement", {}) or {}
                 except Exception:
                     pass
             account = statement_info.get("account_number", statement_path.stem)
@@ -745,14 +769,21 @@ def pipeline(
 
             with console.step_progress(f"Match bank transactions: {account} ({period})") as step:
                 try:
-                    recon_stats = _reconcile_single(Path(export_date_dir), statement_path, dry_run=False, console=console, quiet=True)
+                    recon_stats = reconcile_single(
+                        runtime,
+                        repository,
+                        Path(export_date_dir),
+                        statement_path,
+                        dry_run=False,
+                        quiet=True,
+                    )
                     recon_stats_all.append(recon_stats)
                     all_recon_matches.extend(recon_stats.get("matches", []))
-                    reconciled = recon_stats["reconciled"]
+                    reconciled_count = recon_stats["reconciled"]
                     total = recon_stats["total"]
                     pct = recon_stats["reconciliation_rate"]
                     if total > 0:
-                        step.success(f"{reconciled}/{total} reconciled ({pct:.0f}%)")
+                        step.success(f"{reconciled_count}/{total} reconciled ({pct:.0f}%)")
                     else:
                         step.warning("No transactions found")
                 except Exception as exc:
@@ -762,7 +793,7 @@ def pipeline(
         if merge_rules and all_recon_matches:
             with console.step_progress(f"Merge attachments ({export_date})") as step:
                 try:
-                    merge_stats = merge_reconciled_attachments(Path(export_date_dir), all_recon_matches, merge_rules)
+                    merge_stats = merge_reconciled_attachments(runtime, Path(export_date_dir), all_recon_matches, merge_rules)
                     merged = merge_stats["merged"]
                     errors = merge_stats["errors"]
                     if merged > 0:
@@ -777,14 +808,17 @@ def pipeline(
 
         with console.step_progress(f"Merge PDFs ({export_date})") as step:
             try:
-                from pdf_gluer import merge_all_pdfs
-
                 with suppress_console_logging():
                     merge_all_pdfs(export_date_dir)
-
                 merged_files = list(Path(export_date_dir).glob("merged_*.pdf"))
                 if merged_files:
-                    prefixes = sorted({f.stem.split("_", 1)[1].upper() + "_" for f in merged_files if "_" in f.stem})
+                    prefixes = sorted(
+                        {
+                            file.stem.split("_", 1)[1].upper() + "_"
+                            for file in merged_files
+                            if "_" in file.stem
+                        }
+                    )
                     step.success(f"{len(merged_files)} merged PDFs ({', '.join(prefixes)})")
                 else:
                     step.success("0 merged PDFs")
@@ -800,11 +834,14 @@ def pipeline(
 
     if recon_stats_all:
         total_statements = len(recon_stats_all)
-        total_reconciled = sum(s["reconciled"] for s in recon_stats_all)
-        total_txns = sum(s["total"] for s in recon_stats_all)
+        total_reconciled = sum(stats["reconciled"] for stats in recon_stats_all)
+        total_txns = sum(stats["total"] for stats in recon_stats_all)
         if total_txns > 0:
             avg_rate = total_reconciled / total_txns * 100
-            summary["Reconciled"] = f"{total_statements} statement{'s' if total_statements != 1 else ''}, {avg_rate:.0f}% reconciled ({total_reconciled}/{total_txns})"
+            summary["Reconciled"] = (
+                f"{total_statements} statement{'s' if total_statements != 1 else ''}, "
+                f"{avg_rate:.0f}% reconciled ({total_reconciled}/{total_txns})"
+            )
 
     output_paths.append(("Excel", str(processed_files_excel_path)))
     output_paths.append(("Log", str(log_file_path)))
@@ -818,39 +855,18 @@ def pipeline(
     logger.debug("All steps completed successfully.")
 
 
-task_extract_new = extract
-task_sync = sync
-task_rename_files = rename
-copy_matching_files = copy_matching
-export_metadata_to_excel = export_excel
-task_export_all_dates = export_dates
-task_archive = archive
-task_gmail_download = gmail
-task_check = check
-task_reconcile = reconcile
-
-
 __all__ = [
     "archive",
     "check",
     "copy_matching",
-    "copy_matching_files",
     "export_dates",
     "export_excel",
-    "export_metadata_to_excel",
     "extract",
     "gmail",
+    "merge_reconciled_attachments",
     "pipeline",
     "reconcile",
     "rename",
     "sync",
-    "task_archive",
-    "task_check",
-    "task_export_all_dates",
-    "task_extract_new",
-    "task_gmail_download",
-    "task_reconcile",
-    "task_rename_files",
-    "task_sync",
     "validate_merged_pdf",
 ]

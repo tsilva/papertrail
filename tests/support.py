@@ -5,13 +5,11 @@ import fitz
 import openpyxl
 from PIL import Image
 
-from papertrail.app import App, AppPaths, set_app
-from papertrail.config import Config
-from papertrail.console import PapertrailConsole
-from papertrail.hashing import HashCache
+from papertrail.config import ProfileSettings
+from papertrail.runtime import Runtime, runtime_from_profile
 
 
-def make_test_app(root: Path) -> App:
+def make_test_runtime(root: Path) -> Runtime:
     raw = root / "raw"
     processed = root / "processed"
     export = root / "export"
@@ -21,7 +19,7 @@ def make_test_app(root: Path) -> App:
     export.mkdir()
     cache.mkdir()
 
-    profile = Config(
+    profile = ProfileSettings.model_validate(
         {
             "profile": {"name": "test", "description": "", "tax_number": None},
             "paths": {
@@ -78,30 +76,17 @@ def make_test_app(root: Path) -> App:
                 "merge_rules": [],
                 "max_file_size_mb": None,
             },
+            "profile_path": root / "profile.yaml",
+            "profile_dir": root,
         }
     )
 
-    return App(
-        profile=profile,
-        profile_name="test",
-        paths=AppPaths(
-            raw=[raw],
-            processed=processed,
-            export=export,
-            cache=cache,
-            profiles=root,
-        ),
-        model_id="test-model",
-        openai_client=None,
-        nif_cache=None,
-        hash_cache=HashCache(cache / "hash_cache.yaml"),
-        console=PapertrailConsole(),
-        api_accessible=False,
+    return runtime_from_profile(
+        profile,
+        profiles_dir=root,
+        enable_client=False,
+        probe_api=False,
     )
-
-
-def activate_test_app(app: App | None) -> None:
-    set_app(app)
 
 
 def create_pdf(pdf_path: Path, page_texts: list[str]) -> None:

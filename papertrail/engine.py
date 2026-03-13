@@ -1,4 +1,6 @@
-"""Document lifecycle service and classification helpers."""
+"""Document lifecycle engine and classification helpers."""
+
+from __future__ import annotations
 
 import json
 import shutil
@@ -9,24 +11,18 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 
-from papertrail.app import get_app
-from papertrail.logging_utils import (
-    log_failure,
-    get_logger,
-    DocumentLogger,
-)
-from papertrail.models import DocumentMetadata, DocumentMetadataRaw, SubDocumentMetadata
+from papertrail.bank_statement import classify_bank_statement
+from papertrail.hashing import hash_file_content, hash_file_fast, hash_file_text
 from papertrail.llm import (
-    get_system_prompt_classify,
-    normalize_issuing_party,
     build_extraction_tools,
     get_qr_exclusions,
+    get_system_prompt_classify,
+    normalize_issuing_party,
 )
-from papertrail.models import (
-    add_session_type,
-    add_session_party,
-)
+from papertrail.logging_utils import DocumentLogger, get_logger, log_failure
+from papertrail.models import DocumentMetadata, DocumentMetadataRaw, SubDocumentMetadata
 from papertrail.naming import file_name_from_metadata
+from papertrail.nif_lookup import NIFLookupCache
 from papertrail.pdf import (
     convert_image_to_pdf,
     find_document_files,
@@ -36,17 +32,19 @@ from papertrail.pdf import (
     render_pdf_to_images,
     split_pdf_bundle,
 )
-from papertrail.hashing import hash_file_fast, hash_file_content, hash_file_text
-from papertrail.qr import extract_all_metadata_from_qr, QRExtractedMetadata
-from papertrail.nif_lookup import NIFLookupCache
-from papertrail.store import DocumentStore
+from papertrail.qr import QRExtractedMetadata, extract_all_metadata_from_qr
+from papertrail.repository import DocumentRepository
+from papertrail.runtime import Runtime
 
-logger = get_logger('cli')
-
+logger = get_logger("engine")
 
 _QR_MERGE_FIELDS = (
-    "issue_date", "document_type", "total_amount",
-    "total_amount_currency", "issuer_tax_number", "locale",
+    "issue_date",
+    "document_type",
+    "total_amount",
+    "total_amount_currency",
+    "issuer_tax_number",
+    "locale",
 )
 
 
@@ -55,11 +53,6 @@ def _merge_qr_metadata(
     llm_values: dict,
     doc_logger: DocumentLogger | None,
 ) -> dict:
-    """Merge QR-extracted metadata with LLM-extracted values.
-
-    QR values override LLM values when present (100% confidence).
-    Mutates and returns llm_values dict.
-    """
     for field in _QR_MERGE_FIELDS:
         qr_val = getattr(qr_metadata, field)
         if qr_val is not None:
@@ -69,14 +62,7 @@ def _merge_qr_metadata(
     return llm_values
 
 
-def _phase0_qr_extract(pdf_path, doc_logger):
-    """Phase 0: Extract metadata from QR codes (fast, 100% accurate).
-
-    Returns 3-tuple: (qr_metadata, qr_raw_data, all_qr_results)
-    - 0 results: (None, None, [])
-    - 1 result: (metadata, raw_data, []) — single-QR path
-    - 2+ results: (None, None, all_results) — multi-QR, sub-documents
-    """
+def _phase0_qr_extract(pdf_path: Path, doc_logger: DocumentLogger | None):
     try:
         t0 = _time.monotonic()
         all_results = extract_all_metadata_from_qr(pdf_path)
@@ -93,55 +79,86 @@ def _phase0_qr_extract(pdf_path, doc_logger):
             if doc_logger:
                 doc_logger.log_qr_extraction(
                     qr_metadata.extraction_source,
-                    {k: getattr(qr_metadata, k) for k in (
-                        "issue_date", "document_type", "total_amount",
-                        "issuer_nif", "issuer_tax_number", "atcud", "locale",
-                    )},
+                    {
+                        key: getattr(qr_metadata, key)
+                        for key in (
+                            "issue_date",
+                            "document_type",
+                            "total_amount",
+                            "issuer_nif",
+                            "issuer_tax_number",
+                            "atcud",
+                            "locale",
+                        )
+                    },
                 )
             return qr_metadata, qr_raw_data, []
 
-        # 2+ results: multi-QR mode
         if doc_logger:
             doc_logger.log_multi_qr(len(all_results), pdf_path.name)
             for qr_meta, qr_raw in all_results:
                 doc_logger.log_qr_extraction(
                     qr_meta.extraction_source,
-                    {k: getattr(qr_meta, k) for k in (
-                        "issue_date", "document_type", "total_amount",
-                        "issuer_nif", "issuer_tax_number", "atcud", "locale",
-                    )},
+                    {
+                        key: getattr(qr_meta, key)
+                        for key in (
+                            "issue_date",
+                            "document_type",
+                            "total_amount",
+                            "issuer_nif",
+                            "issuer_tax_number",
+                            "atcud",
+                            "locale",
+                        )
+                    },
                     page_number=qr_raw.get("page_number", 0) if qr_raw else 0,
                 )
         return None, None, all_results
-
-    except Exception as e:
-        logger.debug(f"QR extraction failed (continuing with LLM): {e}")
+    except Exception as exc:
+        logger.debug(f"QR extraction failed (continuing with LLM): {exc}")
         if doc_logger:
             doc_logger.log_qr_not_found()
         return None, None, []
 
 
-def _phase1_llm_extract(pdf_path, exclude_fields, pre_extracted, ctx, doc_logger,
-                        multi_qr_info=None):
-    """Phase 1: Render PDF and extract metadata via LLM vision model."""
+def _phase1_llm_extract(
+    pdf_path: Path,
+    runtime: Runtime,
+    repository: DocumentRepository,
+    scope: str | Path,
+    exclude_fields: set[str],
+    pre_extracted: dict,
+    doc_logger: DocumentLogger | None,
+    *,
+    multi_qr_info: dict | None = None,
+) -> DocumentMetadataRaw:
     t0 = _time.monotonic()
     images_b64 = render_pdf_to_images(pdf_path)
     if doc_logger:
         doc_logger.log_timing("pdf_render", _time.monotonic() - t0)
 
-    user_content = [
-        {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{img_b64}"}}
-        for img_b64 in images_b64
-    ]
     messages = [
-        {"role": "system", "content": get_system_prompt_classify(
-            pre_extracted or None, multi_qr_info=multi_qr_info)},
-        {"role": "user", "content": user_content},
+        {
+            "role": "system",
+            "content": get_system_prompt_classify(
+                repository.registry.document_types(scope),
+                repository.registry.issuing_parties(scope),
+                pre_extracted or None,
+                multi_qr_info=multi_qr_info,
+            ),
+        },
+        {
+            "role": "user",
+            "content": [
+                {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{img_b64}"}}
+                for img_b64 in images_b64
+            ],
+        },
     ]
 
     t0 = _time.monotonic()
-    response = ctx.openai_client.chat.completions.create(
-        model=ctx.model_id,
+    response = runtime.openai_client.chat.completions.create(
+        model=runtime.model_id,
         max_tokens=4096,
         temperature=0,
         messages=messages,
@@ -151,9 +168,12 @@ def _phase1_llm_extract(pdf_path, exclude_fields, pre_extracted, ctx, doc_logger
     if doc_logger:
         doc_logger.log_timing("llm_extraction", _time.monotonic() - t0)
         if response.usage:
-            doc_logger.log_llm_usage(ctx.model_id, response.usage.prompt_tokens, response.usage.completion_tokens)
+            doc_logger.log_llm_usage(
+                runtime.model_id or "",
+                response.usage.prompt_tokens,
+                response.usage.completion_tokens,
+            )
 
-    # Warn if the API appears to have dropped images (token count too low for vision)
     if response.usage and response.usage.prompt_tokens < 100 and images_b64:
         logger.warning(
             f"[VISION-WARNING] Suspiciously low prompt_tokens={response.usage.prompt_tokens} "
@@ -166,8 +186,6 @@ def _phase1_llm_extract(pdf_path, exclude_fields, pre_extracted, ctx, doc_logger
         raise ValueError("OpenRouter did not return structured classification.")
 
     args = tool_calls[0].function.arguments
-
-    # Inject QR-extracted values before Pydantic parsing
     if pre_extracted:
         args_dict = json.loads(args)
         for field, value in pre_extracted.items():
@@ -181,13 +199,21 @@ def _phase1_llm_extract(pdf_path, exclude_fields, pre_extracted, ctx, doc_logger
     return raw_metadata
 
 
-def _enrich_nif(tax_number, ctx, doc_logger) -> tuple[str | None, str | None]:
-    """Shared NIF enrichment. Returns (normalized_party, raw_party) or (None, None)."""
-    if not (tax_number and ctx.nif_cache and NIFLookupCache.is_portuguese_nif(tax_number)):
+def _enrich_nif(
+    tax_number: str | None,
+    runtime: Runtime,
+    repository: DocumentRepository,
+    scope: str | Path,
+    doc_logger: DocumentLogger | None,
+) -> tuple[str | None, str | None]:
+    if not (
+        tax_number
+        and runtime.nif_cache
+        and NIFLookupCache.is_portuguese_nif(tax_number)
+    ):
         return None, None
 
-    official_issuer, lookup_source, lookup_error = ctx.nif_cache.lookup(tax_number)
-
+    official_issuer, lookup_source, lookup_error = runtime.nif_cache.lookup(tax_number)
     if not official_issuer:
         if doc_logger:
             if lookup_source == "web_error" and lookup_error:
@@ -202,50 +228,79 @@ def _enrich_nif(tax_number, ctx, doc_logger) -> tuple[str | None, str | None]:
         elif lookup_source == "web":
             doc_logger.log_nif_web_lookup(tax_number, official_issuer)
 
-    cached_normalized = ctx.nif_cache.get_normalized(tax_number)
+    cached_normalized = runtime.nif_cache.get_normalized(tax_number)
     if cached_normalized:
         if doc_logger:
             doc_logger.log_nif_enrichment(tax_number, official_issuer, cached_normalized)
+        repository.registry.register_issuing_party(cached_normalized)
         return cached_normalized, official_issuer
 
-    nif_normalized = normalize_issuing_party(official_issuer, ctx.openai_client, ctx.model_id)
+    nif_normalized = normalize_issuing_party(
+        official_issuer,
+        runtime.openai_client,
+        runtime.model_id,
+        repository.registry.issuing_parties(scope),
+    )
     if nif_normalized != "$UNKNOWN$":
-        ctx.nif_cache.set_normalized(tax_number, nif_normalized)
+        canonical = repository.registry.register_issuing_party(nif_normalized)
+        runtime.nif_cache.set_normalized(tax_number, canonical or nif_normalized)
         if doc_logger:
-            doc_logger.log_nif_enrichment(tax_number, official_issuer, nif_normalized)
-        return nif_normalized, official_issuer
+            doc_logger.log_nif_enrichment(tax_number, official_issuer, canonical or nif_normalized)
+        return canonical or nif_normalized, official_issuer
 
     logger.debug(f"[NIF-ENRICH] Keeping original issuer (NIF name didn't normalize): {official_issuer}")
     return None, official_issuer
 
 
-def _phase4_nif_enrich(merged, raw_metadata, normalized_issuing_party, ctx, doc_logger):
-    """Phase 4: Enrich issuing party using NIF tax number lookup."""
+def _phase4_nif_enrich(
+    merged: dict,
+    normalized_issuing_party: str,
+    runtime: Runtime,
+    repository: DocumentRepository,
+    scope: str | Path,
+    doc_logger: DocumentLogger | None,
+) -> str:
     if merged["locale"] != "pt-PT":
         return normalized_issuing_party
 
     t0 = _time.monotonic()
-    enriched, _ = _enrich_nif(merged["issuer_tax_number"], ctx, doc_logger)
+    enriched, _ = _enrich_nif(
+        merged["issuer_tax_number"],
+        runtime,
+        repository,
+        scope,
+        doc_logger,
+    )
     if enriched:
         normalized_issuing_party = enriched
     if doc_logger:
         doc_logger.log_timing("nif_enrichment", _time.monotonic() - t0)
-    if ctx.nif_cache is not None:
-        ctx.nif_cache.save()
+    if runtime.nif_cache is not None:
+        runtime.nif_cache.save()
     return normalized_issuing_party
 
 
-def _build_sub_documents(all_qr_results, ctx, doc_logger):
-    """Build sub-document metadata list from multiple QR results."""
+def _build_sub_documents(
+    all_qr_results: list[tuple[QRExtractedMetadata, dict]],
+    runtime: Runtime,
+    repository: DocumentRepository,
+    scope: str | Path,
+    doc_logger: DocumentLogger | None,
+) -> list[dict]:
     sub_docs = []
     for qr_metadata, qr_raw_data in all_qr_results:
-        enriched, raw_issuer = _enrich_nif(qr_metadata.issuer_tax_number, ctx, doc_logger)
+        enriched, raw_issuer = _enrich_nif(
+            qr_metadata.issuer_tax_number,
+            runtime,
+            repository,
+            scope,
+            doc_logger,
+        )
         if enriched:
-            add_session_party(enriched)
-
+            repository.registry.register_issuing_party(enriched)
         sub_doc = SubDocumentMetadata(
             date_issued=qr_metadata.issue_date,
-            document_type=qr_metadata.document_type,
+            document_type=repository.registry.canonicalize_document_type(qr_metadata.document_type),
             total_amount=qr_metadata.total_amount,
             total_amount_currency=qr_metadata.total_amount_currency,
             issuer_tax_number=qr_metadata.issuer_tax_number,
@@ -258,145 +313,91 @@ def _build_sub_documents(all_qr_results, ctx, doc_logger):
         )
         sub_docs.append(sub_doc.model_dump())
 
-    if ctx.nif_cache:
-        ctx.nif_cache.save()
-
+    if runtime.nif_cache is not None:
+        runtime.nif_cache.save()
     return sub_docs
 
 
-def classify_pdf_document(
-    pdf_path: Path,
-    file_hash: str,
-    failure_logger=None,
-    doc_logger: DocumentLogger = None,
-    app=None,
-) -> DocumentMetadata:
-    """Classify a PDF document using QR extraction and LLM.
+def _collect_sync_targets(
+    repository: DocumentRepository,
+    processed_path: Path,
+    *,
+    all_unknown: bool = False,
+    pattern: str | None = None,
+    orphans_only: bool = False,
+) -> list[tuple[Path, Path, dict | None]]:
+    from papertrail.utils import make_matcher
 
-    Pipeline: QR extract -> LLM classify (single call) -> Merge QR overrides -> NIF enrich
-    """
-    if app is not None:
-        ctx = app
-    else:
-        from papertrail.config import get_ctx
+    console = repository.runtime.console
+    pdf_files = [
+        path
+        for path in processed_path.rglob("*.pdf")
+        if not repository.is_internal_path(path.relative_to(processed_path))
+    ]
+    if not pdf_files:
+        logger.debug(f"No PDF files found in {processed_path}")
+        return []
 
-        ctx = get_ctx()
+    targets: list[tuple[Path, Path, dict | None]] = []
 
-    if doc_logger:
-        doc_logger.start_document(pdf_path)
+    if pattern:
+        target_pdf = processed_path / pattern
+        if target_pdf.exists() and target_pdf.suffix.lower() == ".pdf":
+            target_json = target_pdf.with_suffix(".json")
+            data = None
+            if target_json.exists():
+                if orphans_only:
+                    return targets
+                data = repository.load_metadata(target_json)
+            targets.append((target_json, target_pdf, data))
+        else:
+            matcher = make_matcher(pattern)
+            for pdf_path in console.track(pdf_files, "Matching pattern"):
+                if not matcher(pdf_path.name):
+                    continue
+                metadata_path = pdf_path.with_suffix(".json")
+                has_metadata = metadata_path.exists()
+                if orphans_only and has_metadata:
+                    continue
+                data = None
+                if has_metadata:
+                    try:
+                        data = repository.load_metadata(metadata_path)
+                    except Exception as exc:
+                        logger.warning(f"Failed to load {metadata_path.name}: {exc}")
+                targets.append((metadata_path, pdf_path, data))
+    elif orphans_only:
+        for pdf_path in console.track(pdf_files, "Scanning for orphans"):
+            metadata_path = pdf_path.with_suffix(".json")
+            if not metadata_path.exists():
+                targets.append((metadata_path, pdf_path, None))
 
-    # Phase 0: QR extraction
-    qr_metadata, qr_raw_data, all_qr_results = _phase0_qr_extract(pdf_path, doc_logger)
-    is_multi_qr = len(all_qr_results) >= 2
-
-    exclude_fields, pre_extracted = set(), {}
-    if qr_metadata and not is_multi_qr:
-        exclude_fields, pre_extracted = get_qr_exclusions(qr_metadata)
-        if doc_logger and exclude_fields:
-            doc_logger.log_qr_skip(exclude_fields)
-
-    # Build multi-QR context for LLM prompt
-    multi_qr_info = None
-    if is_multi_qr:
-        issuers = []
-        for qr_meta, _ in all_qr_results:
-            name = qr_meta.issuer_nif or qr_meta.issuer_tax_number
-            if name and name not in issuers:
-                issuers.append(name)
-        multi_qr_info = {"count": len(all_qr_results), "issuers": issuers}
-        if doc_logger:
-            logger.debug(f"[MULTI-QR] LLM context: {multi_qr_info}")
-
-    try:
-        # Classify: single LLM call (extract + normalize) with retry
-        raw_metadata = None
-        for attempt in range(2):
+    if all_unknown:
+        for metadata_path, data in console.track(
+            list(repository.iter_sidecars(processed_path)),
+            "Scanning for $UNKNOWN$",
+        ):
             try:
-                raw_metadata = _phase1_llm_extract(pdf_path, exclude_fields, pre_extracted, ctx, doc_logger,
-                                                   multi_qr_info=multi_qr_info)
-                break
-            except Exception as e:
-                if attempt == 0:
-                    logger.warning(f"LLM classification attempt 1 failed for {pdf_path.name}, retrying: {e}")
-                else:
-                    logger.warning(f"LLM classification attempt 2 failed for {pdf_path.name}, using fallback: {e}")
-                    raw_metadata = DocumentMetadataRaw(
-                        issue_date="$UNKNOWN$",
-                        document_type="$UNKNOWN$",
-                        document_type_raw="$UNKNOWN$",
-                        issuing_party="$UNKNOWN$",
-                        issuing_party_raw="$UNKNOWN$",
-                        confidence=0.0,
-                        reasoning="LLM classification failed after 2 attempts",
-                    )
+                has_unknown = (
+                    data.get("document_type") == "$UNKNOWN$"
+                    or data.get("issuing_party") == "$UNKNOWN$"
+                    or data.get("date_issued") == "$UNKNOWN$"
+                )
+                if has_unknown:
+                    pdf_path = metadata_path.with_suffix(".pdf")
+                    if pdf_path.exists():
+                        targets.append((metadata_path, pdf_path, data))
+                    else:
+                        logger.warning(f"PDF not found for {metadata_path.name}")
+            except Exception as exc:
+                logger.warning(f"Skipping {metadata_path.name}: {exc}")
 
-        # Build sub-documents for multi-QR PDFs (before merge, needs ctx for NIF)
-        sub_documents = _build_sub_documents(all_qr_results, ctx, doc_logger) if is_multi_qr else None
-
-        # Merge QR overrides (skip for multi-QR — QR data lives in sub_documents)
-        merged = {
-            "issue_date": raw_metadata.issue_date,
-            "document_type": raw_metadata.document_type,
-            "total_amount": raw_metadata.total_amount,
-            "total_amount_currency": raw_metadata.total_amount_currency,
-            "issuer_tax_number": raw_metadata.issuer_tax_number,
-            "locale": raw_metadata.locale,
-        }
-        if qr_metadata and not is_multi_qr:
-            _merge_qr_metadata(qr_metadata, merged, doc_logger)
-
-        # Track new types/parties for session cache
-        if merged["document_type"] != "$UNKNOWN$":
-            add_session_type(merged["document_type"])
-
-        # NIF enrichment
-        normalized_issuing_party = raw_metadata.issuing_party
-        normalized_issuing_party = _phase4_nif_enrich(
-            merged, raw_metadata, normalized_issuing_party, ctx, doc_logger,
-        )
-
-        if normalized_issuing_party != "$UNKNOWN$":
-            add_session_party(normalized_issuing_party)
-
-        metadata = DocumentMetadata(
-            date_issued=merged["issue_date"],
-            document_type=merged["document_type"],
-            issuing_party=normalized_issuing_party,
-            total_amount=merged["total_amount"],
-            total_amount_currency=merged["total_amount_currency"],
-            class_confidence=raw_metadata.confidence if is_multi_qr else (1.0 if qr_metadata else raw_metadata.confidence),
-            class_reasoning=raw_metadata.reasoning,
-            hash_content=file_hash,
-            document_type_raw=raw_metadata.document_type_raw,
-            document_title=raw_metadata.document_title,
-            issuing_party_raw=raw_metadata.issuing_party_raw,
-            issuer_tax_number=merged["issuer_tax_number"],
-            locale=merged["locale"],
-            qrcode=None if is_multi_qr else qr_raw_data,
-            sub_documents=sub_documents,
-        )
-
-        now = datetime.now().strftime("%Y-%m-%d")
-        metadata.date_created = now
-        metadata.date_updated = now
-        metadata.page_count = get_page_count(pdf_path)
-
-        if doc_logger:
-            doc_logger.log_final(metadata.model_dump())
-            doc_logger.end_document("SUCCESS")
-
-        return metadata
-    except Exception as e:
-        log_failure(failure_logger, pdf_path, e)
-        if doc_logger:
-            doc_logger.end_document("FAILED")
-        raise RuntimeError(f"Classification failed for: {pdf_path}") from e
+    targets.sort(key=lambda item: item[1].name, reverse=True)
+    return targets
 
 
 @dataclass
 class UpsertResult:
-    """Result of a document upsert operation."""
-
     source_path: Path
     mode: str
     outputs: list[Path] = field(default_factory=list)
@@ -426,27 +427,153 @@ class UpsertResult:
         return self
 
 
-class DocumentService:
-    """Shared document lifecycle service."""
+class DocumentEngine:
+    """Canonical document lifecycle engine."""
 
-    def __init__(self, app=None, store: DocumentStore | None = None):
-        self.app = app or get_app()
-        self.store = store or DocumentStore(self.app)
+    def __init__(self, runtime: Runtime, repository: DocumentRepository | None = None):
+        self.runtime = runtime
+        self.repository = repository or DocumentRepository(runtime)
 
     def classify_pdf_document(
         self,
         pdf_path: Path,
         file_hash: str,
+        *,
         failure_logger=None,
         doc_logger: DocumentLogger | None = None,
+        scope: str | Path = "processed",
     ) -> DocumentMetadata:
-        return classify_pdf_document(
-            pdf_path,
-            file_hash,
-            failure_logger=failure_logger,
-            doc_logger=doc_logger,
-            app=self.app,
-        )
+        if doc_logger:
+            doc_logger.start_document(pdf_path)
+
+        qr_metadata, qr_raw_data, all_qr_results = _phase0_qr_extract(pdf_path, doc_logger)
+        is_multi_qr = len(all_qr_results) >= 2
+
+        exclude_fields, pre_extracted = set(), {}
+        if qr_metadata and not is_multi_qr:
+            exclude_fields, pre_extracted = get_qr_exclusions(qr_metadata)
+            if doc_logger and exclude_fields:
+                doc_logger.log_qr_skip(exclude_fields)
+
+        multi_qr_info = None
+        if is_multi_qr:
+            issuers = []
+            for qr_meta, _ in all_qr_results:
+                name = qr_meta.issuer_nif or qr_meta.issuer_tax_number
+                if name and name not in issuers:
+                    issuers.append(name)
+            multi_qr_info = {"count": len(all_qr_results), "issuers": issuers}
+
+        try:
+            raw_metadata = None
+            for attempt in range(2):
+                try:
+                    raw_metadata = _phase1_llm_extract(
+                        pdf_path,
+                        self.runtime,
+                        self.repository,
+                        scope,
+                        exclude_fields,
+                        pre_extracted,
+                        doc_logger,
+                        multi_qr_info=multi_qr_info,
+                    )
+                    break
+                except Exception as exc:
+                    if attempt == 0:
+                        logger.warning(
+                            f"LLM classification attempt 1 failed for {pdf_path.name}, retrying: {exc}"
+                        )
+                    else:
+                        logger.warning(
+                            f"LLM classification attempt 2 failed for {pdf_path.name}, using fallback: {exc}"
+                        )
+                        raw_metadata = DocumentMetadataRaw(
+                            issue_date="$UNKNOWN$",
+                            document_type="$UNKNOWN$",
+                            document_type_raw="$UNKNOWN$",
+                            issuing_party="$UNKNOWN$",
+                            issuing_party_raw="$UNKNOWN$",
+                            confidence=0.0,
+                            reasoning="LLM classification failed after 2 attempts",
+                        )
+
+            assert raw_metadata is not None
+
+            sub_documents = (
+                _build_sub_documents(
+                    all_qr_results,
+                    self.runtime,
+                    self.repository,
+                    scope,
+                    doc_logger,
+                )
+                if is_multi_qr
+                else None
+            )
+
+            merged = {
+                "issue_date": raw_metadata.issue_date,
+                "document_type": self.repository.registry.canonicalize_document_type(raw_metadata.document_type),
+                "total_amount": raw_metadata.total_amount,
+                "total_amount_currency": raw_metadata.total_amount_currency,
+                "issuer_tax_number": raw_metadata.issuer_tax_number,
+                "locale": raw_metadata.locale,
+            }
+            if qr_metadata and not is_multi_qr:
+                _merge_qr_metadata(qr_metadata, merged, doc_logger)
+                merged["document_type"] = self.repository.registry.canonicalize_document_type(merged["document_type"])
+
+            if merged["document_type"] != "$UNKNOWN$":
+                self.repository.registry.register_document_type(merged["document_type"])
+
+            normalized_issuing_party = self.repository.registry.canonicalize_issuing_party(raw_metadata.issuing_party)
+            normalized_issuing_party = _phase4_nif_enrich(
+                merged,
+                normalized_issuing_party or "$UNKNOWN$",
+                self.runtime,
+                self.repository,
+                scope,
+                doc_logger,
+            )
+            if normalized_issuing_party != "$UNKNOWN$":
+                normalized_issuing_party = (
+                    self.repository.registry.register_issuing_party(normalized_issuing_party)
+                    or normalized_issuing_party
+                )
+
+            metadata = DocumentMetadata(
+                date_issued=merged["issue_date"],
+                document_type=merged["document_type"] or "$UNKNOWN$",
+                issuing_party=normalized_issuing_party or "$UNKNOWN$",
+                total_amount=merged["total_amount"],
+                total_amount_currency=merged["total_amount_currency"],
+                class_confidence=(
+                    raw_metadata.confidence if is_multi_qr else (1.0 if qr_metadata else raw_metadata.confidence)
+                ),
+                class_reasoning=raw_metadata.reasoning,
+                hash_content=file_hash,
+                document_type_raw=raw_metadata.document_type_raw,
+                document_title=raw_metadata.document_title,
+                issuing_party_raw=raw_metadata.issuing_party_raw,
+                issuer_tax_number=merged["issuer_tax_number"],
+                locale=merged["locale"],
+                qrcode=None if is_multi_qr else qr_raw_data,
+                sub_documents=sub_documents,
+            )
+            metadata.date_created = self.runtime.today
+            metadata.date_updated = self.runtime.today
+            metadata.page_count = get_page_count(pdf_path)
+
+            if doc_logger:
+                doc_logger.log_final(metadata.model_dump())
+                doc_logger.end_document("SUCCESS")
+            return metadata
+        except Exception as exc:
+            log_failure(failure_logger, pdf_path, exc)
+            if doc_logger:
+                doc_logger.end_document("FAILED")
+            raise RuntimeError(f"Classification failed for: {pdf_path}") from exc
 
     def _load_known_hashes(
         self,
@@ -462,14 +589,14 @@ class DocumentService:
         ):
             return known_file_hashes, known_content_hashes, known_text_hashes
 
-        content_idx, file_idx, text_idx, _ = self.store.build_indexes(processed_path)
+        content_idx, file_idx, text_idx, _ = self.repository.build_indexes(processed_path)
         return (
             known_file_hashes if known_file_hashes is not None else set(file_idx.keys()),
             known_content_hashes if known_content_hashes is not None else set(content_idx.keys()),
             known_text_hashes if known_text_hashes is not None else set(text_idx.keys()),
         )
 
-    def upsert_document(
+    def upsert(
         self,
         source_path: Path,
         mode: str,
@@ -483,8 +610,7 @@ class DocumentService:
         doc_logger: DocumentLogger | None = None,
         dry_run: bool = False,
     ) -> UpsertResult:
-        """Insert or refresh a document while preserving metadata invariants."""
-        processed_path = processed_path or self.app.require_processed_path()
+        processed_path = processed_path or self.runtime.require_processed_path()
         result = UpsertResult(source_path=source_path, mode=mode)
 
         if mode not in {"ingest", "resync", "backfill"}:
@@ -501,17 +627,12 @@ class DocumentService:
             if data.get("page_count") is None and source_path.exists() and source_path.suffix.lower() == ".pdf":
                 data["page_count"] = get_page_count(source_path)
                 changed = True
-
             if data.get("file_size_kb") is None and source_path.exists():
                 data["file_size_kb"] = round(source_path.stat().st_size / 1024)
                 changed = True
-
             if "hash_text" not in data and source_path.exists():
-                data["hash_text"] = (
-                    hash_file_text(source_path) if source_path.suffix.lower() == ".pdf" else None
-                )
+                data["hash_text"] = hash_file_text(source_path) if source_path.suffix.lower() == ".pdf" else None
                 changed = True
-
             if data.get("sub_documents") is None and "sub_documents" not in data:
                 if source_path.exists() and source_path.suffix.lower() == ".pdf":
                     all_results = extract_all_metadata_from_qr(source_path)
@@ -540,9 +661,9 @@ class DocumentService:
                     changed = True
 
             if changed:
-                data["date_updated"] = self.app.today
+                data["date_updated"] = self.runtime.today
                 if not dry_run:
-                    self.store.save_json(source_path.with_suffix(".json"), data)
+                    self.repository.save_json(source_path.with_suffix(".json"), data)
                 result.processed = 1
                 result.outputs.append(source_path)
             else:
@@ -562,7 +683,7 @@ class DocumentService:
                 converted_path = convert_image_to_pdf(source_path, Path(tmp_dir))
                 result.images_converted = 1
                 return result.absorb(
-                    self.upsert_document(
+                    self.upsert(
                         converted_path,
                         "ingest",
                         processed_path=processed_path,
@@ -582,7 +703,7 @@ class DocumentService:
                 result.split_pages = len(split_paths)
                 for split_path in split_paths:
                     result.absorb(
-                        self.upsert_document(
+                        self.upsert(
                             split_path,
                             "ingest",
                             processed_path=processed_path,
@@ -597,8 +718,6 @@ class DocumentService:
                 return result
 
         if suffix == ".xlsx":
-            from papertrail.bank_statement import classify_bank_statement
-
             file_hash = hash_file_fast(source_path)
             if mode == "ingest" and file_hash in known_file_hashes:
                 result.duplicates = 1
@@ -613,13 +732,9 @@ class DocumentService:
 
             metadata.file_size_kb = round(source_path.stat().st_size / 1024)
             if mode == "resync" and existing_metadata:
-                old_data = (
-                    existing_metadata.model_dump()
-                    if isinstance(existing_metadata, DocumentMetadata)
-                    else existing_metadata
-                )
-                metadata.date_created = old_data.get("date_created") or self.app.today
-                metadata.date_updated = self.app.today
+                old_data = existing_metadata.model_dump() if isinstance(existing_metadata, DocumentMetadata) else existing_metadata
+                metadata.date_created = old_data.get("date_created") or self.runtime.today
+                metadata.date_updated = self.runtime.today
 
             dest_path = source_path
             if mode == "ingest":
@@ -632,7 +747,7 @@ class DocumentService:
             if not dry_run:
                 if mode == "ingest":
                     shutil.copy2(source_path, dest_path)
-                self.store.save_document(dest_path, metadata)
+                self.repository.save_document(dest_path, metadata)
 
             known_file_hashes.add(file_hash)
             known_content_hashes.add(file_hash)
@@ -648,16 +763,11 @@ class DocumentService:
 
         old_data = None
         if existing_metadata:
-            old_data = (
-                existing_metadata.model_dump()
-                if isinstance(existing_metadata, DocumentMetadata)
-                else existing_metadata
-            )
+            old_data = existing_metadata.model_dump() if isinstance(existing_metadata, DocumentMetadata) else existing_metadata
 
         file_hash = old_data.get("hash_file") if old_data else None
         if not file_hash:
             file_hash = hash_file_fast(source_path)
-
         if mode == "ingest" and file_hash in known_file_hashes:
             result.duplicates = 1
             result.reason = "hash_file"
@@ -672,7 +782,6 @@ class DocumentService:
         content_hash = old_data.get("hash_content") if old_data else None
         if not content_hash:
             content_hash = hash_file_content(source_path)
-
         if mode == "ingest" and content_hash in known_content_hashes:
             result.duplicates = 1
             result.reason = "hash_content"
@@ -683,13 +792,14 @@ class DocumentService:
             content_hash,
             failure_logger=failure_logger,
             doc_logger=doc_logger,
+            scope=processed_path,
         )
         metadata.hash_file = file_hash
         metadata.hash_text = text_hash
         metadata.file_size_kb = round(source_path.stat().st_size / 1024)
         if old_data:
-            metadata.date_created = old_data.get("date_created") or self.app.today
-            metadata.date_updated = self.app.today
+            metadata.date_created = old_data.get("date_created") or self.runtime.today
+            metadata.date_updated = self.runtime.today
 
         dest_path = source_path
         if mode == "ingest":
@@ -702,7 +812,7 @@ class DocumentService:
         if not dry_run:
             if mode == "ingest":
                 shutil.copy2(source_path, dest_path)
-            self.store.save_document(dest_path, metadata)
+            self.repository.save_document(dest_path, metadata)
 
             if mode == "resync":
                 new_filename = file_name_from_metadata(metadata, metadata.hash_file)
@@ -722,20 +832,20 @@ class DocumentService:
         result.metadata = metadata
         return result
 
-    def extract_new(
+    def extract(
         self,
         processed_path: Path,
         raw_paths: list[Path],
+        *,
         quiet: bool = False,
         failure_logger=None,
     ) -> dict:
-        """Process new raw documents into the processed store."""
-        console = self.app.console
+        console = self.runtime.console
         doc_logger = DocumentLogger()
         run_start = _time.monotonic()
 
         logger.debug("Building hash index from metadata files...")
-        known_content_hashes_idx, known_file_hashes_idx, known_text_hashes_idx, known_issuers_before = self.store.build_indexes(processed_path)
+        known_content_hashes_idx, known_file_hashes_idx, known_text_hashes_idx, known_issuers_before = self.repository.build_indexes(processed_path)
         known_content_hashes = set(known_content_hashes_idx.keys())
         known_file_hashes = set(known_file_hashes_idx.keys())
         known_text_hashes = set(known_text_hashes_idx.keys())
@@ -763,7 +873,7 @@ class DocumentService:
 
         for doc_path in console.track(all_doc_paths, "Processing documents"):
             try:
-                upsert = self.upsert_document(
+                upsert = self.upsert(
                     doc_path,
                     "ingest",
                     processed_path=processed_path,
@@ -797,7 +907,7 @@ class DocumentService:
         unknown_dt_count = 0
         unknown_ip_count = 0
         if new_hashes:
-            for _, data in self.store.iter_sidecars(processed_path):
+            for _, data in self.repository.iter_sidecars(processed_path):
                 content_hash = data.get("hash_content")
                 if content_hash not in new_hashes:
                     continue
@@ -817,10 +927,7 @@ class DocumentService:
             if totals["xlsx_new"] > 0:
                 console.success(f"{totals['xlsx_new']} XLSX file(s) processed", indent=False)
             if totals["failed"] > 0:
-                console.warning(
-                    f"{totals['new']} processed, {totals['failed']} failed",
-                    indent=False,
-                )
+                console.warning(f"{totals['new']} processed, {totals['failed']} failed", indent=False)
 
         logger.debug(
             f"=== SUMMARY: {totals['new']} success, {totals['failed']} failed, "
@@ -847,6 +954,7 @@ class DocumentService:
     def sync(
         self,
         processed_path: Path,
+        *,
         dry_run: bool = False,
         all_unknown: bool = False,
         pattern: str | None = None,
@@ -854,11 +962,10 @@ class DocumentService:
         all: bool = False,
         quiet: bool = False,
     ) -> dict:
-        """Sync processed documents by reclassifying in place."""
-        console = self.app.console
+        console = self.runtime.console
         orphans_only = not all and not all_unknown and pattern is None
         targets = _collect_sync_targets(
-            self.store,
+            self.repository,
             processed_path,
             all_unknown=all_unknown,
             pattern=pattern,
@@ -877,10 +984,10 @@ class DocumentService:
 
         def classify_one(item):
             metadata_path, pdf_path, old_data = item
-            thread_service = DocumentService(self.app)
+            thread_engine = DocumentEngine(self.runtime, self.repository)
             thread_doc_logger = DocumentLogger()
             try:
-                upsert = thread_service.upsert_document(
+                upsert = thread_engine.upsert(
                     pdf_path,
                     "resync",
                     existing_metadata=old_data,
@@ -890,10 +997,8 @@ class DocumentService:
                 )
                 if upsert.processed == 0:
                     return metadata_path, old_data, upsert.metadata, None, pdf_path
-
                 output_path = upsert.outputs[0] if upsert.outputs else pdf_path
-                new_metadata = upsert.metadata
-                return metadata_path, old_data, new_metadata, None, output_path
+                return metadata_path, old_data, upsert.metadata, None, output_path
             except Exception as exc:
                 return metadata_path, old_data, None, str(exc), pdf_path
 
@@ -978,12 +1083,11 @@ class DocumentService:
             "failed": failed_count,
         }
 
-    def backfill_processed(self, processed_path: Path, dry_run: bool = False) -> dict:
-        """Fill derived metadata fields without using the LLM."""
+    def backfill_processed(self, processed_path: Path, *, dry_run: bool = False) -> dict:
         updated = 0
         skipped = 0
         errors = 0
-        for metadata_path, doc_path, data in self.store.iter_documents(
+        for metadata_path, doc_path, data in self.repository.iter_documents(
             processed_path,
             validate=False,
             require_companion=False,
@@ -991,7 +1095,7 @@ class DocumentService:
             progress_desc="Checking metadata",
         ):
             try:
-                result = self.upsert_document(
+                result = self.upsert(
                     doc_path,
                     "backfill",
                     existing_metadata=data,
@@ -1008,111 +1112,4 @@ class DocumentService:
         return {"updated": updated, "skipped": skipped, "errors": errors}
 
 
-def upsert_document(source_path: Path, mode: str, existing_metadata=None) -> UpsertResult:
-    """Compatibility entry point for the document lifecycle service."""
-    return DocumentService().upsert_document(source_path, mode, existing_metadata=existing_metadata)
-
-
-def task_extract_new(processed_path: Path, raw_paths: list[Path], quiet: bool = False) -> dict | None:
-    """Compatibility wrapper for the canonical extract workflow."""
-    from papertrail.workflows import extract
-
-    return extract(get_app(), processed_path, raw_paths, quiet=quiet)
-
-
-def _collect_sync_targets(
-    store: DocumentStore,
-    processed_path: Path,
-    all_unknown: bool = False,
-    pattern: str | None = None,
-    orphans_only: bool = False,
-) -> list[tuple]:
-    """Collect files to sync. Returns list of (metadata_path, pdf_path, old_data_or_None)."""
-    from papertrail.utils import make_matcher
-
-    console = store.app.console
-
-    pdf_files = [f for f in processed_path.rglob("*.pdf")
-                 if not any(part.startswith("_dupes") for part in f.parts)]
-    if not pdf_files:
-        logger.debug(f"No PDF files found in {processed_path}")
-        return []
-
-    targets = []
-
-    if pattern:
-        target_pdf = processed_path / pattern
-        if target_pdf.exists() and target_pdf.suffix.lower() == '.pdf':
-            target_json = target_pdf.with_suffix(".json")
-            data = None
-            if target_json.exists():
-                if orphans_only:
-                    return targets
-                data = store.load_metadata(target_json)
-            targets.append((target_json, target_pdf, data))
-        else:
-            matcher = make_matcher(pattern)
-            for pdf_path in console.track(pdf_files, "Matching pattern"):
-                if not matcher(pdf_path.name):
-                    continue
-                metadata_path = pdf_path.with_suffix(".json")
-                has_metadata = metadata_path.exists()
-
-                # Skip if orphans_only and has metadata
-                if orphans_only and has_metadata:
-                    continue
-
-                data = None
-                if has_metadata:
-                    try:
-                        data = store.load_metadata(metadata_path)
-                    except Exception as e:
-                        logger.warning(f"Failed to load {metadata_path.name}: {e}")
-                targets.append((metadata_path, pdf_path, data))
-
-    elif orphans_only:
-        for pdf_path in console.track(pdf_files, "Scanning for orphans"):
-            metadata_path = pdf_path.with_suffix(".json")
-            if not metadata_path.exists():
-                targets.append((metadata_path, pdf_path, None))
-
-    if all_unknown:
-        for metadata_path, data in console.track(
-            list(store.iter_sidecars(processed_path)),
-            "Scanning for $UNKNOWN$",
-        ):
-            try:
-                has_unknown = (
-                    data.get("document_type") == "$UNKNOWN$"
-                    or data.get("issuing_party") == "$UNKNOWN$"
-                    or data.get("date_issued") == "$UNKNOWN$"
-                )
-                if has_unknown:
-                    pdf_path = metadata_path.with_suffix(".pdf")
-                    if pdf_path.exists():
-                        targets.append((metadata_path, pdf_path, data))
-                    else:
-                        logger.warning(f"PDF not found for {metadata_path.name}")
-            except Exception as e:
-                logger.warning(f"Skipping {metadata_path.name}: {e}")
-
-    targets.sort(key=lambda t: t[1].name, reverse=True)
-    return targets
-
-
-def task_sync(processed_path: Path, dry_run: bool = False,
-              all_unknown: bool = False, pattern: str = None,
-              workers: int = 1, all: bool = False, quiet: bool = False) -> dict:
-    """Compatibility wrapper for the canonical sync workflow."""
-    from papertrail.workflows import sync
-
-    return sync(
-        get_app(),
-        processed_path,
-        dry_run=dry_run,
-        all_unknown=all_unknown,
-        pattern=pattern,
-        workers=workers,
-        all=all,
-        quiet=quiet,
-    )
+__all__ = ["DocumentEngine", "UpsertResult"]

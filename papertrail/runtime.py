@@ -5,50 +5,44 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Callable, Optional
+from typing import Any, Callable
 
 from papertrail.config import (
-    AppContext,
-    Config,
     ConfigError,
     ProfileLoader,
     ProfileNotFoundError,
+    ProfileSettings,
+    build_openai_client,
     check_api_accessibility,
     get_cache_dir,
-    get_openai_client,
-    set_ctx,
-    set_current_profile,
 )
-from papertrail.console import PapertrailConsole, set_console
+from papertrail.console import PapertrailConsole
 from papertrail.hashing import HashCache
 from papertrail.logging_utils import get_logger, setup_logging
-from papertrail.models import reset_enum_cache, reset_session_cache
 from papertrail.nif_lookup import NIFLookupCache
 
-logger = get_logger("app")
+logger = get_logger("runtime")
 
 
 @dataclass(frozen=True)
-class AppPaths:
-    """Resolved application paths."""
-
+class RuntimePaths:
     raw: list[Path]
-    processed: Optional[Path]
-    export: Optional[Path]
+    processed: Path | None
+    export: Path | None
     cache: Path
     profiles: Path
 
 
 @dataclass
-class App:
-    """Runtime application context shared by services and tasks."""
+class Runtime:
+    """Runtime resources shared by repository, engine, and commands."""
 
-    profile: Config
+    profile: ProfileSettings
     profile_name: str
-    paths: AppPaths
-    model_id: str
+    paths: RuntimePaths
+    model_id: str | None
     openai_client: Any
-    nif_cache: Optional[NIFLookupCache]
+    nif_cache: NIFLookupCache | None
     hash_cache: HashCache
     console: PapertrailConsole
     api_accessible: bool
@@ -59,46 +53,27 @@ class App:
         return self.now().strftime("%Y-%m-%d")
 
     def require_processed_path(self) -> Path:
-        if not self.paths.processed:
+        if self.paths.processed is None:
             raise RuntimeError("paths.processed is not configured")
         self.paths.processed.mkdir(parents=True, exist_ok=True)
         return self.paths.processed
 
     def require_export_path(self) -> Path:
-        if not self.paths.export:
+        if self.paths.export is None:
             raise RuntimeError("paths.export is not configured")
         self.paths.export.mkdir(parents=True, exist_ok=True)
         return self.paths.export
 
 
-_current_app: App | None = None
+def create_runtime(
+    profile_name: str | None = None,
+    *,
+    verbose: bool = False,
+    enable_client: bool = True,
+    probe_api: bool = True,
+) -> Runtime:
+    """Create the canonical runtime from a named profile."""
 
-
-def set_app(app: App | None) -> None:
-    """Set the current app for compatibility helpers."""
-    global _current_app
-    _current_app = app
-    if app is not None:
-        set_current_profile(app.profile)
-        set_ctx(
-            AppContext(
-                model_id=app.model_id,
-                openai_client=app.openai_client,
-                nif_cache=app.nif_cache,
-            )
-        )
-        set_console(app.console)
-
-
-def get_app() -> App:
-    """Return the active app."""
-    if _current_app is None:
-        raise RuntimeError("Application runtime not initialized. Call create_app() first.")
-    return _current_app
-
-
-def create_app(profile_name: str | None = None, verbose: bool = False) -> App:
-    """Create and install the application runtime."""
     setup_logging(verbose=verbose)
 
     loader = ProfileLoader()
@@ -119,36 +94,62 @@ def create_app(profile_name: str | None = None, verbose: bool = False) -> App:
         profile_name = "default"
 
     profile = loader.load_profile(profile_name)
-    set_current_profile(profile)
-    reset_enum_cache()
-    reset_session_cache()
+    return runtime_from_profile(
+        profile,
+        profiles_dir=loader.profiles_dir,
+        verbose=verbose,
+        enable_client=enable_client,
+        probe_api=probe_api,
+    )
+
+
+def runtime_from_profile(
+    profile: ProfileSettings,
+    *,
+    profiles_dir: Path | None = None,
+    verbose: bool = False,
+    enable_client: bool = True,
+    probe_api: bool = True,
+) -> Runtime:
+    """Build a runtime from an already-loaded profile object."""
+
+    setup_logging(verbose=verbose)
 
     console = PapertrailConsole()
-    api_accessible = check_api_accessibility(profile.openrouter.base_url)
-    if not api_accessible:
-        console.warning(f"API base URL is not accessible: {profile.openrouter.base_url}", indent=False)
-        console.warning(
-            "LLM-dependent tasks will fail. Offline tasks (rename, check, export) will work.",
-            indent=False,
+    api_accessible = False
+    if enable_client:
+        api_accessible = (
+            check_api_accessibility(profile.openrouter.base_url)
+            if probe_api
+            else bool(profile.openrouter.api_key)
         )
+        if not api_accessible:
+            console.warning(
+                f"API base URL is not accessible: {profile.openrouter.base_url}",
+                indent=False,
+            )
+            console.warning(
+                "LLM-dependent tasks will fail. Offline tasks (rename, check, export) will work.",
+                indent=False,
+            )
 
     cache_dir = get_cache_dir()
     nif_cache = None
     if profile.nif_api.enabled:
         nif_cache = NIFLookupCache(cache_dir / "nif_cache.yaml")
 
-    app = App(
+    runtime = Runtime(
         profile=profile,
         profile_name=profile.profile.name,
-        paths=AppPaths(
-            raw=[Path(p) for p in profile.paths.raw or []],
+        paths=RuntimePaths(
+            raw=[Path(path) for path in profile.paths.raw],
             processed=Path(profile.paths.processed) if profile.paths.processed else None,
             export=Path(profile.paths.export) if profile.paths.export else None,
             cache=cache_dir,
-            profiles=loader.profiles_dir,
+            profiles=profiles_dir or profile.profile_dir or Path.home() / ".config" / "papertrail" / "profiles",
         ),
         model_id=profile.openrouter.model_id,
-        openai_client=get_openai_client() if api_accessible else None,
+        openai_client=build_openai_client(profile) if enable_client and api_accessible else None,
         nif_cache=nif_cache,
         hash_cache=HashCache(cache_dir / "hash_cache.yaml"),
         console=console,
@@ -160,6 +161,7 @@ def create_app(profile_name: str | None = None, verbose: bool = False) -> App:
         logger.info(f"  {profile.profile.description}")
     if nif_cache is not None:
         logger.info(f"NIF lookup enabled with {len(nif_cache)} cached entries")
+    return runtime
 
-    set_app(app)
-    return app
+
+__all__ = ["Runtime", "RuntimePaths", "create_runtime", "runtime_from_profile"]

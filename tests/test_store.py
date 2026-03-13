@@ -2,54 +2,19 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from papertrail.app import App, AppPaths
-from papertrail.config import Config
-from papertrail.console import PapertrailConsole
-from papertrail.hashing import HashCache
 from papertrail.models import DocumentMetadata
-from papertrail.store import DocumentStore
+from papertrail.repository import DocumentRepository
+
+from tests.support import make_test_runtime
 
 
-class DocumentStoreTests(unittest.TestCase):
+class DocumentRepositoryTests(unittest.TestCase):
     def setUp(self):
         self.tmpdir = tempfile.TemporaryDirectory()
         root = Path(self.tmpdir.name)
-        self.processed = root / "processed"
-        self.export = root / "export"
-        self.cache = root / "cache"
-        self.processed.mkdir()
-        self.export.mkdir()
-        self.cache.mkdir()
-        profile = Config(
-            {
-                "profile": {"name": "test", "description": ""},
-                "paths": {
-                    "raw": [],
-                    "processed": str(self.processed),
-                    "export": str(self.export),
-                },
-                "openrouter": {"model_id": "test-model"},
-                "nif_api": {"enabled": False},
-            }
-        )
-        self.app = App(
-            profile=profile,
-            profile_name="test",
-            paths=AppPaths(
-                raw=[],
-                processed=self.processed,
-                export=self.export,
-                cache=self.cache,
-                profiles=root,
-            ),
-            model_id="test-model",
-            openai_client=None,
-            nif_cache=None,
-            hash_cache=HashCache(self.cache / "hash_cache.yaml"),
-            console=PapertrailConsole(),
-            api_accessible=False,
-        )
-        self.store = DocumentStore(self.app)
+        self.runtime = make_test_runtime(root)
+        self.repository = DocumentRepository(self.runtime)
+        self.processed = self.runtime.paths.processed
 
     def tearDown(self):
         self.tmpdir.cleanup()
@@ -75,15 +40,15 @@ class DocumentStoreTests(unittest.TestCase):
         json_path.write_text("{}")
         xlsx_path.write_text("xlsx")
         self.assertEqual(
-            self.store.find_companion(json_path, {"source_extension": ".xlsx"}),
+            self.repository.find_companion(json_path, {"source_extension": ".xlsx"}),
             xlsx_path,
         )
 
     def test_build_indexes_collects_hashes_and_issuers(self):
         doc_path = self.processed / "doc.pdf"
         doc_path.write_text("pdf")
-        self.store.save_document(doc_path, self._metadata())
-        content_idx, file_idx, text_idx, issuers = self.store.build_indexes(self.processed)
+        self.repository.save_document(doc_path, self._metadata())
+        content_idx, file_idx, text_idx, issuers = self.repository.build_indexes(self.processed)
         self.assertIn("abc12345", content_idx)
         self.assertIn("deadbeef", file_idx)
         self.assertIn("vendor", issuers)
@@ -97,16 +62,16 @@ class DocumentStoreTests(unittest.TestCase):
         jan_meta = self._metadata(hash_content="jan12345", hash_file="jan12345")
         feb_meta = self._metadata(hash_content="feb12345", hash_file="feb12345")
         feb_meta.date_issued = "2026-02-15"
-        self.store.save_document(jan_doc, jan_meta)
-        self.store.save_document(feb_doc, feb_meta)
-        self.assertEqual(self.store.unique_dates(self.processed), ["2026-02", "2026-01"])
+        self.repository.save_document(jan_doc, jan_meta)
+        self.repository.save_document(feb_doc, feb_meta)
+        self.assertEqual(self.repository.unique_dates(self.processed), ["2026-02", "2026-01"])
 
     def test_repair_filenames_renames_companion_and_sidecar(self):
         old_doc = self.processed / "old-name.pdf"
         old_doc.write_text("pdf")
         metadata = self._metadata(hash_content="facefeed", hash_file="deadbeef")
-        self.store.save_document(old_doc, metadata)
-        stats = self.store.repair_filenames(self.processed)
+        self.repository.save_document(old_doc, metadata)
+        stats = self.repository.repair_filenames(self.processed)
         self.assertEqual(stats["validated"], 1)
         self.assertEqual(stats["renamed"], 1)
         renamed = list(self.processed.glob("*.pdf"))

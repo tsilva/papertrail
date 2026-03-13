@@ -1,18 +1,18 @@
 """Public papertrail interfaces."""
 
-from papertrail.app import App, AppPaths, create_app
+from papertrail.engine import DocumentEngine, UpsertResult
+from papertrail.repository import CanonicalRegistry, DocumentRepository
 from papertrail.rules import RuleEngine
-from papertrail.services import DocumentService, UpsertResult, upsert_document
-from papertrail.store import DocumentStore
+from papertrail.runtime import Runtime, RuntimePaths, create_runtime, runtime_from_profile
 
 __all__ = [
-    "App",
-    "AppPaths",
-    "DocumentService",
-    "DocumentStore",
+    "CanonicalRegistry",
+    "DocumentEngine",
+    "DocumentRepository",
     "RuleEngine",
+    "Runtime",
+    "RuntimePaths",
     "UpsertResult",
-    "create_app",
-    "upsert_document",
+    "create_runtime",
+    "runtime_from_profile",
 ]
-"""papertrail - AI-powered PDF document classification and organization."""

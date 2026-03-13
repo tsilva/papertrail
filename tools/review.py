@@ -11,9 +11,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import gradio as gr
 
-from papertrail.config import load_profile
 from tools.shared import (
-    find_companion, render_pdf_page_html, render_xlsx_as_html,
+    find_companion, get_export_dir, iter_sidecars, render_pdf_page_html, render_xlsx_as_html,
     FULLSCREEN_CSS, FULLSCREEN_JS,
 )
 
@@ -228,15 +227,11 @@ _LABELS = {
 
 def _get_export_base_dir():
     """Get the export base directory from the default profile."""
-    try:
-        profile = load_profile("default")
-        if profile.paths.export:
-            p = Path(profile.paths.export)
-            if p.is_dir():
-                return p
-    except Exception:
-        pass
-    return None
+    export_dir = get_export_dir()
+    if not export_dir:
+        return None
+    path = Path(export_dir)
+    return path if path.is_dir() else None
 
 
 def _list_export_folders(base_dir):
@@ -260,15 +255,9 @@ def load_export_folder(folder_path):
 
     bank_statements, file_index = [], {}
 
-    for json_path in sorted(folder.rglob("*.json")):
+    for json_path, metadata in iter_sidecars(folder):
         if json_path.name.endswith(".reconciliation.json"):
             continue
-        try:
-            with open(json_path, "r", encoding="utf-8") as f:
-                metadata = json.load(f)
-        except Exception:
-            continue
-
         doc_path = find_companion(json_path, metadata)
         entry = {
             "json_path": str(json_path),

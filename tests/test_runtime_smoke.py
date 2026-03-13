@@ -1,0 +1,172 @@
+import json
+import tempfile
+import unittest
+import zipfile
+from pathlib import Path
+from unittest.mock import patch
+
+from papertrail.archive_extract import extract_archives
+from papertrail.commands import pipeline
+from papertrail.hashing import hash_file_fast
+from papertrail.models import DocumentMetadata
+from papertrail.pdf import get_page_count
+from papertrail.pdf_merge import merge_all_pdfs
+from papertrail.repository import DocumentRepository
+
+from tests.support import create_millennium_statement, create_pdf, make_test_runtime
+from tools import browse, review
+
+
+class AdapterSmokeTests(unittest.TestCase):
+    def setUp(self):
+        self.tmpdir = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmpdir.name)
+        self.runtime = make_test_runtime(self.root)
+        self.repository = DocumentRepository(self.runtime)
+
+    def tearDown(self):
+        self.tmpdir.cleanup()
+
+    def _metadata(self, hash_content: str, hash_file: str, **overrides) -> DocumentMetadata:
+        data = {
+            "class_confidence": 1.0,
+            "class_reasoning": "test",
+            "date_created": "2026-01-02",
+            "date_issued": "2026-01-02",
+            "date_updated": "2026-01-02",
+            "document_type": "invoice",
+            "document_type_raw": "Invoice",
+            "document_title": "Subscription",
+            "issuing_party": "vendor",
+            "issuing_party_raw": "Vendor, Inc.",
+            "total_amount": 12.34,
+            "total_amount_currency": "EUR",
+            "hash_content": hash_content,
+            "hash_file": hash_file,
+        }
+        data.update(overrides)
+        return DocumentMetadata(**data)
+
+    def test_extract_archives_unpacks_zip_once(self):
+        raw_dir = self.runtime.paths.raw[0]
+        archive_path = raw_dir / "docs.zip"
+        with zipfile.ZipFile(archive_path, "w") as archive:
+            archive.writestr("invoice.txt", "hello")
+            archive.writestr("nested/receipt.txt", "world")
+
+        first = extract_archives(raw_dir)
+        second = extract_archives(raw_dir)
+
+        output_dir = raw_dir / "docs_archive"
+        self.assertEqual(first[str(archive_path)], 2)
+        self.assertEqual(second[str(archive_path)], 0)
+        self.assertTrue((output_dir / "invoice.txt").exists())
+        self.assertTrue((output_dir / "nested" / "receipt.txt").exists())
+
+    def test_merge_all_pdfs_creates_all_and_prefix_outputs(self):
+        export_dir = self.runtime.paths.export
+        create_pdf(export_dir / "cmp_one.pdf", ["page 1"])
+        create_pdf(export_dir / "cmp_two.pdf", ["page 2", "page 3"])
+        create_pdf(export_dir / "div_misc.pdf", ["page 4"])
+
+        outputs = merge_all_pdfs(export_dir)
+
+        self.assertEqual(set(outputs), {"all", "cmp", "div"})
+        self.assertEqual(get_page_count(export_dir / "merged_all.pdf"), 4)
+        self.assertEqual(get_page_count(export_dir / "merged_cmp.pdf"), 3)
+        self.assertEqual(get_page_count(export_dir / "merged_div.pdf"), 1)
+
+    def test_pipeline_composes_commands_through_single_layer(self):
+        raw_dir = self.runtime.paths.raw[0]
+        processed_path = self.runtime.paths.processed
+        export_dir = self.runtime.paths.export
+
+        with (
+            patch("papertrail.commands.extract_mbox_attachments", return_value={"mbox_files": 0, "attachments_extracted": 0, "errors": []}) as mbox_mock,
+            patch("papertrail.commands.extract_archives", return_value={}) as archive_mock,
+            patch("papertrail.commands.extract", return_value={"new": 0, "duplicates": 0, "failed": 0, "batch_duplicates": 0}) as extract_mock,
+            patch("papertrail.commands.sync", return_value={"targets": 0, "new": 0, "changed": 0}) as sync_mock,
+            patch("papertrail.commands.rename", return_value={"validated": 0, "renamed": 0, "orphans": 0}) as rename_mock,
+            patch("papertrail.commands.export_excel", return_value={"exported": 0}) as export_excel_mock,
+            patch("papertrail.commands.copy_matching", return_value={"copied": 0, "deduped": 0}) as copy_matching_mock,
+            patch("papertrail.commands.discover_bank_statements", return_value=[]) as discover_mock,
+            patch("papertrail.commands.merge_all_pdfs", return_value={}) as merge_mock,
+            patch("papertrail.commands.validate_merged_pdf", return_value=True) as validate_mock,
+        ):
+            pipeline(self.runtime, months=1, export_date_arg="2026-01")
+
+        mbox_mock.assert_called_once_with(str(raw_dir))
+        archive_mock.assert_called_once_with(str(raw_dir), passwords=None)
+        extract_mock.assert_called_once_with(self.runtime, processed_path, [raw_dir], quiet=False)
+        sync_mock.assert_called_once_with(self.runtime, processed_path, quiet=False)
+        rename_mock.assert_called_once_with(self.runtime, processed_path, quiet=True)
+        export_excel_mock.assert_called_once_with(
+            self.runtime,
+            processed_path,
+            str(processed_path / "processed_files.xlsx"),
+            quiet=True,
+        )
+        copy_matching_mock.assert_called_once()
+        discover_mock.assert_called_once_with(unittest.mock.ANY, export_dir / "2026-01")
+        merge_mock.assert_called_once_with(str(export_dir / "2026-01"))
+        validate_mock.assert_called_once_with(export_dir / "2026-01")
+
+    def test_gradio_loaders_use_repository_helpers_without_network(self):
+        processed_pdf = self.runtime.paths.processed / "invoice.pdf"
+        create_pdf(processed_pdf, ["invoice"])
+        self.repository.save_document(processed_pdf, self._metadata("hash1111", "file1111"))
+
+        export_statement = self.runtime.paths.export / "statement.xlsx"
+        create_millennium_statement(export_statement)
+        from papertrail.bank_statement import classify_bank_statement
+
+        statement_hash = hash_file_fast(export_statement)
+        self.repository.save_document(
+            export_statement,
+            classify_bank_statement(export_statement, statement_hash),
+        )
+        recon_path = export_statement.with_suffix(".reconciliation.json")
+        recon_path.write_text(
+            json.dumps(
+                {
+                    "source": export_statement.name,
+                    "generated": "2026-01-31T12:00:00Z",
+                    "summary": {
+                        "total": 1,
+                        "reconciled": 0,
+                        "incomplete": 0,
+                        "unmatched": 1,
+                        "unmatched_files": 0,
+                        "reconciliation_rate": 0,
+                    },
+                    "matches": [],
+                    "unmatched": [
+                        {
+                            "row": 9,
+                            "date": "2026-01-01",
+                            "description": "TEST PURCHASE",
+                            "amount": -12.34,
+                            "currency": "EUR",
+                            "transaction_category": "default-debit",
+                        }
+                    ],
+                    "unmatched_files": [],
+                },
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
+
+        with patch("tools.shared.build_repository", return_value=self.repository):
+            browse_entries = browse._load_entries(str(self.runtime.paths.processed))
+            review_data, status = review.load_export_folder(str(self.runtime.paths.export))
+
+        self.assertEqual(len(browse_entries), 1)
+        self.assertEqual(browse_entries[0]["metadata"]["hash_file"], "file1111")
+        self.assertEqual(len(review_data["bank_statements"]), 1)
+        self.assertIn("statement.xlsx", review_data["file_index"])
+        self.assertIn("Loaded **1** bank statements", status)
+
+
+if __name__ == "__main__":
+    unittest.main()

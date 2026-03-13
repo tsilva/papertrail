@@ -1,72 +1,18 @@
-<div align="center">
-  <img src="logo.png" alt="papertrail" width="512"/>
+# papertrail
 
-  [![Python 3.10+](https://img.shields.io/badge/Python-3.10+-3776AB?style=flat&logo=python&logoColor=white)](https://www.python.org/)
-  [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg?style=flat)](LICENSE)
-  [![OpenRouter](https://img.shields.io/badge/OpenRouter-Vision%20LLMs-6366f1?style=flat&logo=openai&logoColor=white)](https://openrouter.ai/)
-  [![PyMuPDF](https://img.shields.io/badge/PyMuPDF-PDF%20Processing-red?style=flat)](https://pymupdf.readthedocs.io/)
+AI-powered document classification and organization for PDFs, images, and bank-statement XLSX files.
 
-  **📄 AI-powered PDF document classification and organization using vision LLMs 🗂️**
+papertrail preserves a simple public contract:
 
-  [Quick Start](#-quick-start) · [Features](#-features) · [Documentation](CLAUDE.md)
-</div>
+- Typer CLI commands in [`main.py`](/Users/tsilva/repos/tsilva/papertrail/main.py)
+- profile YAML under `~/.config/papertrail/profiles/<name>/profile.yaml`
+- sidecar JSON as the source of truth
+- deterministic file naming from metadata
+- Gradio tools in [`tools/browse.py`](/Users/tsilva/repos/tsilva/papertrail/tools/browse.py), [`tools/dedupe.py`](/Users/tsilva/repos/tsilva/papertrail/tools/dedupe.py), and [`tools/review.py`](/Users/tsilva/repos/tsilva/papertrail/tools/review.py)
 
----
+## Install
 
-## Overview
-
-[![CI](https://github.com/tsilva/papertrail/actions/workflows/release.yml/badge.svg)](https://github.com/tsilva/papertrail/actions/workflows/release.yml)
-
-papertrail uses vision LLMs to "read" your PDFs and automatically extract metadata like dates, document types, and issuing parties. It renders PDF pages as images, sends them to AI models for analysis, and organizes your files with consistent naming.
-
-**Before:** `scan_2024_001.pdf`, `document(3).pdf`, `IMG_4521.pdf`
-
-**After:** `2025-01-02 - invoice - anthropic - claude-api - 120 eur - a1b2c3d4.pdf`
-
-Drop a folder of invoices, receipts, contracts, and statements—papertrail figures out what's what and puts everything in order.
-
-## ✨ Features
-
-- **Vision-based extraction** — Reads documents exactly as a human would, no brittle text parsing
-- **Two-phase pipeline** — Raw extraction + normalization ensures consistent, canonical values
-- **Smart duplicate detection** — Content-based hashing detects duplicates even when PDF metadata differs
-- **Gmail integration** — Automatically download and process PDF attachments from your email
-- **Dynamic classification** — Document types and issuing parties learned from your existing files
-- **Excel export** — Generate spreadsheets for accounting and record-keeping
-- **Batch processing** — Process hundreds of documents with progress tracking
-
-## 🚀 Quick Start
-
-```bash
-# Install with uv (recommended)
-git clone https://github.com/tsilva/papertrail.git
-cd papertrail
-uv pip install -e .
-
-# Configure environment
-cp .env.example .env
-# Edit .env with your OpenRouter API key and folder paths
-
-# Process PDFs
-python main.py extract_new /path/to/processed --raw_path /path/to/raw
-```
-
-### Output Example
-
-```
-Raw file:  scan_20250115_001.pdf
-Becomes:   2025-01-15 - invoice - anthropic - claude-api - 120 eur - a1b2c3d4.pdf
-```
-
-## 📦 Installation
-
-### Prerequisites
-
-- Python 3.10+
-- [OpenRouter API key](https://openrouter.ai/) (supports GPT-4, Gemini, and other vision models)
-- [uv](https://github.com/astral-sh/uv) package manager (recommended) or pip
-
-### Standard Installation
+papertrail requires Python 3.12+.
 
 ```bash
 git clone https://github.com/tsilva/papertrail.git
@@ -74,122 +20,136 @@ cd papertrail
 uv pip install -e .
 ```
 
-### Configuration
-
-Create a `.env` file in the repository root:
-
-```env
-OPENROUTER_MODEL_ID=google/gemini-2.5-flash
-OPENROUTER_API_KEY=sk-or-v1-...
-RAW_FILES_DIR=/path/to/raw/pdfs
-PROCESSED_FILES_DIR=/path/to/processed
-EXPORT_FILES_DIR=/path/to/export
-```
-
-**Cost estimate**: GPT-4 Vision costs ~$0.02-0.05 per document. Gemini Flash is 10-20x cheaper.
-
-### Profile-Based Configuration
-
-Profiles simplify multi-environment management:
+For local development and tests:
 
 ```bash
-cp profiles/default.yaml.example profiles/default.yaml
-python main.py --profile default extract_new /path/to/processed
+uv pip install -e '.[dev]'
+.venv/bin/python -m pytest -q
 ```
 
-See [profiles/README.md](profiles/README.md) for detailed documentation.
+## Configure
 
-<details>
-<summary><strong>Gmail Integration Setup</strong></summary>
+papertrail uses profile-based configuration. Create a profile at:
 
-1. Create a project in [Google Cloud Console](https://console.cloud.google.com/)
-2. Enable Gmail API and create OAuth 2.0 credentials (Desktop application)
-3. Download credentials as `config/gmail_credentials.json`
-4. Copy `config/gmail_settings.json.example` to `config/gmail_settings.json`
-5. First run opens browser for OAuth authorization
+```text
+~/.config/papertrail/profiles/default/profile.yaml
+```
 
-</details>
+Example:
 
-## 📖 Usage
+```yaml
+profile:
+  name: "default"
+  description: "Default configuration"
+  tax_number: "TESTOWNER"
 
-### Basic Workflow
+paths:
+  raw:
+    - "/Users/you/Documents/papertrail/raw"
+  processed: "/Users/you/Documents/papertrail/processed"
+  export: "/Users/you/Documents/papertrail/export"
+
+openrouter:
+  model_id: "google/gemini-2.5-flash"
+  api_key: "YOUR_OPENROUTER_KEY"
+
+gmail:
+  enabled: false
+
+nif_api:
+  enabled: true
+```
+
+Full profile documentation lives in [`profiles/README.md`](/Users/tsilva/repos/tsilva/papertrail/profiles/README.md).
+
+## Run
+
+Use either the entrypoint or `python3 main.py`:
 
 ```bash
-# 1. Process new PDFs from raw folder
-python main.py extract_new /path/to/processed --raw_path /path/to/raw
-
-# 2. Rename files based on extracted metadata
-python main.py rename_files /path/to/processed
-
-# 3. Export to Excel for accounting
-python main.py export_excel /path/to/processed --excel_output_path invoices.xlsx
+papertrail --profile default pipeline
+python3 main.py --profile default pipeline
 ```
 
-### Available Commands
+Core commands:
 
-| Command | Description |
-|---------|-------------|
-| `extract_new` | Process new PDFs from raw folder |
-| `rename_files` | Rename files based on metadata |
-| `validate_metadata` | Check metadata consistency |
-| `export_excel` | Export to Excel spreadsheet |
-| `copy_matching` | Copy files matching regex pattern |
-| `export_all_dates` | Export files by date ranges |
-| `pipeline` | Full end-to-end workflow |
-| `gmail_download` | Download Gmail attachments |
+| Command | Purpose |
+|---|---|
+| `pipeline` | Full ingest -> classify -> organize workflow |
+| `extract` | Process new PDFs, images, and XLSX files from raw folders |
+| `sync` | Rebuild or repair metadata from sidecars and companions |
+| `rename` | Rename document files from sidecar JSON |
+| `check` | Backfill missing metadata and audit integrity |
+| `reconcile` | Reconcile bank statements against exported documents |
+| `gmail` | Download Gmail attachments into raw folders |
+| `archive` | Move documents by `hash_file` digest into `_archived/` |
+| `export excel` | Export metadata to an Excel workbook |
+| `export dates` | Export files into `YYYY-MM` folders |
+| `export copy` | Copy files matching a pattern |
 
-### Full Pipeline
+Examples:
 
 ```bash
-# Run complete pipeline: download from Gmail → extract → rename → export
-python main.py pipeline /path/to/processed --export_date 2025-01
+python3 main.py extract
+python3 main.py sync --all-unknown
+python3 main.py check --verify-hashes
+python3 main.py export excel --output /tmp/processed_files.xlsx
+python3 main.py export copy --pattern 2026-01 --dest /tmp/january
+python3 main.py reconcile
 ```
 
-## 🏗️ How It Works
+## Supported Inputs
 
-### Two-Phase Extraction Pipeline
+- PDF documents classified with a vision LLM
+- PNG, JPG, JPEG, TIFF, BMP, and WebP images converted to PDF on ingest
+- XLSX bank statements classified deterministically
+- Gmail attachments
+- mbox attachments
+- compressed archives discovered in raw folders
 
-```mermaid
-graph LR
-    A[PDF Document] --> B[Render Pages as JPEG]
-    B --> C[Vision LLM Extraction]
-    C --> D[Raw Metadata]
-    D --> E[Normalization]
-    E --> F[Canonical Metadata]
-    F --> G[Renamed File]
+## Invariants
+
+These are intentionally preserved:
+
+1. Raw extracted values are stored in `*_raw` fields.
+2. Deduplication uses `hash_content`; filenames use `hash_file`.
+3. `$UNKNOWN$` is the only fallback sentinel.
+4. QR metadata overrides LLM metadata.
+5. Sidecar JSON is authoritative; `rename` fixes filenames from metadata.
+
+## Outputs
+
+Document filenames follow:
+
+```text
+YYYY-MM-DD - document-type - issuing-party - [title] - [amount currency] - hash_file.ext
 ```
 
-**Phase 1 — Raw Extraction**: Renders PDF pages as images, sends to vision LLM, extracts metadata exactly as it appears on the document.
+Examples:
 
-**Phase 2 — Normalization**: LLM maps raw values to canonical forms, validated against known lists.
+```text
+2025-01-02 - invoice - anthropic - claude api - 120 eur - a1b2c3d4.pdf
+2026-01-01 - bank-statement - millennium-bcp - TEST-ACCOUNT-ALPHA - a1b2c3d4.xlsx
+```
 
-### Two-Tier Hashing
+Reconciliation writes a sidecar next to each bank statement:
 
-| Hash Type | Purpose | Speed |
-|-----------|---------|-------|
-| **Fast hash** | Quick duplicate filtering | Instant |
-| **Content hash** | True duplicates (different metadata, same content) | ~1-2 sec/doc |
+```text
+2026-01-01 - bank-statement - millennium-bcp - TEST-ACCOUNT-ALPHA - a1b2c3d4.reconciliation.json
+```
 
-## 🛠️ Development
+## Gradio Tools
+
+Run the local review tools directly:
 
 ```bash
-# Check file hashes
-python scripts/check_hash.py /path/to/document.pdf
+python3 tools/browse.py
+python3 tools/dedupe.py
+python3 tools/review.py
 ```
 
-## 🔧 Troubleshooting
+## Notes
 
-| Issue | Solution |
-|-------|----------|
-| Classification returns `$UNKNOWN$` | Check the extraction logs in `{processed_path}/logs/` for LLM output details |
-| High API costs | Switch to `google/gemini-2.5-flash` for 10-20x cost reduction |
-
-## 📄 License
-
-MIT License — see [LICENSE](LICENSE) for details.
-
----
-
-<div align="center">
-  <sub>Built by <a href="https://github.com/tsilva">Employee Two</a> · Powered by <a href="https://openrouter.ai/">OpenRouter</a> and Vision LLMs</sub>
-</div>
+- QR extraction requires `pyzbar` and the system `zbar` library.
+- Gmail requires credentials under `~/.config/papertrail/credentials/`.
+- Logs are written under `{processed}/logs/`.

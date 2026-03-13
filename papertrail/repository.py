@@ -1,4 +1,4 @@
-"""Filesystem-backed document storage helpers."""
+"""Filesystem-backed repository helpers and canonical-value registry."""
 
 from __future__ import annotations
 
@@ -8,9 +8,9 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Iterator
 
-from papertrail.app import App, get_app
-from papertrail.models import DocumentMetadata
+from papertrail.models import DocumentMetadata, clean_enum_string
 from papertrail.naming import file_name_from_metadata
+from papertrail.runtime import Runtime
 
 try:
     import orjson
@@ -26,60 +26,140 @@ except ImportError:
             return json.load(handle)
 
 
-class DocumentStore:
-    """Filesystem-backed store for sidecars and companion documents."""
+class CanonicalRegistry:
+    """Known document types and issuing parties discovered from sidecars."""
 
-    def __init__(self, app: App):
-        self.app = app
+    def __init__(self, repository: "DocumentRepository") -> None:
+        self.repository = repository
+        self._document_types: set[str] = {"$UNKNOWN$"}
+        self._issuing_parties: set[str] = {"$UNKNOWN$"}
+        self._loaded_scope: Path | None = None
+
+    def invalidate(self) -> None:
+        self._loaded_scope = None
+        self._document_types = {"$UNKNOWN$"}
+        self._issuing_parties = {"$UNKNOWN$"}
+
+    def load(self, scope: str | Path = "processed") -> None:
+        root = self.repository.resolve_scope(scope)
+        if self._loaded_scope == root:
+            return
+
+        document_types = {"$UNKNOWN$"}
+        issuing_parties = {"$UNKNOWN$"}
+
+        for json_path in root.rglob("*.json"):
+            try:
+                rel = json_path.relative_to(root)
+            except ValueError:
+                continue
+            if self.repository.is_internal_path(rel) or json_path.name.endswith(".reconciliation.json"):
+                continue
+            try:
+                data = _load_json_fast(json_path)
+            except Exception:
+                continue
+            document_type = data.get("document_type")
+            if isinstance(document_type, str) and document_type.strip() and document_type != "$UNKNOWN$":
+                document_types.add(clean_enum_string(document_type, "DocumentType"))
+            issuing_party = data.get("issuing_party")
+            if isinstance(issuing_party, str) and issuing_party.strip() and issuing_party != "$UNKNOWN$":
+                issuing_parties.add(clean_enum_string(issuing_party))
+
+        self._document_types = document_types
+        self._issuing_parties = issuing_parties
+        self._loaded_scope = root
+
+    def document_types(self, scope: str | Path = "processed") -> list[str]:
+        self.load(scope)
+        return sorted(self._document_types)
+
+    def issuing_parties(self, scope: str | Path = "processed") -> list[str]:
+        self.load(scope)
+        return sorted(self._issuing_parties)
+
+    def register_document_type(self, value: str | None) -> str | None:
+        if not value or value == "$UNKNOWN$":
+            return value
+        self._document_types.add(clean_enum_string(value, "DocumentType"))
+        return self.canonicalize_document_type(value)
+
+    def register_issuing_party(self, value: str | None) -> str | None:
+        if not value or value == "$UNKNOWN$":
+            return value
+        self._issuing_parties.add(clean_enum_string(value))
+        return self.canonicalize_issuing_party(value)
+
+    def canonicalize_document_type(self, value: str | None) -> str | None:
+        return self._canonicalize(value, self._document_types, enum_prefix="DocumentType")
+
+    def canonicalize_issuing_party(self, value: str | None) -> str | None:
+        return self._canonicalize(value, self._issuing_parties)
+
+    @staticmethod
+    def _canonicalize(
+        value: str | None,
+        known_values: set[str],
+        *,
+        enum_prefix: str | None = None,
+    ) -> str | None:
+        if value is None:
+            return None
+        cleaned = clean_enum_string(value, enum_prefix).strip()
+        if not cleaned:
+            return "$UNKNOWN$"
+        lowered = cleaned.lower()
+        matches = {known.lower(): known for known in known_values}
+        return matches.get(lowered, cleaned)
+
+
+class DocumentRepository:
+    """Filesystem-backed repository for sidecars and companion documents."""
+
+    def __init__(self, runtime: Runtime):
+        self.runtime = runtime
+        self.registry = CanonicalRegistry(self)
 
     @staticmethod
     def is_internal_path(path: Path) -> bool:
-        """Check if a path should be excluded from document scans."""
         parts = path.parts
-        return (
-            any(part.startswith("_dupes") for part in parts)
-            or "logs" in parts
-            or path.name.startswith("_")
-        )
+        return any(part.startswith("_dupes") for part in parts) or "logs" in parts or path.name.startswith("_")
 
     def resolve_scope(self, scope: str | Path = "processed") -> Path:
-        """Resolve a logical scope to a concrete directory."""
         if isinstance(scope, Path):
             return scope
         if scope == "processed":
-            return self.app.require_processed_path()
+            return self.runtime.require_processed_path()
         if scope == "export":
-            return self.app.require_export_path()
+            return self.runtime.require_export_path()
         raise ValueError(f"Unsupported document scope: {scope}")
 
     def find_companion(self, json_path: Path, metadata: dict | None = None) -> Path | None:
-        """Find a companion file for a JSON sidecar."""
         if metadata:
-            ext = metadata.get("source_extension")
-            if ext:
-                candidate = json_path.with_suffix(ext)
+            extension = metadata.get("source_extension")
+            if extension:
+                candidate = json_path.with_suffix(extension)
                 if candidate.exists():
                     return candidate
-        for ext in (".pdf", ".xlsx"):
-            candidate = json_path.with_suffix(ext)
+        for extension in (".pdf", ".xlsx"):
+            candidate = json_path.with_suffix(extension)
             if candidate.exists():
                 return candidate
         return None
 
     def load_metadata(self, json_path: Path, validate: bool = False) -> DocumentMetadata | dict:
-        """Load metadata from a sidecar file."""
         data = _load_json_fast(json_path)
         if validate:
             return DocumentMetadata.model_validate(data)
         return data
 
     def save_json(self, json_path: Path, data: dict) -> None:
-        """Persist raw JSON data."""
         with open(json_path, "w", encoding="utf-8") as handle:
             json.dump(data, handle, indent=4, ensure_ascii=False, sort_keys=True)
+        self.registry.register_document_type(data.get("document_type"))
+        self.registry.register_issuing_party(data.get("issuing_party"))
 
     def save_document(self, doc_path: Path, metadata: DocumentMetadata) -> None:
-        """Persist a sidecar alongside a document file."""
         self.save_json(doc_path.with_suffix(".json"), metadata.model_dump())
 
     def iter_sidecars(
@@ -89,10 +169,14 @@ class DocumentStore:
         show_progress: bool = False,
         progress_desc: str = "Processing files",
     ) -> Iterator[tuple[Path, DocumentMetadata | dict]]:
-        """Iterate sidecars in a scope."""
         root = self.resolve_scope(scope)
-        json_files = [path for path in root.rglob("*.json") if not self.is_internal_path(path.relative_to(root))]
-        iterator = self.app.console.track(json_files, progress_desc) if show_progress else json_files
+        json_files = [
+            path
+            for path in root.rglob("*.json")
+            if not self.is_internal_path(path.relative_to(root))
+            and not path.name.endswith(".reconciliation.json")
+        ]
+        iterator = self.runtime.console.track(json_files, progress_desc) if show_progress else json_files
 
         for json_path in iterator:
             try:
@@ -108,9 +192,13 @@ class DocumentStore:
         show_progress: bool = False,
         progress_desc: str = "Loading metadata",
     ) -> list[tuple[Path, DocumentMetadata | dict]]:
-        """Load sidecars in parallel."""
         root = self.resolve_scope(scope)
-        json_files = [path for path in root.rglob("*.json") if not self.is_internal_path(path.relative_to(root))]
+        json_files = [
+            path
+            for path in root.rglob("*.json")
+            if not self.is_internal_path(path.relative_to(root))
+            and not path.name.endswith(".reconciliation.json")
+        ]
         if not json_files:
             return []
 
@@ -127,7 +215,7 @@ class DocumentStore:
         if not validate:
             return loaded
 
-        iterator = self.app.console.track(loaded, progress_desc) if show_progress else loaded
+        iterator = self.runtime.console.track(loaded, progress_desc) if show_progress else loaded
         results: list[tuple[Path, DocumentMetadata]] = []
         for json_path, data in iterator:
             try:
@@ -144,7 +232,6 @@ class DocumentStore:
         show_progress: bool = False,
         progress_desc: str = "Loading metadata",
     ) -> Iterator[tuple[Path, Path, DocumentMetadata | dict]]:
-        """Iterate sidecars and their companion files."""
         for json_path, metadata in self.iter_sidecars(
             scope=scope,
             validate=validate,
@@ -157,11 +244,7 @@ class DocumentStore:
                 continue
             yield json_path, doc_path, metadata
 
-    def build_indexes(
-        self,
-        scope: str | Path = "processed",
-    ) -> tuple[dict[str, Path], dict[str, Path], dict[str, Path], set[str]]:
-        """Build content/file/text hash indexes and the known issuer set."""
+    def build_indexes(self, scope: str | Path = "processed") -> tuple[dict[str, Path], dict[str, Path], dict[str, Path], set[str]]:
         content_hash_index: dict[str, Path] = {}
         file_hash_index: dict[str, Path] = {}
         text_hash_index: dict[str, Path] = {}
@@ -185,7 +268,6 @@ class DocumentStore:
         return content_hash_index, file_hash_index, text_hash_index, known_issuers
 
     def unique_dates(self, scope: str | Path = "processed") -> list[str]:
-        """Return unique YYYY-MM dates from document metadata."""
         dates_set: set[str] = set()
         for _, data in self.iter_sidecars(scope=scope):
             issue_date = data.get("date_issued", "")
@@ -196,7 +278,6 @@ class DocumentStore:
         return sorted(dates_set, reverse=True)
 
     def repair_filenames(self, scope: str | Path = "processed") -> dict:
-        """Rename existing document files to match their metadata."""
         root = self.resolve_scope(scope)
         valid_entries: list[tuple[Path, DocumentMetadata]] = []
         orphan_count = 0
@@ -237,7 +318,6 @@ class DocumentStore:
         dry_run: bool = False,
         scope: str | Path = "processed",
     ) -> dict:
-        """Archive documents by hash_file digest."""
         root = self.resolve_scope(scope)
         archive_dir = root.parent / "_archived"
         hash_to_json: dict[str, Path] = {}
@@ -258,6 +338,7 @@ class DocumentStore:
                 not_found.append(digest)
                 continue
             found += 1
+
             data = None
             try:
                 data = self.load_metadata(json_path)
@@ -295,6 +376,4 @@ class DocumentStore:
         }
 
 
-def get_store() -> DocumentStore:
-    """Return a store for the active app."""
-    return DocumentStore(get_app())
+__all__ = ["CanonicalRegistry", "DocumentRepository"]

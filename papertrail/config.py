@@ -1,20 +1,20 @@
-"""Configuration, profile loading, and environment management."""
+"""Typed configuration loading and environment helpers."""
 
-import os
-from dataclasses import dataclass
+from __future__ import annotations
+
 import shutil
+import urllib.error
+import urllib.request
 from pathlib import Path
-from typing import Optional
+from typing import Any
 
 import openai
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 try:
     import yaml
 except ImportError:
     yaml = None  # type: ignore
-
-
-# --- Exceptions ---
 
 
 class ConfigError(Exception):
@@ -29,129 +29,114 @@ class ProfileParseError(ConfigError):
     """Raised when a profile file cannot be parsed."""
 
 
-# --- Config dict wrapper ---
+class SettingsModel(BaseModel):
+    """Base model for mutable settings sections."""
+
+    model_config = ConfigDict(
+        extra="allow",
+        validate_assignment=True,
+        arbitrary_types_allowed=True,
+    )
 
 
-class Config:
-    """YAML config with dot-path access.
-
-    Nested dicts become Config objects. Missing keys return None.
-    Also supports dict-like methods (items, keys, etc.) for data dicts.
-    """
-
-    def __init__(self, data: dict):
-        object.__setattr__(self, "_data", data)
-
-    def __getattr__(self, key):
-        try:
-            val = self._data[key]
-        except KeyError:
-            return None
-        if isinstance(val, dict):
-            return Config(val)
-        if isinstance(val, list):
-            return [Config(item) if isinstance(item, dict) else item for item in val]
-        return val
-
-    def __setattr__(self, key, value):
-        self._data[key] = value
-
-    def get(self, key, default=None):
-        val = self._data.get(key)
-        if val is None:
-            return default
-        if isinstance(val, dict):
-            return Config(val)
-        if isinstance(val, list):
-            return [Config(item) if isinstance(item, dict) else item for item in val]
-        return val
-
-    def items(self):
-        return self._data.items()
-
-    def keys(self):
-        return self._data.keys()
-
-    def values(self):
-        return self._data.values()
-
-    def __iter__(self):
-        return iter(self._data)
-
-    def __len__(self):
-        return len(self._data)
-
-    def __contains__(self, key):
-        return key in self._data
-
-    def __bool__(self):
-        return bool(self._data)
+class ProfileInfo(SettingsModel):
+    name: str
+    description: str = ""
+    tax_number: str | None = None
 
 
-# Backwards compatibility
-Profile = Config
+class PathsSettings(SettingsModel):
+    raw: list[str] = Field(default_factory=list)
+    processed: str | None = None
+    export: str | None = None
 
-
-# --- Profile loading ---
-
-
-class ProfileLoader:
-    """Profile discovery and loading with migration support."""
-
-    @property
-    def profiles_dir(self) -> Path:
-        return get_profiles_dir()
-
-    def list_available_profiles(self) -> list[str]:
-        profiles_dir = self.profiles_dir
-
-        if not list(profiles_dir.iterdir()):
-            _migrate_from_repo()
-
-        if not profiles_dir.exists():
+    @field_validator("raw", mode="before")
+    @classmethod
+    def _normalize_raw(cls, value: Any) -> list[str]:
+        if value is None:
             return []
-
-        return sorted(
-            [d.name for d in profiles_dir.iterdir() if d.is_dir() and (d / "profile.yaml").exists()]
-        )
-
-    def load_profile(self, name: str) -> Config:
-        if yaml is None:
-            raise ConfigError("PyYAML is not installed.")
-
-        profile_path = self.profiles_dir / name / "profile.yaml"
-        if not profile_path.exists():
-            available = self.list_available_profiles()
-            raise ProfileNotFoundError(
-                f"Profile '{name}' not found at {profile_path}. "
-                f"Available: {', '.join(available) or 'none'}"
-            )
-
-        try:
-            with open(profile_path, "r", encoding="utf-8") as f:
-                data = yaml.safe_load(f)
-        except yaml.YAMLError as e:
-            raise ProfileParseError(f"Failed to parse profile '{name}': {e}")
-
-        if not isinstance(data, dict):
-            raise ProfileParseError(f"Profile '{name}' must be a YAML mapping")
-        if "profile" not in data or not isinstance(data.get("profile"), dict):
-            raise ConfigError("Missing required field: profile")
-        if "name" not in data["profile"]:
-            raise ConfigError("Missing required field: profile.name")
-
-        _normalize_data(data, profile_path)
-        return Config(data)
+        if isinstance(value, str):
+            return [value]
+        return list(value)
 
 
-def _resolve_path(path_str, profile_path):
-    """Resolve a path string relative to the profile file location."""
-    if not path_str:
-        return None
-    path = Path(path_str)
-    if path.is_absolute():
-        return str(path)
-    return str((profile_path.parent / path).resolve())
+class OpenRouterSettings(SettingsModel):
+    model_id: str | None = None
+    api_key: str | None = None
+    base_url: str = "https://openrouter.ai/api/v1"
+
+
+class GmailSettings(SettingsModel):
+    enabled: bool = False
+    attachment_mime_types: list[str] = Field(default_factory=lambda: ["application/pdf"])
+    label_filter: str | None = None
+    max_results_per_query: int = 500
+    skip_already_downloaded: bool = True
+    credentials_file: str | None = None
+    token_file: str | None = None
+
+
+class PasswordSettings(SettingsModel):
+    passwords: list[str] = Field(default_factory=list)
+    passwords_file: str | None = None
+
+
+class NIFAPISettings(SettingsModel):
+    enabled: bool = False
+
+
+class ReconciliationRule(SettingsModel):
+    name: str
+    match_description: list[str] = Field(default_factory=list)
+    direction: str | None = None
+    required_types: dict[str, Any] = Field(default_factory=dict)
+    shared_types: dict[str, str | None] = Field(default_factory=dict)
+    companions: list[str] = Field(default_factory=list)
+    expected_page_count: dict[str, int] = Field(default_factory=dict)
+
+
+class ReconciliationSettings(SettingsModel):
+    exclude_prefixes: list[str] = Field(default_factory=list)
+    rules: list[ReconciliationRule] = Field(default_factory=list)
+
+
+class ExportRule(SettingsModel):
+    match: dict[str, Any] = Field(default_factory=dict)
+    prefix: str = ""
+
+
+class FileMappingSettings(SettingsModel):
+    enabled: bool = False
+    default_prefix: str = ""
+    rules: list[ExportRule] = Field(default_factory=list)
+    filename_fields: list[str] = Field(default_factory=list)
+
+
+class MergeRule(SettingsModel):
+    target_type: str
+    attach_type: str
+
+
+class ExportSettings(SettingsModel):
+    file_mappings: FileMappingSettings = Field(default_factory=FileMappingSettings)
+    merge_rules: list[MergeRule] = Field(default_factory=list)
+    max_file_size_mb: float | None = None
+
+
+class ProfileSettings(SettingsModel):
+    profile: ProfileInfo
+    paths: PathsSettings = Field(default_factory=PathsSettings)
+    openrouter: OpenRouterSettings = Field(default_factory=OpenRouterSettings)
+    gmail: GmailSettings = Field(default_factory=GmailSettings)
+    passwords: PasswordSettings = Field(default_factory=PasswordSettings)
+    nif_api: NIFAPISettings = Field(default_factory=NIFAPISettings)
+    reconciliation: ReconciliationSettings = Field(default_factory=ReconciliationSettings)
+    export: ExportSettings = Field(default_factory=ExportSettings)
+    profile_path: Path | None = Field(default=None, exclude=True)
+    profile_dir: Path | None = Field(default=None, exclude=True)
+
+
+Profile = ProfileSettings
 
 
 _DEFAULT_RECON_RULES = [
@@ -188,9 +173,18 @@ _DEFAULT_RECON_RULES = [
 ]
 
 
-def _normalize_data(data, profile_path):
-    """Apply defaults, flatten nested structures, resolve paths."""
-    # Top-level section defaults
+def _resolve_path(path_str: str | None, profile_path: Path | None) -> str | None:
+    if not path_str:
+        return None
+    path = Path(path_str)
+    if path.is_absolute() or profile_path is None:
+        return str(path)
+    return str((profile_path.parent / path).resolve())
+
+
+def _normalize_profile_data(data: dict[str, Any], profile_path: Path | None) -> dict[str, Any]:
+    normalized = dict(data)
+
     defaults = {
         "profile": {},
         "paths": {},
@@ -201,264 +195,160 @@ def _normalize_data(data, profile_path):
         "reconciliation": {},
         "export": {},
     }
-    for k, v in defaults.items():
-        data.setdefault(k, v)
+    for key, value in defaults.items():
+        normalized.setdefault(key, value)
 
-    data["profile"].setdefault("description", "")
-
-    # Flatten gmail.settings into gmail
-    gmail = data["gmail"]
+    gmail = dict(normalized["gmail"])
     settings = gmail.pop("settings", {})
-    for k, v in settings.items():
-        gmail.setdefault(k, v)
+    if isinstance(settings, dict):
+        for key, value in settings.items():
+            gmail.setdefault(key, value)
+    normalized["gmail"] = gmail
 
-    # Scalar defaults
-    data["openrouter"].setdefault("base_url", "https://openrouter.ai/api/v1")
+    profile = normalized["profile"]
+    profile.setdefault("description", "")
+
+    openrouter = normalized["openrouter"]
+    openrouter.setdefault("base_url", "https://openrouter.ai/api/v1")
+
     gmail.setdefault("enabled", False)
     gmail.setdefault("attachment_mime_types", ["application/pdf"])
     gmail.setdefault("max_results_per_query", 500)
     gmail.setdefault("skip_already_downloaded", True)
-    data["nif_api"].setdefault("enabled", False)
 
-    # Normalize paths.raw to list
-    paths = data["paths"]
+    normalized["nif_api"].setdefault("enabled", False)
+
+    paths = normalized["paths"]
     raw = paths.get("raw")
     if isinstance(raw, str):
         paths["raw"] = [raw]
     elif raw is None:
         paths["raw"] = []
 
-    # Reconciliation defaults
-    recon = data["reconciliation"]
-    if "rules" not in recon:
-        recon["rules"] = [dict(r) for r in _DEFAULT_RECON_RULES]
+    reconciliation = normalized["reconciliation"]
+    rules = reconciliation.get("rules")
+    if rules is None:
+        reconciliation["rules"] = [dict(rule) for rule in _DEFAULT_RECON_RULES]
     else:
-        recon["rules"] = [r for r in recon["rules"] if isinstance(r, dict) and "name" in r]
-    recon.setdefault("exclude_prefixes", [])
-    for rule in recon["rules"]:
+        reconciliation["rules"] = [
+            rule for rule in rules if isinstance(rule, dict) and "name" in rule
+        ]
+    reconciliation.setdefault("exclude_prefixes", [])
+    for rule in reconciliation["rules"]:
         rule.setdefault("match_description", [])
         rule.setdefault("required_types", {})
         rule.setdefault("shared_types", {})
         rule.setdefault("companions", [])
         rule.setdefault("expected_page_count", {})
 
-    # Export defaults
-    export = data["export"]
+    export = normalized["export"]
     export.setdefault("file_mappings", {})
     export["file_mappings"].setdefault("enabled", False)
     export["file_mappings"].setdefault("default_prefix", "")
     export["file_mappings"].setdefault("rules", [])
+    export["file_mappings"].setdefault("filename_fields", [])
     export.setdefault("merge_rules", [])
+    export.setdefault("max_file_size_mb", None)
 
-    # Profile path metadata
-    data["_profile_path"] = profile_path
-    data["profile_dir"] = profile_path.parent if profile_path else None
-
-    # Resolve relative paths
     if profile_path:
         if paths.get("raw"):
-            paths["raw"] = [_resolve_path(p, profile_path) for p in paths["raw"]]
+            paths["raw"] = [_resolve_path(path, profile_path) for path in paths["raw"]]
         paths["processed"] = _resolve_path(paths.get("processed"), profile_path)
         paths["export"] = _resolve_path(paths.get("export"), profile_path)
-        data["passwords"]["passwords_file"] = _resolve_path(
-            data["passwords"].get("passwords_file"), profile_path
-        )
+
+        passwords = normalized["passwords"]
+        passwords["passwords_file"] = _resolve_path(passwords.get("passwords_file"), profile_path)
         if gmail.get("credentials_file"):
             gmail["credentials_file"] = _resolve_path(gmail["credentials_file"], profile_path)
         if gmail.get("token_file"):
             gmail["token_file"] = _resolve_path(gmail["token_file"], profile_path)
 
+    normalized["profile_path"] = profile_path
+    normalized["profile_dir"] = profile_path.parent if profile_path else None
+    return normalized
+
 
 def get_profiles_dir() -> Path:
-    """Get profiles directory (always ~/.config/papertrail/profiles/)."""
     profiles_dir = Path.home() / ".config" / "papertrail" / "profiles"
     profiles_dir.mkdir(parents=True, exist_ok=True)
     return profiles_dir
 
 
-def _migrate_from_repo():
-    """Migrate profiles, cache, and credentials from repo to user directories.
-
-    One-time migration triggered when ~/.config/papertrail/profiles/ is empty
-    but repo has profiles. Copies everything, then deletes old files.
-    """
-    import logging
-
-    logger = logging.getLogger("papertrail.migration")
-
-    repo_root = Path(__file__).parent.parent
-    repo_profiles = repo_root / "profiles"
-    repo_cache = repo_root / ".cache"
-    repo_credentials = repo_root / ".credentials"
-
-    user_profiles = Path.home() / ".config" / "papertrail" / "profiles"
-    user_cache = Path.home() / ".config" / "papertrail" / "cache"
-    user_credentials = Path.home() / ".config" / "papertrail" / "credentials"
-
-    migrated = []
-
-    # Migrate profiles
-    if repo_profiles.exists() and user_profiles.exists():
-        # Check if there are any profile directories (not just template files)
-        profile_dirs = [
-            d for d in repo_profiles.iterdir() if d.is_dir() and (d / "profile.yaml").exists()
-        ]
-        if profile_dirs and not list(user_profiles.iterdir()):
-            logger.info(
-                "[MIGRATION] Migrating profiles from repo to ~/.config/papertrail/profiles/"
-            )
-            for profile_dir in profile_dirs:
-                dest = user_profiles / profile_dir.name
-                shutil.copytree(profile_dir, dest)
-                migrated.append(f"profile: {profile_dir.name}")
-                # Delete repo copy
-                shutil.rmtree(profile_dir)
-                logger.info(f"[MIGRATION] Moved {profile_dir.name} profile")
-
-            # Copy template file
-            template = repo_profiles / "profile.yaml.example"
-            if template.exists():
-                shutil.copy2(template, user_profiles / "profile.yaml.example")
-                template.unlink()
-                migrated.append("profile.yaml.example")
-
-            # Clean up empty profiles directory in repo
-            try:
-                repo_profiles.rmdir()
-            except OSError:
-                pass  # Directory not empty or other issue
-
-    # Migrate cache
-    if repo_cache.exists():
-        user_cache.mkdir(parents=True, exist_ok=True)
-        cache_files = ["hash_cache.yaml", "nif_cache.yaml", ".extract.lock"]
-        for cache_file in cache_files:
-            src = repo_cache / cache_file
-            if src.exists():
-                dest = user_cache / cache_file
-                shutil.copy2(src, dest)
-                src.unlink()
-                migrated.append(f"cache: {cache_file}")
-
-        # Try to clean up empty cache directory
-        try:
-            # Only remove if empty (keep example files)
-            remaining = [f for f in repo_cache.iterdir() if not f.name.endswith(".example")]
-            if not remaining:
-                for f in repo_cache.iterdir():
-                    f.unlink()
-                repo_cache.rmdir()
-        except OSError:
-            pass
-
-        if migrated:
-            logger.info(f"[MIGRATION] Migrated cache files to ~/.config/papertrail/cache/")
-
-    # Migrate credentials
-    if repo_credentials.exists():
-        user_credentials.mkdir(parents=True, exist_ok=True)
-        cred_files = ["gmail_credentials.json", "gmail_token.json", "gmail_settings.json"]
-        for cred_file in cred_files:
-            src = repo_credentials / cred_file
-            if src.exists():
-                dest = user_credentials / cred_file
-                shutil.copy2(src, dest)
-                src.unlink()
-                migrated.append(f"credentials: {cred_file}")
-
-        # Try to clean up empty credentials directory
-        try:
-            remaining = list(repo_credentials.iterdir())
-            if not remaining:
-                repo_credentials.rmdir()
-        except OSError:
-            pass
-
-        if any("credentials:" in m for m in migrated):
-            logger.info("[MIGRATION] Migrated credentials to ~/.config/papertrail/credentials/")
-
-    if migrated:
-        logger.info(f"[MIGRATION] Complete. Migrated: {', '.join(m for m in migrated)}")
-        logger.info(
-            "[MIGRATION] Old repo files have been deleted. You may want to update .gitignore."
-        )
-
-
-def list_available_profiles():
-    """List all available profile names."""
-    return ProfileLoader().list_available_profiles()
-
-
-def load_profile(name):
-    """Load a profile by name from the profiles directory."""
-    return ProfileLoader().load_profile(name)
-
-
-def get_passwords_from_profile(profile):
-    """Get passwords list from profile."""
-    if profile.passwords.passwords:
-        return (profile.passwords.passwords, None)
-    if profile.passwords.passwords_file:
-        passwords_file = Path(profile.passwords.passwords_file)
-        if passwords_file.exists():
-            with open(passwords_file, "r", encoding="utf-8") as f:
-                passwords = [line.strip() for line in f if line.strip()]
-            return (passwords, str(passwords_file))
-    return ([], None)
-
-
-# --- Runtime state ---
-
-_current_profile: Optional[Config] = None
-
-
-@dataclass
-class AppContext:
-    """Runtime application context holding all initialized resources."""
-
-    model_id: str
-    openai_client: any
-    nif_cache: any  # NIFLookupCache or None
-
-
-_ctx: AppContext | None = None
-
-
-def get_ctx() -> AppContext:
-    """Get the application context. Raises if not initialized."""
-    if _ctx is None:
-        raise RuntimeError("Application context not initialized. Call initialize_config() first.")
-    return _ctx
-
-
-def set_ctx(ctx: AppContext) -> None:
-    global _ctx
-    _ctx = ctx
-
-
-def set_current_profile(profile: Optional[Config]) -> None:
-    global _current_profile
-    _current_profile = profile
-
-
-def get_current_profile() -> Optional[Config]:
-    return _current_profile
-
-
-def get_repo_root() -> Path:
-    return Path(__file__).parent.parent
-
-
 def get_cache_dir() -> Path:
-    """Get cache directory (always ~/.config/papertrail/cache/)."""
     cache_dir = Path.home() / ".config" / "papertrail" / "cache"
     cache_dir.mkdir(parents=True, exist_ok=True)
     return cache_dir
 
 
-def get_gmail_config_paths() -> dict[str, Path]:
-    """Get paths to Gmail API configuration files."""
-    profile = get_current_profile()
+class ProfileLoader:
+    """Profile discovery and loading with repo migration support."""
+
+    @property
+    def profiles_dir(self) -> Path:
+        return get_profiles_dir()
+
+    def list_available_profiles(self) -> list[str]:
+        profiles_dir = self.profiles_dir
+        if not list(profiles_dir.iterdir()):
+            _migrate_from_repo()
+        if not profiles_dir.exists():
+            return []
+        return sorted(
+            directory.name
+            for directory in profiles_dir.iterdir()
+            if directory.is_dir() and (directory / "profile.yaml").exists()
+        )
+
+    def load_profile(self, name: str) -> ProfileSettings:
+        if yaml is None:
+            raise ConfigError("PyYAML is not installed.")
+
+        profile_path = self.profiles_dir / name / "profile.yaml"
+        if not profile_path.exists():
+            available = self.list_available_profiles()
+            raise ProfileNotFoundError(
+                f"Profile '{name}' not found at {profile_path}. "
+                f"Available: {', '.join(available) or 'none'}"
+            )
+
+        try:
+            with open(profile_path, "r", encoding="utf-8") as handle:
+                data = yaml.safe_load(handle)
+        except yaml.YAMLError as exc:
+            raise ProfileParseError(f"Failed to parse profile '{name}': {exc}") from exc
+
+        if not isinstance(data, dict):
+            raise ProfileParseError(f"Profile '{name}' must be a YAML mapping")
+        if "profile" not in data or not isinstance(data.get("profile"), dict):
+            raise ConfigError("Missing required field: profile")
+        if "name" not in data["profile"]:
+            raise ConfigError("Missing required field: profile.name")
+
+        normalized = _normalize_profile_data(data, profile_path)
+        return ProfileSettings.model_validate(normalized)
+
+
+def list_available_profiles() -> list[str]:
+    return ProfileLoader().list_available_profiles()
+
+
+def load_profile(name: str) -> ProfileSettings:
+    return ProfileLoader().load_profile(name)
+
+
+def get_passwords_from_profile(profile: ProfileSettings) -> tuple[list[str], str | None]:
+    if profile.passwords.passwords:
+        return profile.passwords.passwords, None
+    if profile.passwords.passwords_file:
+        passwords_file = Path(profile.passwords.passwords_file)
+        if passwords_file.exists():
+            with open(passwords_file, "r", encoding="utf-8") as handle:
+                passwords = [line.strip() for line in handle if line.strip()]
+            return passwords, str(passwords_file)
+    return [], None
+
+
+def get_gmail_config_paths(profile: ProfileSettings | None = None) -> dict[str, Path]:
     credentials_dir = Path.home() / ".config" / "papertrail" / "credentials"
     credentials_dir.mkdir(parents=True, exist_ok=True)
     paths = {
@@ -474,41 +364,101 @@ def get_gmail_config_paths() -> dict[str, Path]:
     return paths
 
 
-def get_openai_client() -> openai.OpenAI:
-    """Get a configured OpenAI client for OpenRouter."""
-    profile = get_current_profile()
-    if not profile:
-        raise RuntimeError(
-            "No profile is active. Use --profile to specify a configuration profile."
-        )
+def build_openai_client(profile: ProfileSettings) -> openai.OpenAI:
     api_key = profile.openrouter.api_key
-    base_url = profile.openrouter.base_url
     if not api_key:
         raise RuntimeError(
             f"No OpenRouter API key configured in profile '{profile.profile.name}'. "
             "Set openrouter.api_key in your profile YAML."
         )
-    return openai.OpenAI(api_key=api_key, base_url=base_url)
-
-
-def get_passwords() -> tuple[list[str], str | None]:
-    """Get passwords for ZIP extraction from profile."""
-    profile = get_current_profile()
-    if profile:
-        return get_passwords_from_profile(profile)
-    return ([], None)
+    return openai.OpenAI(api_key=api_key, base_url=profile.openrouter.base_url)
 
 
 def check_api_accessibility(base_url: str, timeout: int = 10) -> bool:
-    """Check if the API base URL is accessible."""
-    import urllib.request
-    import urllib.error
-
     try:
-        req = urllib.request.Request(base_url, method="HEAD")
-        urllib.request.urlopen(req, timeout=timeout)
+        request = urllib.request.Request(base_url, method="HEAD")
+        urllib.request.urlopen(request, timeout=timeout)
         return True
     except urllib.error.HTTPError:
         return True
     except (urllib.error.URLError, TimeoutError):
         return False
+
+
+def _migrate_from_repo() -> None:
+    import logging
+
+    logger = logging.getLogger("papertrail.migration")
+    repo_root = Path(__file__).parent.parent
+    repo_profiles = repo_root / "profiles"
+    repo_cache = repo_root / ".cache"
+    repo_credentials = repo_root / ".credentials"
+
+    user_profiles = Path.home() / ".config" / "papertrail" / "profiles"
+    user_cache = Path.home() / ".config" / "papertrail" / "cache"
+    user_credentials = Path.home() / ".config" / "papertrail" / "credentials"
+
+    migrated: list[str] = []
+
+    if repo_profiles.exists() and user_profiles.exists():
+        profile_dirs = [
+            directory
+            for directory in repo_profiles.iterdir()
+            if directory.is_dir() and (directory / "profile.yaml").exists()
+        ]
+        if profile_dirs and not list(user_profiles.iterdir()):
+            logger.info(
+                "[MIGRATION] Migrating profiles from repo to ~/.config/papertrail/profiles/"
+            )
+            for profile_dir in profile_dirs:
+                destination = user_profiles / profile_dir.name
+                shutil.copytree(profile_dir, destination)
+                shutil.rmtree(profile_dir)
+                migrated.append(f"profile: {profile_dir.name}")
+
+            template = repo_profiles / "profile.yaml.example"
+            if template.exists():
+                shutil.copy2(template, user_profiles / "profile.yaml.example")
+                template.unlink()
+                migrated.append("profile.yaml.example")
+
+            try:
+                repo_profiles.rmdir()
+            except OSError:
+                pass
+
+    if repo_cache.exists():
+        user_cache.mkdir(parents=True, exist_ok=True)
+        for cache_file in ["hash_cache.yaml", "nif_cache.yaml", ".extract.lock"]:
+            src = repo_cache / cache_file
+            if src.exists():
+                shutil.copy2(src, user_cache / cache_file)
+                src.unlink()
+                migrated.append(f"cache: {cache_file}")
+
+        try:
+            remaining = [path for path in repo_cache.iterdir() if not path.name.endswith(".example")]
+            if not remaining:
+                for path in repo_cache.iterdir():
+                    path.unlink()
+                repo_cache.rmdir()
+        except OSError:
+            pass
+
+    if repo_credentials.exists():
+        user_credentials.mkdir(parents=True, exist_ok=True)
+        for credential in ["gmail_credentials.json", "gmail_token.json", "gmail_settings.json"]:
+            src = repo_credentials / credential
+            if src.exists():
+                shutil.copy2(src, user_credentials / credential)
+                src.unlink()
+                migrated.append(f"credentials: {credential}")
+
+        try:
+            if not list(repo_credentials.iterdir()):
+                repo_credentials.rmdir()
+        except OSError:
+            pass
+
+    if migrated:
+        logger.info(f"[MIGRATION] Complete. Migrated: {', '.join(migrated)}")
