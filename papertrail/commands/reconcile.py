@@ -66,6 +66,85 @@ class MatchResult:
     reasoning: str = ""
 
 
+def _coerce_amount(value) -> Optional[float]:
+    if value is None:
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _build_candidate(
+    json_path: Path,
+    pdf_filename: str,
+    data: dict,
+    *,
+    document_title: Optional[str],
+    page_count: Optional[int] = None,
+    sub_doc_index: Optional[int] = None,
+    is_sub_document: bool = False,
+    exclude_from_matching: bool = False,
+) -> PDFCandidate:
+    return PDFCandidate(
+        json_path=json_path,
+        pdf_filename=pdf_filename,
+        date_issued=data.get("date_issued"),
+        document_type=data.get("document_type"),
+        document_title=document_title,
+        issuing_party=data.get("issuing_party"),
+        total_amount=_coerce_amount(data.get("total_amount")),
+        total_amount_currency=data.get("total_amount_currency"),
+        page_count=page_count,
+        sub_doc_index=sub_doc_index,
+        is_sub_document=is_sub_document,
+        exclude_from_matching=exclude_from_matching,
+    )
+
+
+def _transaction_category(txn: Transaction, rules: list) -> str:
+    return _classify_transaction(txn, rules)[0]
+
+
+def _serialize_match(match: MatchResult, *, errors: dict[int, list[str]], rules: list) -> dict:
+    txn = match.transaction
+    return {
+        "row": txn.row_number,
+        "date": txn.date_posting or txn.date_value,
+        "description": txn.description,
+        "amount": txn.amount,
+        "currency": txn.currency,
+        "transaction_category": _transaction_category(txn, rules),
+        "method": match.method,
+        "confidence": match.confidence,
+        "reasoning": match.reasoning,
+        "files": [candidate.pdf_filename for candidate in match.pdf_candidates],
+        "errors": errors.get(txn.row_number, []),
+    }
+
+
+def _serialize_unmatched_transaction(txn: Transaction, rules: list) -> dict:
+    return {
+        "row": txn.row_number,
+        "date": txn.date_posting or txn.date_value,
+        "description": txn.description,
+        "amount": txn.amount,
+        "currency": txn.currency,
+        "transaction_category": _transaction_category(txn, rules),
+    }
+
+
+def _serialize_unmatched_candidate(cand: PDFCandidate) -> dict:
+    return {
+        "file": cand.pdf_filename,
+        "date_issued": cand.date_issued,
+        "document_type": cand.document_type,
+        "issuing_party": cand.issuing_party,
+        "total_amount": cand.total_amount,
+        "currency": cand.total_amount_currency,
+    }
+
+
 def _parse_date(value) -> Optional[str]:
     if value is None:
         return None
@@ -142,45 +221,24 @@ def _load_pdf_candidates(
         sub_docs = data.get("sub_documents")
         if sub_docs and len(sub_docs) >= 2:
             for index, sub_doc in enumerate(sub_docs):
-                amount = sub_doc.get("total_amount")
-                if amount is not None:
-                    try:
-                        amount = float(amount)
-                    except (TypeError, ValueError):
-                        amount = None
                 candidates.append(
-                    PDFCandidate(
-                        json_path=json_path,
-                        pdf_filename=doc_path.name,
-                        date_issued=sub_doc.get("date_issued"),
-                        document_type=sub_doc.get("document_type"),
+                    _build_candidate(
+                        json_path,
+                        doc_path.name,
+                        sub_doc,
                         document_title=None,
-                        issuing_party=sub_doc.get("issuing_party"),
-                        total_amount=amount,
-                        total_amount_currency=sub_doc.get("total_amount_currency"),
                         sub_doc_index=index,
                         is_sub_document=True,
                         exclude_from_matching=excluded,
                     )
                 )
 
-        total_amount = data.get("total_amount")
-        if total_amount is not None:
-            try:
-                total_amount = float(total_amount)
-            except (TypeError, ValueError):
-                total_amount = None
-
         candidates.append(
-            PDFCandidate(
-                json_path=json_path,
-                pdf_filename=doc_path.name,
-                date_issued=data.get("date_issued"),
-                document_type=data.get("document_type"),
+            _build_candidate(
+                json_path,
+                doc_path.name,
+                data,
                 document_title=data.get("document_title"),
-                issuing_party=data.get("issuing_party"),
-                total_amount=total_amount,
-                total_amount_currency=data.get("total_amount_currency"),
                 page_count=data.get("page_count"),
                 exclude_from_matching=excluded,
             )
@@ -578,54 +636,6 @@ def _write_reconciliation_file(
     total_unmatched = total_transactions - len(matches)
     reconciliation_rate = (total_reconciled / total_transactions * 100) if total_transactions > 0 else 0
 
-    match_entries = []
-    for match in matches:
-        txn = match.transaction
-        row_errors = errors.get(txn.row_number, [])
-        category, _ = _classify_transaction(txn, rules)
-        match_entries.append(
-            {
-                "row": txn.row_number,
-                "date": txn.date_posting or txn.date_value,
-                "description": txn.description,
-                "amount": txn.amount,
-                "currency": txn.currency,
-                "transaction_category": category,
-                "method": match.method,
-                "confidence": match.confidence,
-                "reasoning": match.reasoning,
-                "files": [candidate.pdf_filename for candidate in match.pdf_candidates],
-                "errors": row_errors,
-            }
-        )
-
-    unmatched_entries = []
-    for txn in unmatched_transactions:
-        category, _ = _classify_transaction(txn, rules)
-        unmatched_entries.append(
-            {
-                "row": txn.row_number,
-                "date": txn.date_posting or txn.date_value,
-                "description": txn.description,
-                "amount": txn.amount,
-                "currency": txn.currency,
-                "transaction_category": category,
-            }
-        )
-
-    unmatched_file_entries = []
-    for cand in unmatched_files:
-        unmatched_file_entries.append(
-            {
-                "file": cand.pdf_filename,
-                "date_issued": cand.date_issued,
-                "document_type": cand.document_type,
-                "issuing_party": cand.issuing_party,
-                "total_amount": cand.total_amount,
-                "currency": cand.total_amount_currency,
-            }
-        )
-
     data = {
         "source": excel_path.name,
         "generated": datetime.now().isoformat(timespec="seconds"),
@@ -637,9 +647,9 @@ def _write_reconciliation_file(
             "unmatched_files": len(unmatched_files),
             "reconciliation_rate": round(reconciliation_rate, 1),
         },
-        "matches": match_entries,
-        "unmatched": unmatched_entries,
-        "unmatched_files": unmatched_file_entries,
+        "matches": [_serialize_match(match, errors=errors, rules=rules) for match in matches],
+        "unmatched": [_serialize_unmatched_transaction(txn, rules) for txn in unmatched_transactions],
+        "unmatched_files": [_serialize_unmatched_candidate(cand) for cand in unmatched_files],
     }
     output_path.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
     return output_path

@@ -48,13 +48,7 @@ class CanonicalRegistry:
         document_types = {"$UNKNOWN$"}
         issuing_parties = {"$UNKNOWN$"}
 
-        for json_path in root.rglob("*.json"):
-            try:
-                rel = json_path.relative_to(root)
-            except ValueError:
-                continue
-            if self.repository.is_internal_path(rel) or json_path.name.endswith(".reconciliation.json"):
-                continue
+        for json_path in self.repository.sidecar_paths(root):
             try:
                 data = _load_json_fast(json_path)
             except Exception:
@@ -147,6 +141,15 @@ class DocumentRepository:
                 return candidate
         return None
 
+    def sidecar_paths(self, scope: str | Path = "processed") -> list[Path]:
+        root = self.resolve_scope(scope)
+        return [
+            path
+            for path in root.rglob("*.json")
+            if not self.is_internal_path(path.relative_to(root))
+            and not path.name.endswith(".reconciliation.json")
+        ]
+
     def load_metadata(self, json_path: Path, validate: bool = False) -> DocumentMetadata | dict:
         data = _load_json_fast(json_path)
         if validate:
@@ -169,13 +172,7 @@ class DocumentRepository:
         show_progress: bool = False,
         progress_desc: str = "Processing files",
     ) -> Iterator[tuple[Path, DocumentMetadata | dict]]:
-        root = self.resolve_scope(scope)
-        json_files = [
-            path
-            for path in root.rglob("*.json")
-            if not self.is_internal_path(path.relative_to(root))
-            and not path.name.endswith(".reconciliation.json")
-        ]
+        json_files = self.sidecar_paths(scope)
         iterator = self.runtime.console.track(json_files, progress_desc) if show_progress else json_files
 
         for json_path in iterator:
@@ -192,13 +189,7 @@ class DocumentRepository:
         show_progress: bool = False,
         progress_desc: str = "Loading metadata",
     ) -> list[tuple[Path, DocumentMetadata | dict]]:
-        root = self.resolve_scope(scope)
-        json_files = [
-            path
-            for path in root.rglob("*.json")
-            if not self.is_internal_path(path.relative_to(root))
-            and not path.name.endswith(".reconciliation.json")
-        ]
+        json_files = self.sidecar_paths(scope)
         if not json_files:
             return []
 

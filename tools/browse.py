@@ -2,26 +2,39 @@
 
 import html as html_lib
 import json
-import sys
 from pathlib import Path
-
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import gradio as gr
 
-from tools.shared import (
-    find_companion, get_processed_dir, iter_sidecars, render_pdf_page_html,
-    render_xlsx_as_html, FULLSCREEN_CSS, FULLSCREEN_JS,
-)
-
-# ── Module-level cache (single-user local tool) ─────────────────
+if __package__:
+    from .shared import (
+        FULLSCREEN_CSS,
+        FULLSCREEN_JS,
+        bridge_value,
+        find_companion,
+        get_processed_dir,
+        iter_sidecars,
+        launch_tool,
+        placeholder_html,
+        render_document_preview,
+    )
+else:
+    from shared import (  # type: ignore
+        FULLSCREEN_CSS,
+        FULLSCREEN_JS,
+        bridge_value,
+        find_companion,
+        get_processed_dir,
+        iter_sidecars,
+        launch_tool,
+        placeholder_html,
+        render_document_preview,
+    )
 
 _CACHE = {
-    "entries": [],       # list of index entry dicts
+    "entries": [],
     "processed_dir": "",
 }
-
-# ── JS: click bridge + keyboard navigation + fullscreen ─────────
 
 _JS = """
 window.selectBrowseEntry = function(idx) {
@@ -132,11 +145,7 @@ _CSS = """
 }
 """
 
-
-# ── Data loading ─────────────────────────────────────────────────
-
 def _load_entries(processed_dir):
-    """Scan processed sidecars and build lightweight index entries."""
     root = Path(processed_dir)
     if not root.is_dir():
         return []
@@ -164,7 +173,6 @@ def _load_entries(processed_dir):
             "search_text": search_text,
         })
 
-    # Sort by date_issued descending, then filename
     entries.sort(
         key=lambda e: (e["metadata"].get("date_issued") or "0000-00-00", e["json_path"]),
         reverse=True,
@@ -172,13 +180,9 @@ def _load_entries(processed_dir):
 
     return entries
 
-
-# ── Rendering ────────────────────────────────────────────────────
-
 def _render_results_html(entries, selected_idx=0):
-    """Render the results list as HTML rows."""
     if not entries:
-        return '<p class="placeholder">No documents found.</p>'
+        return placeholder_html("No documents found.")
 
     parts = []
     for i, entry in enumerate(entries):
@@ -218,22 +222,17 @@ def _render_results_html(entries, selected_idx=0):
 
 
 def _stats_text(shown, total):
-    """Build stats text like '247 of 512 documents'."""
     if shown == total:
         return f"{total} documents"
     return f"{shown} of {total} documents"
 
-
-# ── Preview logic ────────────────────────────────────────────────
-
 _EMPTY_PREVIEW = (
-    '<p class="placeholder">Select a document to preview.</p>',
+    placeholder_html("Select a document to preview."),
     "", "Page -/-", 0,
 )
 
 
 def _do_preview(entry, page_num=0):
-    """Preview a document entry. Returns (preview_html, json_str, page_label, clamped_page)."""
     if not entry:
         return _EMPTY_PREVIEW
 
@@ -244,33 +243,20 @@ def _do_preview(entry, page_num=0):
 
     if not doc_path or not doc_path.exists():
         return (
-            '<p class="placeholder">Companion file not found on disk.</p>',
+            placeholder_html("Companion file not found on disk."),
             json_str, "No file", 0,
         )
 
-    if doc_path.suffix.lower() == ".pdf":
-        preview_html, total, clamped = render_pdf_page_html(doc_path, page_num)
-        pl = f"Page {clamped + 1}/{total}" if total else "Page -/-"
-        return preview_html, json_str, pl, clamped
-    elif doc_path.suffix.lower() == ".xlsx":
-        return render_xlsx_as_html(doc_path), json_str, "XLSX", 0
-    else:
-        return (
-            f'<p class="placeholder">Unsupported format: {doc_path.suffix}</p>',
-            json_str, "Page -/-", 0,
-        )
-
-
-# ── Gradio UI ────────────────────────────────────────────────────
+    preview_html, label, clamped = render_document_preview(doc_path, page_num)
+    return preview_html, json_str, label, clamped
 
 def build_ui():
     processed_dir = get_processed_dir()
 
     with gr.Blocks(title="Papertrail Document Browser") as app:
-        # State
         current_idx = gr.State(0)
         page_state = gr.State(0)
-        filtered_indices = gr.State([])  # indices into _CACHE["entries"]
+        filtered_indices = gr.State([])
 
         gr.Markdown("## Papertrail Document Browser")
 
@@ -282,12 +268,10 @@ def build_ui():
             )
             stats_md = gr.Markdown("", elem_classes=["stats-bar"])
 
-        # Hidden JS bridge
         selected_entry_bridge = gr.Textbox(
             elem_id="selected_entry_bridge", label="", container=False,
         )
 
-        # Hidden nav buttons for keyboard
         with gr.Row():
             prev_result_btn = gr.Button("prev", elem_id="prev_result_btn", size="sm")
             next_result_btn = gr.Button("next", elem_id="next_result_btn", size="sm")
@@ -295,22 +279,18 @@ def build_ui():
         with gr.Row(equal_height=False, elem_id="content_row"):
             with gr.Column(scale=1, min_width=320, elem_id="results_col"):
                 results_html = gr.HTML(
-                    '<p class="placeholder">Loading documents...</p>',
+                    placeholder_html("Loading documents..."),
                 )
             with gr.Column(scale=2, min_width=400, elem_id="preview_col"):
                 with gr.Tabs():
                     with gr.Tab("Preview"):
-                        preview_html = gr.HTML(
-                            '<p class="placeholder">Select a document to preview.</p>'
-                        )
+                        preview_html = gr.HTML(_EMPTY_PREVIEW[0])
                         with gr.Row():
                             b_prev = gr.Button("< Prev", size="sm")
                             b_page = gr.Markdown("Page -/-")
                             b_next = gr.Button("Next >", size="sm")
                     with gr.Tab("Raw JSON"):
                         json_view = gr.Code(language="json", label="")
-
-        # ── Load on startup ─────────────────────────────────────
 
         def on_load():
             entries = _load_entries(processed_dir)
@@ -334,8 +314,6 @@ def build_ui():
             [results_html, stats_md, preview_html, json_view,
              b_page, page_state, current_idx, filtered_indices],
         )
-
-        # ── Search handler ──────────────────────────────────────
 
         def on_search(query):
             entries = _CACHE["entries"]
@@ -367,13 +345,10 @@ def build_ui():
              b_page, page_state, current_idx, filtered_indices],
         )
 
-        # ── Click selection via JS bridge ───────────────────────
-
         def on_bridge_input(raw_value, indices):
             if not raw_value:
                 return *_EMPTY_PREVIEW, 0
-            # Parse index from "idx|timestamp"
-            idx_str = raw_value.rsplit("|", 1)[0] if "|" in raw_value else raw_value
+            idx_str = bridge_value(raw_value)
             try:
                 local_idx = int(idx_str)
             except ValueError:
@@ -392,8 +367,6 @@ def build_ui():
             on_bridge_input, [selected_entry_bridge, filtered_indices],
             [preview_html, json_view, b_page, page_state, current_idx],
         )
-
-        # ── Keyboard result navigation ──────────────────────────
 
         def on_prev_result(idx, indices):
             entries = _CACHE["entries"]
@@ -430,8 +403,6 @@ def build_ui():
             [preview_html, json_view, b_page, page_state, current_idx, results_html],
         )
 
-        # ── PDF page navigation ─────────────────────────────────
-
         def on_page_prev(pg, idx, indices):
             entries = _CACHE["entries"]
             if not indices or idx < 0 or idx >= len(indices):
@@ -462,6 +433,4 @@ def build_ui():
     return app
 
 if __name__ == "__main__":
-    from tools.app import build_ui as build_tools_ui
-
-    build_tools_ui(initial_tab="browse").launch()
+    launch_tool("browse")

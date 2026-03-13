@@ -3,26 +3,35 @@
 import html as html_lib
 import json
 import shutil
-import sys
 from datetime import datetime
 from pathlib import Path
-
-# Add project root to path for imports
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import gradio as gr
 
 from papertrail.hashing import PLAN_FILENAME, scan_directory
-from tools.shared import find_companion, get_processed_dir, render_pdf_page_html, FULLSCREEN_CSS
-
-# ── Module-level cache (single-user local tool) ──────────────────
+if __package__:
+    from .shared import (
+        FULLSCREEN_CSS,
+        find_companion,
+        get_processed_dir,
+        launch_tool,
+        placeholder_html,
+        render_document_preview,
+    )
+else:
+    from shared import (  # type: ignore
+        FULLSCREEN_CSS,
+        find_companion,
+        get_processed_dir,
+        launch_tool,
+        placeholder_html,
+        render_document_preview,
+    )
 
 _CACHE = {
     "plan": {},
     "directory": None,
 }
-
-# ── CSS ──────────────────────────────────────────────────────────
 
 _CSS = """
 .gradio-container { max-width: 100% !important; padding-left: 4px !important; padding-right: 4px !important; }
@@ -70,11 +79,7 @@ document.addEventListener('keydown', function(e) {
 });
 """
 
-
-# ── Helpers ──────────────────────────────────────────────────────
-
 def _render_file_card(entry, role, directory):
-    """Render an HTML card for one file in a group."""
     badge_class = "badge-keep" if role == "KEEP" else "badge-dupe"
     json_name = entry["json"]
     size_kb = entry.get("size_kb")
@@ -88,28 +93,14 @@ def _render_file_card(entry, role, directory):
             with open(json_path, "r", encoding="utf-8") as f:
                 data = json.load(f)
             companion = find_companion(json_path, data)
-            if companion and companion.suffix.lower() == ".pdf":
-                preview_html = render_pdf_page_html(companion)[0]
-            elif companion and companion.suffix.lower() == ".xlsx":
-                preview_html = (
-                    '<p class="placeholder" style="padding:16px;">'
-                    "XLSX file (no preview)</p>"
-                )
+            if companion:
+                preview_html = render_document_preview(companion)[0]
             else:
-                preview_html = (
-                    '<p class="placeholder" style="padding:16px;">'
-                    "No companion file</p>"
-                )
+                preview_html = placeholder_html("No companion file")
         except Exception:
-            preview_html = (
-                '<p class="placeholder" style="padding:16px;">'
-                "Error loading metadata</p>"
-            )
+            preview_html = placeholder_html("Error loading metadata")
     else:
-        preview_html = (
-            '<p class="placeholder" style="padding:16px;">'
-            "JSON not found</p>"
-        )
+        preview_html = placeholder_html("JSON not found")
 
     return (
         f'<div class="file-card">'
@@ -126,7 +117,6 @@ def _render_file_card(entry, role, directory):
 
 
 def _render_group(index):
-    """Render the full HTML for a duplicate group at the given index."""
     plan = _CACHE["plan"]
     directory = _CACHE["directory"]
     groups = plan.get("groups", [])
@@ -155,7 +145,6 @@ def _render_group(index):
 
 
 def _status_text():
-    """Build status bar markdown from current state."""
     groups = _CACHE["plan"].get("groups", [])
     total = len(groups)
     if total == 0:
@@ -179,7 +168,6 @@ def _status_text():
 
 
 def _decision_label(index):
-    """Return the decision label for a given group index."""
     groups = _CACHE["plan"].get("groups", [])
     if not groups or index < 0 or index >= len(groups):
         return '<span class="status-pending">PENDING</span>'
@@ -192,7 +180,6 @@ def _decision_label(index):
 
 
 def _nav_label(index):
-    """Return navigation label like 'Group 3/15'."""
     total = len(_CACHE["plan"].get("groups", []))
     if total == 0:
         return "Group -/-"
@@ -200,7 +187,6 @@ def _nav_label(index):
 
 
 def _next_undecided(start, direction=1):
-    """Find the next undecided group index from start in the given direction."""
     groups = _CACHE["plan"].get("groups", [])
     total = len(groups)
     if total == 0:
@@ -212,12 +198,10 @@ def _next_undecided(start, direction=1):
             return idx
         idx += direction
 
-    # No undecided found, clamp to bounds
     return max(0, min(start + direction, total - 1))
 
 
 def _save_plan():
-    """Save plan with updated decisions to disk (atomic write)."""
     plan = _CACHE["plan"]
     directory = _CACHE["directory"]
     if not plan or not directory:
@@ -238,11 +222,7 @@ def _save_plan():
         json.dump(plan, f, indent=4, ensure_ascii=False)
     tmp.rename(plan_path)
 
-
-# ── Event handlers ───────────────────────────────────────────────
-
 def on_scan(directory_path):
-    """Scan directory for duplicates, preserving old decisions."""
     directory_path = directory_path.strip().strip("'\"")
     directory = Path(directory_path)
 
@@ -251,11 +231,10 @@ def on_scan(directory_path):
         _CACHE["directory"] = None
         return (
             f"**Error:** `{directory_path}` is not a valid directory.",
-            "", '<p class="placeholder">Enter a valid directory and click Scan.</p>',
+            "", placeholder_html("Enter a valid directory and click Scan."),
             gr.update(visible=False),
         )
 
-    # Preserve old decisions keyed by group_hash (with hash_text fallback for old plans)
     old_decisions = {}
     old_plan_path = directory / PLAN_FILENAME
     if old_plan_path.exists():
@@ -270,24 +249,21 @@ def on_scan(directory_path):
         except Exception:
             pass
 
-    # Run scan
     plan_data = scan_directory(directory)
 
-    # Restore old decisions
     for group in plan_data["groups"]:
         group["decision"] = old_decisions.get(group["group_hash"])
 
     _CACHE["plan"] = plan_data
     _CACHE["directory"] = str(directory)
 
-    # Save to disk
     _save_plan()
 
     groups = plan_data["groups"]
     if not groups:
         return (
             "Scan complete — no duplicates found.",
-            "", '<p class="placeholder">No duplicate groups found.</p>',
+            "", placeholder_html("No duplicate groups found."),
             gr.update(visible=False),
         )
 
@@ -303,7 +279,6 @@ def on_scan(directory_path):
 
 
 def on_prev(index):
-    """Navigate to previous group."""
     new_index = max(0, index - 1)
     group_html = _render_group(new_index)
     nav = _nav_label(new_index)
@@ -312,7 +287,6 @@ def on_prev(index):
 
 
 def on_next(index):
-    """Navigate to next group."""
     total = len(_CACHE["plan"].get("groups", []))
     new_index = min(total - 1, index + 1) if total > 0 else 0
     group_html = _render_group(new_index)
@@ -322,7 +296,6 @@ def on_next(index):
 
 
 def on_approve(index):
-    """Approve current group and advance to next undecided."""
     groups = _CACHE["plan"].get("groups", [])
     if groups and 0 <= index < len(groups):
         groups[index]["decision"] = "approved"
@@ -337,7 +310,6 @@ def on_approve(index):
 
 
 def on_reject(index):
-    """Reject current group and advance to next undecided."""
     groups = _CACHE["plan"].get("groups", [])
     if groups and 0 <= index < len(groups):
         groups[index]["decision"] = "rejected"
@@ -352,7 +324,6 @@ def on_reject(index):
 
 
 def on_execute():
-    """Show confirmation for executing deduplication."""
     plan = _CACHE["plan"]
     groups = plan.get("groups", [])
     if not groups:
@@ -378,13 +349,12 @@ def on_execute():
 
 
 def on_confirm():
-    """Execute deduplication — move approved dupes to timestamped folder."""
     plan = _CACHE["plan"]
     directory = _CACHE["directory"]
     if not plan or not directory:
         return (
             gr.update(visible=False), "**Error:** No plan loaded.",
-            "", "", '<p class="placeholder">No plan loaded.</p>',
+            "", "", placeholder_html("No plan loaded."),
         )
 
     directory = Path(directory)
@@ -394,20 +364,17 @@ def on_confirm():
     if not approved:
         return (
             gr.update(visible=False), "**No approved groups.**",
-            _status_text(), "Group -/-", '<p class="placeholder">Nothing to execute.</p>',
+            _status_text(), "Group -/-", placeholder_html("Nothing to execute."),
         )
 
-    # Create timestamped dupes directory in parent of processed
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     dupes_dir = directory.parent / f"_dupes_{timestamp}"
     dupes_dir.mkdir(exist_ok=True)
 
-    # Copy plan as audit trail
     plan_path = directory / PLAN_FILENAME
     if plan_path.exists():
         shutil.copy2(plan_path, dupes_dir / PLAN_FILENAME)
 
-    # Move files
     moved = 0
     errors = []
     for group in approved:
@@ -451,11 +418,9 @@ def on_confirm():
                 except Exception as e:
                     errors.append(f"{src.name}: {e}")
 
-    # Delete plan from processed dir
     if plan_path.exists():
         plan_path.unlink()
 
-    # Reset cache
     _CACHE["plan"] = {}
     _CACHE["directory"] = None
 
@@ -473,16 +438,12 @@ def on_confirm():
     return (
         gr.update(visible=False), summary,
         "No plan loaded.", "Group -/-",
-        '<p class="placeholder">Execution complete. Click Scan to start fresh.</p>',
+        placeholder_html("Execution complete. Click Scan to start fresh."),
     )
 
 
 def on_cancel():
-    """Cancel execution confirmation."""
     return gr.update(visible=False), ""
-
-
-# ── Gradio UI ────────────────────────────────────────────────────
 
 def build_ui():
     default_dir = get_processed_dir()
@@ -519,7 +480,7 @@ def build_ui():
         nav_label = gr.Markdown("Group -/-")
 
         group_html = gr.HTML(
-            '<p class="placeholder">Enter a directory and click Scan.</p>'
+            placeholder_html("Enter a directory and click Scan.")
         )
 
         with gr.Row():
@@ -531,8 +492,6 @@ def build_ui():
             confirm_msg = gr.Markdown("")
             confirm_btn = gr.Button("Confirm", variant="primary", size="sm")
             cancel_btn = gr.Button("Cancel", size="sm")
-
-        # ── Wire events ──────────────────────────────────────────
 
         scan_btn.click(
             on_scan, [dir_input],
@@ -577,6 +536,4 @@ def build_ui():
     return app
 
 if __name__ == "__main__":
-    from tools.app import build_ui as build_tools_ui
-
-    build_tools_ui(initial_tab="dedupe").launch()
+    launch_tool("dedupe")

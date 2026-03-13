@@ -596,6 +596,51 @@ class DocumentEngine:
             known_text_hashes if known_text_hashes is not None else set(text_idx.keys()),
         )
 
+    def _complete_upsert(
+        self,
+        result: UpsertResult,
+        source_path: Path,
+        metadata: DocumentMetadata,
+        *,
+        processed_path: Path,
+        mode: str,
+        file_hash: str,
+        content_hash: str,
+        known_file_hashes: set[str],
+        known_content_hashes: set[str],
+        known_text_hashes: set[str] | None = None,
+        text_hash: str | None = None,
+        rename_on_resync: bool = False,
+        dry_run: bool,
+    ) -> UpsertResult:
+        dest_path = source_path
+        if mode == "ingest":
+            dest_path = processed_path / file_name_from_metadata(metadata, file_hash)
+            if dest_path.exists():
+                result.skipped = 1
+                result.reason = "destination_exists"
+                return result
+
+        if not dry_run:
+            if mode == "ingest":
+                shutil.copy2(source_path, dest_path)
+            self.repository.save_document(dest_path, metadata)
+            if rename_on_resync and mode == "resync":
+                new_doc_path = source_path.parent / file_name_from_metadata(metadata, metadata.hash_file)
+                if new_doc_path != source_path:
+                    source_path.rename(new_doc_path)
+                    source_path.with_suffix(".json").rename(new_doc_path.with_suffix(".json"))
+                    dest_path = new_doc_path
+
+        known_file_hashes.add(file_hash)
+        known_content_hashes.add(content_hash)
+        if text_hash and known_text_hashes is not None:
+            known_text_hashes.add(text_hash)
+        result.processed = 1
+        result.outputs.append(dest_path)
+        result.metadata = metadata
+        return result
+
     def upsert(
         self,
         source_path: Path,
@@ -736,25 +781,18 @@ class DocumentEngine:
                 metadata.date_created = old_data.get("date_created") or self.runtime.today
                 metadata.date_updated = self.runtime.today
 
-            dest_path = source_path
-            if mode == "ingest":
-                dest_path = processed_path / file_name_from_metadata(metadata, file_hash)
-                if dest_path.exists():
-                    result.skipped = 1
-                    result.reason = "destination_exists"
-                    return result
-
-            if not dry_run:
-                if mode == "ingest":
-                    shutil.copy2(source_path, dest_path)
-                self.repository.save_document(dest_path, metadata)
-
-            known_file_hashes.add(file_hash)
-            known_content_hashes.add(file_hash)
-            result.processed = 1
-            result.outputs.append(dest_path)
-            result.metadata = metadata
-            return result
+            return self._complete_upsert(
+                result,
+                source_path,
+                metadata,
+                processed_path=processed_path,
+                mode=mode,
+                file_hash=file_hash,
+                content_hash=file_hash,
+                known_file_hashes=known_file_hashes,
+                known_content_hashes=known_content_hashes,
+                dry_run=dry_run,
+            )
 
         if suffix != ".pdf":
             result.skipped = 1
@@ -801,36 +839,21 @@ class DocumentEngine:
             metadata.date_created = old_data.get("date_created") or self.runtime.today
             metadata.date_updated = self.runtime.today
 
-        dest_path = source_path
-        if mode == "ingest":
-            dest_path = processed_path / file_name_from_metadata(metadata, file_hash)
-            if dest_path.exists():
-                result.skipped = 1
-                result.reason = "destination_exists"
-                return result
-
-        if not dry_run:
-            if mode == "ingest":
-                shutil.copy2(source_path, dest_path)
-            self.repository.save_document(dest_path, metadata)
-
-            if mode == "resync":
-                new_filename = file_name_from_metadata(metadata, metadata.hash_file)
-                new_doc_path = source_path.parent / new_filename
-                if new_doc_path != source_path:
-                    new_json_path = new_doc_path.with_suffix(".json")
-                    source_path.rename(new_doc_path)
-                    source_path.with_suffix(".json").rename(new_json_path)
-                    dest_path = new_doc_path
-
-        known_file_hashes.add(file_hash)
-        if text_hash:
-            known_text_hashes.add(text_hash)
-        known_content_hashes.add(content_hash)
-        result.processed = 1
-        result.outputs.append(dest_path)
-        result.metadata = metadata
-        return result
+        return self._complete_upsert(
+            result,
+            source_path,
+            metadata,
+            processed_path=processed_path,
+            mode=mode,
+            file_hash=file_hash,
+            content_hash=content_hash,
+            known_file_hashes=known_file_hashes,
+            known_content_hashes=known_content_hashes,
+            known_text_hashes=known_text_hashes,
+            text_hash=text_hash,
+            rename_on_resync=True,
+            dry_run=dry_run,
+        )
 
     def extract(
         self,

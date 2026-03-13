@@ -52,6 +52,135 @@ def _task_log_context(runtime: Runtime, processed_path: Path, task_name: str, *,
     yield log_file_path
 
 
+def _pipeline_step(console, label: str, action):
+    with console.step_progress(label) as step:
+        try:
+            return action(step)
+        except Exception as exc:
+            step.error(str(exc))
+            raise
+
+
+def _run_export_period(
+    runtime: Runtime,
+    processed_path: Path,
+    export_dir: Path,
+    export_date: str,
+    *,
+    export_file_config,
+    profile_context: dict | None,
+    merge_rules,
+) -> tuple[Path, list[dict]]:
+    console = runtime.console
+    export_date_dir = export_dir / export_date
+    if export_date_dir.exists():
+        shutil.rmtree(export_date_dir)
+
+    def export_documents(step):
+        copy_stats = copy_matching(
+            runtime,
+            processed_path,
+            export_date,
+            export_date_dir,
+            export_config=export_file_config,
+            profile_context=profile_context,
+            quiet=True,
+        )
+        if copy_stats.get("copied", 0):
+            message = f"{copy_stats['copied']} files"
+            if copy_stats.get("deduped", 0) > 0:
+                message += f" ({copy_stats['deduped']} content dupes skipped)"
+            step.success(message)
+        else:
+            step.success("0 files")
+        return copy_stats
+
+    _pipeline_step(console, f"Export documents ({export_date})", export_documents)
+
+    repository = DocumentRepository(runtime)
+    bank_statements = discover_bank_statements(repository, export_date_dir)
+    all_recon_matches = []
+    recon_stats_all: list[dict] = []
+
+    for statement_path in bank_statements:
+        statement_info = {}
+        statement_json = statement_path.with_suffix(".json")
+        if statement_json.exists():
+            try:
+                statement_info = repository.load_metadata(statement_json).get("bank_statement", {}) or {}
+            except Exception:
+                pass
+        account = statement_info.get("account_number", statement_path.stem)
+        period = statement_info.get("period_start", export_date)
+        if period and len(period) >= 7:
+            period = period[:7]
+        with console.step_progress(f"Match bank transactions: {account} ({period})") as step:
+            try:
+                recon_stats = reconcile_single(
+                    runtime,
+                    repository,
+                    export_date_dir,
+                    statement_path,
+                    dry_run=False,
+                    quiet=True,
+                )
+                recon_stats_all.append(recon_stats)
+                all_recon_matches.extend(recon_stats.get("matches", []))
+                total = recon_stats["total"]
+                if total > 0:
+                    step.success(
+                        f"{recon_stats['reconciled']}/{total} reconciled "
+                        f"({recon_stats['reconciliation_rate']:.0f}%)"
+                    )
+                else:
+                    step.warning("No transactions found")
+            except Exception as exc:
+                step.warning(f"Reconciliation failed: {exc}")
+                logger.warning(f"Reconciliation failed for {statement_path.name}: {exc}")
+
+    if merge_rules and all_recon_matches:
+        with console.step_progress(f"Merge attachments ({export_date})") as step:
+            try:
+                merge_stats = merge_reconciled_attachments(
+                    runtime,
+                    export_date_dir,
+                    all_recon_matches,
+                    merge_rules,
+                )
+                if merge_stats["merged"] > 0:
+                    step.success(f"{merge_stats['merged']} document(s) merged")
+                elif merge_stats["errors"] > 0:
+                    step.warning(f"{merge_stats['errors']} merge error(s)")
+                else:
+                    step.success("No merges needed")
+            except Exception as exc:
+                step.warning(f"Merge attachments failed: {exc}")
+                logger.warning(f"Merge attachments failed: {exc}")
+
+    def merge_pdfs(step):
+        with suppress_console_logging():
+            merge_all_pdfs(str(export_date_dir))
+        merged_files = list(export_date_dir.glob("merged_*.pdf"))
+        if merged_files:
+            prefixes = sorted(
+                {
+                    file.stem.split("_", 1)[1].upper() + "_"
+                    for file in merged_files
+                    if "_" in file.stem
+                }
+            )
+            step.success(f"{len(merged_files)} merged PDFs ({', '.join(prefixes)})")
+        else:
+            step.success("0 merged PDFs")
+
+    _pipeline_step(console, f"Merge PDFs ({export_date})", merge_pdfs)
+
+    with suppress_console_logging():
+        validate_merged_pdf(export_date_dir)
+
+    return export_date_dir, recon_stats_all
+
+
 def extract(
     runtime: Runtime,
     processed_path: Path,
@@ -633,7 +762,7 @@ def pipeline(
                 results = extract_archives(raw_dir, passwords=passwords if passwords else None)
             total_extracted = 0
             failures = 0
-            for _, count in results.items():
+            for count in results.values():
                 if count == -1:
                     failures += 1
                 else:
@@ -723,113 +852,21 @@ def pipeline(
     merge_rules = export_file_config.merge_rules
 
     for export_date in export_dates_list:
-        export_date_dir = os.path.join(export_dir, export_date)
-        if os.path.exists(export_date_dir):
-            shutil.rmtree(export_date_dir)
+        try:
+            export_date_dir, period_recon_stats = _run_export_period(
+                runtime,
+                processed_path,
+                Path(export_dir),
+                export_date,
+                export_file_config=export_file_config,
+                profile_context=profile_context,
+                merge_rules=merge_rules,
+            )
+        except Exception as exc:
+            logger.error(f"Export pipeline failed for {export_date}: {exc}")
+            sys.exit(1)
 
-        with console.step_progress(f"Export documents ({export_date})") as step:
-            try:
-                copy_stats = copy_matching(
-                    runtime,
-                    processed_path,
-                    export_date,
-                    Path(export_date_dir),
-                    export_config=export_file_config,
-                    profile_context=profile_context,
-                    quiet=True,
-                )
-                copied = copy_stats.get("copied", 0)
-                deduped = copy_stats.get("deduped", 0)
-                if copied:
-                    message = f"{copied} files"
-                    if deduped > 0:
-                        message += f" ({deduped} content dupes skipped)"
-                    step.success(message)
-                else:
-                    step.success("0 files")
-            except Exception as exc:
-                step.error(str(exc))
-                sys.exit(1)
-
-        all_recon_matches = []
-        repository = DocumentRepository(runtime)
-        bank_statements = discover_bank_statements(repository, Path(export_date_dir))
-        for statement_path in bank_statements:
-            statement_json = statement_path.with_suffix(".json")
-            statement_info = {}
-            if statement_json.exists():
-                try:
-                    statement_info = repository.load_metadata(statement_json).get("bank_statement", {}) or {}
-                except Exception:
-                    pass
-            account = statement_info.get("account_number", statement_path.stem)
-            period = statement_info.get("period_start", export_date)
-            if period and len(period) >= 7:
-                period = period[:7]
-
-            with console.step_progress(f"Match bank transactions: {account} ({period})") as step:
-                try:
-                    recon_stats = reconcile_single(
-                        runtime,
-                        repository,
-                        Path(export_date_dir),
-                        statement_path,
-                        dry_run=False,
-                        quiet=True,
-                    )
-                    recon_stats_all.append(recon_stats)
-                    all_recon_matches.extend(recon_stats.get("matches", []))
-                    reconciled_count = recon_stats["reconciled"]
-                    total = recon_stats["total"]
-                    pct = recon_stats["reconciliation_rate"]
-                    if total > 0:
-                        step.success(f"{reconciled_count}/{total} reconciled ({pct:.0f}%)")
-                    else:
-                        step.warning("No transactions found")
-                except Exception as exc:
-                    step.warning(f"Reconciliation failed: {exc}")
-                    logger.warning(f"Reconciliation failed for {statement_path.name}: {exc}")
-
-        if merge_rules and all_recon_matches:
-            with console.step_progress(f"Merge attachments ({export_date})") as step:
-                try:
-                    merge_stats = merge_reconciled_attachments(runtime, Path(export_date_dir), all_recon_matches, merge_rules)
-                    merged = merge_stats["merged"]
-                    errors = merge_stats["errors"]
-                    if merged > 0:
-                        step.success(f"{merged} document(s) merged")
-                    elif errors > 0:
-                        step.warning(f"{errors} merge error(s)")
-                    else:
-                        step.success("No merges needed")
-                except Exception as exc:
-                    step.warning(f"Merge attachments failed: {exc}")
-                    logger.warning(f"Merge attachments failed: {exc}")
-
-        with console.step_progress(f"Merge PDFs ({export_date})") as step:
-            try:
-                with suppress_console_logging():
-                    merge_all_pdfs(export_date_dir)
-                merged_files = list(Path(export_date_dir).glob("merged_*.pdf"))
-                if merged_files:
-                    prefixes = sorted(
-                        {
-                            file.stem.split("_", 1)[1].upper() + "_"
-                            for file in merged_files
-                            if "_" in file.stem
-                        }
-                    )
-                    step.success(f"{len(merged_files)} merged PDFs ({', '.join(prefixes)})")
-                else:
-                    step.success("0 merged PDFs")
-            except Exception as exc:
-                step.error(f"PDF merge failed: {exc}")
-                logger.error(f"Merge PDFs failed: {exc}")
-                sys.exit(1)
-
-        with suppress_console_logging():
-            validate_merged_pdf(Path(export_date_dir))
-
+        recon_stats_all.extend(period_recon_stats)
         output_paths.append(("Export", str(export_date_dir)))
 
     if recon_stats_all:

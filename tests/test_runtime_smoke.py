@@ -1,4 +1,6 @@
 import json
+import importlib
+import sys
 import tempfile
 import unittest
 import zipfile
@@ -166,6 +168,29 @@ class AdapterSmokeTests(unittest.TestCase):
         self.assertEqual(len(review_data["bank_statements"]), 1)
         self.assertIn("statement.xlsx", review_data["file_index"])
         self.assertIn("Loaded **1** bank statements", status)
+
+    def test_submodule_imports_do_not_eager_load_engine(self):
+        saved = {
+            name: sys.modules[name]
+            for name in list(sys.modules)
+            if name == "papertrail" or name.startswith("papertrail.")
+        }
+        try:
+            for name in list(saved):
+                sys.modules.pop(name, None)
+            importlib.import_module("papertrail.models")
+            importlib.import_module("papertrail.rules")
+            importlib.import_module("papertrail.runtime")
+            self.assertNotIn("papertrail.engine", sys.modules)
+            papertrail = importlib.import_module("papertrail")
+            self.assertIsNotNone(papertrail.Runtime)
+            self.assertIn("papertrail.runtime", sys.modules)
+            self.assertNotIn("papertrail.engine", sys.modules)
+        finally:
+            for name in list(sys.modules):
+                if name == "papertrail" or name.startswith("papertrail."):
+                    sys.modules.pop(name, None)
+            sys.modules.update(saved)
 
 
 if __name__ == "__main__":

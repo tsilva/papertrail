@@ -3,24 +3,36 @@
 import html as html_lib
 import json
 import re
-import sys
 from pathlib import Path
-
-# Add project root to path for imports
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import gradio as gr
 
-from tools.shared import (
-    find_companion, get_export_dir, iter_sidecars, render_pdf_page_html, render_xlsx_as_html,
-    FULLSCREEN_CSS, FULLSCREEN_JS,
-)
-
-# ── Module-level cache (single-user local tool) ─────────────────
+if __package__:
+    from .shared import (
+        FULLSCREEN_CSS,
+        FULLSCREEN_JS,
+        bridge_value,
+        find_companion,
+        get_export_dir,
+        iter_sidecars,
+        launch_tool,
+        placeholder_html,
+        render_document_preview,
+    )
+else:
+    from shared import (  # type: ignore
+        FULLSCREEN_CSS,
+        FULLSCREEN_JS,
+        bridge_value,
+        find_companion,
+        get_export_dir,
+        iter_sidecars,
+        launch_tool,
+        placeholder_html,
+        render_document_preview,
+    )
 
 _CACHE = {"data": {}}
-
-# ── JS: clickable file links in transaction table → update dropdown ──
 
 _JS = """
 window.closePreviewPanel = function() {
@@ -52,7 +64,6 @@ window.selectReviewFile = function(filename) {
     input.dispatchEvent(new Event('change', { bubbles: true }));
 };
 
-/* ── Drag support ── */
 function _ensureDragHandle(panel) {
     if (panel.querySelector('.preview-drag-bar')) return;
     var bar = document.createElement('div');
@@ -88,7 +99,6 @@ function _ensureDragHandle(panel) {
         document.addEventListener('mouseup', onUp);
     });
 
-    /* ── Resize handle (left edge) ── */
     var resizeBar = document.createElement('div');
     resizeBar.className = 'preview-resize-bar';
     panel.appendChild(resizeBar);
@@ -202,8 +212,6 @@ _CSS = """
 }
 """
 
-# ── Color coding for reconciliation status ───────────────────────
-
 _COLORS = {
     "exact": "rgba(40, 167, 69, 0.25)",
     "llm_high": "rgba(40, 167, 69, 0.15)",
@@ -222,11 +230,7 @@ _LABELS = {
     "unclassified": "Unclassified",
 }
 
-
-# ── Export folder discovery ───────────────────────────────────────
-
 def _get_export_base_dir():
-    """Get the export base directory from the default profile."""
     export_dir = get_export_dir()
     if not export_dir:
         return None
@@ -235,7 +239,6 @@ def _get_export_base_dir():
 
 
 def _list_export_folders(base_dir):
-    """List YYYY-MM subdirectories in the export base dir, sorted most recent first."""
     if not base_dir or not base_dir.is_dir():
         return []
     folders = []
@@ -244,11 +247,7 @@ def _list_export_folders(base_dir):
             folders.append(d.name)
     return sorted(folders, reverse=True)
 
-
-# ── Data loading ─────────────────────────────────────────────────
-
 def load_export_folder(folder_path):
-    """Load all JSON sidecars from an export folder."""
     folder = Path(folder_path.strip().strip("'\""))
     if not folder.is_dir():
         return {}, f"**Error:** `{folder_path}` is not a valid directory."
@@ -282,7 +281,6 @@ def load_export_folder(folder_path):
 
     bank_statements.sort(key=lambda b: Path(b["doc_path"]).name if b.get("doc_path") else "")
 
-    # Collect bank-related filenames for the bank tab dropdown
     bank_files = set()
     for bs in bank_statements:
         recon = bs.get("reconciliation")
@@ -292,7 +290,6 @@ def load_export_folder(folder_path):
                     if f in file_index:
                         bank_files.add(f)
 
-    # Aggregate unmatched files from all reconciliation results (deduplicate by filename)
     unmatched_files_map: dict[str, dict] = {}
     for bs in bank_statements:
         recon = bs.get("reconciliation")
@@ -322,11 +319,7 @@ def load_export_folder(folder_path):
         "folder_path": str(folder),
     }, status
 
-
-# ── Rendering helpers ────────────────────────────────────────────
-
 def _match_status(m):
-    """Classify a reconciliation match into a status category."""
     if m.get("errors") or m.get("warnings"):
         return "incomplete"
     if m.get("method") == "exact":
@@ -337,9 +330,8 @@ def _match_status(m):
 
 
 def render_single_bank_html(bs):
-    """Render a single bank statement entry as HTML with info line and transaction table."""
     if not bs:
-        return '<p class="placeholder">Select a bank statement.</p>'
+        return placeholder_html("Select a bank statement.")
 
     meta = bs.get("metadata", {})
     recon = bs.get("reconciliation")
@@ -347,7 +339,6 @@ def render_single_bank_html(bs):
 
     parts = ['<div class="bank-section">']
 
-    # Info line
     info = []
     if bs_data.get("account_number"):
         info.append(f'Account: <strong>{bs_data["account_number"]}</strong>')
@@ -358,7 +349,6 @@ def render_single_bank_html(bs):
     if info:
         parts.append(f'<div class="bank-info">{" &middot; ".join(info)}</div>')
 
-    # Reconciliation
     if recon:
         s = recon.get("summary", {})
         reconciled = s.get("reconciled", s.get("matched", 0))
@@ -381,9 +371,8 @@ def render_single_bank_html(bs):
 
 
 def render_all_banks_html(bs_list, unmatched_files=None, file_index=None):
-    """Render all bank statements as concatenated HTML sections."""
     if not bs_list:
-        return '<p class="placeholder">No bank statements found in this folder.</p>'
+        return placeholder_html("No bank statements found in this folder.")
     parts = [render_single_bank_html(bs) for bs in bs_list]
     if unmatched_files:
         parts.append(_render_unmatched_files_html(unmatched_files, file_index or {}))
@@ -391,7 +380,6 @@ def render_all_banks_html(bs_list, unmatched_files=None, file_index=None):
 
 
 def _render_unmatched_files_html(unmatched_files, file_index):
-    """Render an unmatched files section with a table of clickable file links."""
     if not unmatched_files:
         return ""
 
@@ -439,7 +427,6 @@ def _render_unmatched_files_html(unmatched_files, file_index):
 
 
 def _render_txn_table(recon):
-    """Render reconciliation transactions as a color-coded HTML table."""
     matches = recon.get("matches", [])
     unmatched = recon.get("unmatched", [])
 
@@ -451,7 +438,6 @@ def _render_txn_table(recon):
             **u, "_st": "unmatched", "files": [], "confidence": 0,
             "method": "", "reasoning": "", "warnings": [],
         })
-    # Unclassified always takes priority — red regardless of match state
     for r in rows:
         if r.get("transaction_category") == "unclassified":
             r["_st"] = "unclassified"
@@ -481,7 +467,6 @@ def _render_txn_table(recon):
 
         rule = html_lib.escape(r.get("transaction_category", "") or "")
 
-        # Tooltip with reasoning/errors
         tip_parts = []
         if r.get("reasoning"):
             tip_parts.append(r["reasoning"])
@@ -490,7 +475,6 @@ def _render_txn_table(recon):
                 tip_parts.append(", ".join(r[key]))
         tip = html_lib.escape(" | ".join(tip_parts))
 
-        # Clickable file links
         file_list = r.get("files", [])
         if file_list:
             fs = ""
@@ -518,11 +502,8 @@ def _render_txn_table(recon):
     lines.append("</tbody></table></div>")
     return "\n".join(lines)
 
-
-# ── Preview logic ────────────────────────────────────────────────
-
 _EMPTY_PREVIEW = (
-    '<p class="placeholder">Select a file to preview.</p>',
+    placeholder_html("Select a file to preview."),
     "", "Page -/-", 0,
 )
 
@@ -533,14 +514,12 @@ def _do_preview(filename, page):
     if not filename or not data:
         return _EMPTY_PREVIEW
 
-    # Strip timestamp suffix from JS bridge
-    if "|" in filename:
-        filename = filename.rsplit("|", 1)[0]
+    filename = bridge_value(filename)
 
     entry = data.get("file_index", {}).get(filename)
     if not entry:
         return (
-            f'<p class="placeholder">File not found: {html_lib.escape(filename)}</p>',
+            placeholder_html(f"File not found: {filename}"),
             "", "Page -/-", 0,
         )
 
@@ -549,38 +528,21 @@ def _do_preview(filename, page):
     json_str = json.dumps(metadata, indent=2, ensure_ascii=False, sort_keys=True)
 
     if not doc_path or not Path(doc_path).exists():
-        return ('<p class="placeholder">File not found on disk.</p>',
-                json_str, "No file", 0)
+        return placeholder_html("File not found on disk."), json_str, "No file", 0
 
-    p = Path(doc_path)
-    if p.suffix.lower() == ".pdf":
-        preview_html, total, clamped = render_pdf_page_html(doc_path, page)
-        pl = f"Page {clamped + 1}/{total}" if total else "Page -/-"
-        return (preview_html, json_str, pl, clamped)
-    elif p.suffix.lower() == ".xlsx":
-        return (render_xlsx_as_html(doc_path), json_str, "XLSX", 0)
-    else:
-        return (
-            f'<p class="placeholder">Unsupported: {p.suffix}</p>',
-            json_str, "Page -/-", 0,
-        )
-
-
-# ── Gradio UI ────────────────────────────────────────────────────
+    preview_html, label, page_num = render_document_preview(doc_path, page)
+    return preview_html, json_str, label, page_num
 
 def build_ui():
-    # Discover export folders from profile
     export_base = _get_export_base_dir()
     folder_choices = _list_export_folders(export_base)
     default_folder = folder_choices[0] if folder_choices else None
 
     with gr.Blocks(title="Papertrail Review") as app:
-        # State (small values only — large data lives in _CACHE)
         export_base_state = gr.State(str(export_base) if export_base else "")
         bank_page = gr.State(0)
         bank_file = gr.State("")
 
-        # Header
         gr.Markdown("## Papertrail Document Review")
 
         folder_dd = gr.Dropdown(
@@ -591,7 +553,6 @@ def build_ui():
         )
         status_bar = gr.Markdown("")
 
-        # Hidden JS bridge textbox (positioned off-screen via CSS)
         selected_file_bridge = gr.Textbox(
             elem_id="selected_file_bridge", label="", container=False,
         )
@@ -599,15 +560,13 @@ def build_ui():
         with gr.Row(equal_height=False, elem_id="content_row"):
             with gr.Column(scale=1, min_width=400):
                 bank_html = gr.HTML(
-                    '<p class="placeholder">Load a folder to view bank statements.</p>',
+                    placeholder_html("Load a folder to view bank statements."),
                     elem_id="bank_html",
                 )
             with gr.Column(scale=1, min_width=400, elem_id="preview_panel"):
                 with gr.Tabs():
                     with gr.Tab("Preview"):
-                        bank_preview = gr.HTML(
-                            '<p class="placeholder">Select a file to preview.</p>'
-                        )
+                        bank_preview = gr.HTML(_EMPTY_PREVIEW[0])
                         with gr.Row():
                             b_prev = gr.Button("< Prev", size="sm")
                             b_page = gr.Markdown("Page -/-")
@@ -615,12 +574,10 @@ def build_ui():
                     with gr.Tab("Raw JSON"):
                         bank_json = gr.Code(language="json", label="")
 
-        # ── Load folder handler ──────────────────────────────────
-
         def on_load(folder_name, base_dir):
             empty = (
                 "Select an export folder.",
-                '<p class="placeholder">No data loaded.</p>',
+                placeholder_html("No data loaded."),
             )
             if not folder_name or not base_dir:
                 _CACHE["data"] = {}
@@ -647,12 +604,10 @@ def build_ui():
             [status_bar, bank_html],
         )
 
-        # ── Bank: file selection via JS bridge (click in table) ──
-
         def on_bridge_input(raw_value):
             if not raw_value:
                 return *_EMPTY_PREVIEW, ""
-            filename = raw_value.rsplit("|", 1)[0] if "|" in raw_value else raw_value
+            filename = bridge_value(raw_value)
             preview, js_str, pl, pg = _do_preview(filename, 0)
             return preview, js_str, pl, pg, filename
 
@@ -660,8 +615,6 @@ def build_ui():
             on_bridge_input, [selected_file_bridge],
             [bank_preview, bank_json, b_page, bank_page, bank_file],
         )
-
-        # ── Bank: page navigation ────────────────────────────────
 
         def on_bank_prev(pg, fn):
             preview, _j, pl, p = _do_preview(fn, max(0, pg - 1))
@@ -680,9 +633,6 @@ def build_ui():
             [bank_preview, b_page, bank_page],
         )
 
-
-        # ── Auto-load most recent folder on startup ──────────────
-
         if default_folder:
             app.load(
                 on_load, [folder_dd, export_base_state],
@@ -692,6 +642,4 @@ def build_ui():
     return app
 
 if __name__ == "__main__":
-    from tools.app import build_ui as build_tools_ui
-
-    build_tools_ui(initial_tab="review").launch()
+    launch_tool("review")

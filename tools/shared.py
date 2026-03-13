@@ -1,5 +1,3 @@
-"""Shared helpers for Gradio tools."""
-
 from __future__ import annotations
 
 import base64
@@ -16,45 +14,34 @@ from papertrail.runtime import runtime_from_profile
 
 
 @lru_cache(maxsize=1)
-def build_repository() -> DocumentRepository | None:
+def _load_default_profile():
     try:
-        profile = load_profile("default")
+        return load_profile("default")
     except Exception:
         return None
 
-    if not profile.paths.processed:
-        return None
 
-    runtime = runtime_from_profile(
-        profile,
-        enable_client=False,
-        probe_api=False,
-    )
+@lru_cache(maxsize=1)
+def build_repository() -> DocumentRepository | None:
+    profile = _load_default_profile()
+    if profile is None or not profile.paths.processed:
+        return None
+    runtime = runtime_from_profile(profile, enable_client=False, probe_api=False)
     return DocumentRepository(runtime)
 
 
+def _get_profile_dir(path_attr: str) -> str:
+    profile = _load_default_profile()
+    path = Path(getattr(profile.paths, path_attr, "")) if profile is not None else None
+    return str(path) if path.is_dir() else ""
+
+
 def get_processed_dir() -> str:
-    try:
-        profile = load_profile("default")
-        if profile.paths.processed:
-            path = Path(profile.paths.processed)
-            if path.is_dir():
-                return str(path)
-    except Exception:
-        pass
-    return ""
+    return _get_profile_dir("processed")
 
 
 def get_export_dir() -> str:
-    try:
-        profile = load_profile("default")
-        if profile.paths.export:
-            path = Path(profile.paths.export)
-            if path.is_dir():
-                return str(path)
-    except Exception:
-        pass
-    return ""
+    return _get_profile_dir("export")
 
 
 def find_companion(json_path: Path, metadata: dict) -> Path | None:
@@ -79,6 +66,19 @@ def iter_sidecars(root: Path):
     return repository.iter_sidecars(root)
 
 
+def placeholder_html(message: str) -> str:
+    return f'<p class="placeholder">{html_lib.escape(message)}</p>'
+
+
+def bridge_value(raw_value: str | None) -> str:
+    if not raw_value:
+        return ""
+    return raw_value.rsplit("|", 1)[0] if "|" in raw_value else raw_value
+
+def page_label(page_num: int, total: int) -> str:
+    return f"Page {page_num + 1}/{total}" if total else "Page -/-"
+
+
 def render_pdf_page_html(pdf_path, page_num=0):
     try:
         with fitz.open(str(pdf_path)) as doc:
@@ -89,7 +89,7 @@ def render_pdf_page_html(pdf_path, page_num=0):
             html = f'<img src="data:image/png;base64,{b64}" class="preview-img"/>'
             return html, total, page_num
     except Exception:
-        return '<p class="placeholder">Error rendering PDF.</p>', 0, 0
+        return placeholder_html("Error rendering PDF."), 0, 0
 
 
 def render_xlsx_as_html(xlsx_path, max_rows=100):
@@ -111,7 +111,11 @@ def render_xlsx_as_html(xlsx_path, max_rows=100):
                     'color:var(--body-text-color-subdued,#888);">... truncated ...</td></tr>'
                 )
                 break
-            bg = "var(--table-even-background-fill,#2a2a2a)" if row_count % 2 == 0 else "var(--table-odd-background-fill,#333)"
+            bg = (
+                "var(--table-even-background-fill,#2a2a2a)"
+                if row_count % 2 == 0
+                else "var(--table-odd-background-fill,#333)"
+            )
             lines.append(f'<tr style="background:{bg};">')
             for cell in row:
                 value = html_lib.escape(str(cell)) if cell is not None else ""
@@ -126,7 +130,30 @@ def render_xlsx_as_html(xlsx_path, max_rows=100):
         workbook.close()
         return "\n".join(lines)
     except Exception as exc:
-        return f'<p class="placeholder">Error reading XLSX: {html_lib.escape(str(exc))}</p>'
+        return placeholder_html(f"Error reading XLSX: {exc}")
+
+
+def render_document_preview(doc_path: str | Path, page_num: int = 0) -> tuple[str, str, int]:
+    path = Path(doc_path)
+    if not path.exists():
+        return placeholder_html("File not found on disk."), "No file", 0
+
+    if path.suffix.lower() == ".pdf":
+        preview_html, total, clamped = render_pdf_page_html(path, page_num)
+        return preview_html, page_label(clamped, total), clamped
+
+    if path.suffix.lower() == ".xlsx":
+        return render_xlsx_as_html(path), "XLSX", 0
+
+    return placeholder_html(f"Unsupported format: {path.suffix}"), "Page -/-", 0
+
+
+def launch_tool(initial_tab: str) -> None:
+    try:
+        from tools.app import build_ui as build_tools_ui
+    except ModuleNotFoundError:
+        from app import build_ui as build_tools_ui
+    build_tools_ui(initial_tab=initial_tab).launch()
 
 
 FULLSCREEN_CSS = """
