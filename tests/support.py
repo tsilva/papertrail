@@ -1,0 +1,167 @@
+import json
+from pathlib import Path
+
+import fitz
+import openpyxl
+from PIL import Image
+
+from papertrail.app import App, AppPaths, set_app
+from papertrail.config import Config
+from papertrail.console import PapertrailConsole
+from papertrail.hashing import HashCache
+
+
+def make_test_app(root: Path) -> App:
+    raw = root / "raw"
+    processed = root / "processed"
+    export = root / "export"
+    cache = root / "cache"
+    raw.mkdir()
+    processed.mkdir()
+    export.mkdir()
+    cache.mkdir()
+
+    profile = Config(
+        {
+            "profile": {"name": "test", "description": "", "tax_number": None},
+            "paths": {
+                "raw": [str(raw)],
+                "processed": str(processed),
+                "export": str(export),
+            },
+            "openrouter": {
+                "model_id": "test-model",
+                "base_url": "https://example.invalid/api/v1",
+                "api_key": "test-key",
+            },
+            "gmail": {"enabled": False},
+            "passwords": {},
+            "nif_api": {"enabled": False},
+            "reconciliation": {
+                "exclude_prefixes": [],
+                "rules": [
+                    {
+                        "name": "bank-fee",
+                        "match_description": ["COMISSAO"],
+                        "required_types": {"bank-note": 1},
+                        "shared_types": {},
+                        "companions": [],
+                        "expected_page_count": {},
+                    },
+                    {
+                        "name": "default-credit",
+                        "direction": "credit",
+                        "match_description": [],
+                        "required_types": {"bank-note|invoice-credit": 1},
+                        "shared_types": {},
+                        "companions": [],
+                        "expected_page_count": {},
+                    },
+                    {
+                        "name": "default-debit",
+                        "direction": "debit",
+                        "match_description": [],
+                        "required_types": {"bank-note": 1, "invoice|receipt|invoice-receipt": [1, None]},
+                        "shared_types": {},
+                        "companions": [],
+                        "expected_page_count": {},
+                    },
+                ],
+            },
+            "export": {
+                "file_mappings": {
+                    "enabled": False,
+                    "default_prefix": "",
+                    "rules": [],
+                    "filename_fields": [],
+                },
+                "merge_rules": [],
+                "max_file_size_mb": None,
+            },
+        }
+    )
+
+    return App(
+        profile=profile,
+        profile_name="test",
+        paths=AppPaths(
+            raw=[raw],
+            processed=processed,
+            export=export,
+            cache=cache,
+            profiles=root,
+        ),
+        model_id="test-model",
+        openai_client=None,
+        nif_cache=None,
+        hash_cache=HashCache(cache / "hash_cache.yaml"),
+        console=PapertrailConsole(),
+        api_accessible=False,
+    )
+
+
+def activate_test_app(app: App | None) -> None:
+    set_app(app)
+
+
+def create_pdf(pdf_path: Path, page_texts: list[str]) -> None:
+    doc = fitz.open()
+    for text in page_texts:
+        page = doc.new_page()
+        page.insert_text((72, 72), text)
+    doc.save(pdf_path)
+    doc.close()
+
+
+def create_png(image_path: Path, size: tuple[int, int] = (40, 40), color: str = "white") -> None:
+    Image.new("RGB", size, color=color).save(image_path)
+
+
+def create_millennium_statement(
+    xlsx_path: Path,
+    account: str = "TEST-ACCOUNT-ALPHA",
+    currency: str = "EUR",
+    period_start: str = "01/01/2026",
+    period_end: str = "31/01/2026",
+    transactions: list[dict] | None = None,
+) -> None:
+    transactions = transactions or [
+        {
+            "date_posting": "01/01/2026",
+            "date_value": "01/01/2026",
+            "description": "TEST PURCHASE",
+            "amount": -12.34,
+            "currency": currency,
+            "notes": "",
+            "treated": "Nao",
+        }
+    ]
+
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.cell(row=2, column=3, value=f"{account} - {currency}")
+    ws.cell(row=3, column=3, value=period_start)
+    ws.cell(row=4, column=3, value=period_end)
+    ws.cell(row=8, column=1, value="Data Lancamento")
+    ws.cell(row=8, column=2, value="Data Valor")
+    ws.cell(row=8, column=3, value="Descricao")
+    ws.cell(row=8, column=4, value="Montante")
+    ws.cell(row=8, column=5, value="Moeda")
+    ws.cell(row=8, column=6, value="Notas")
+    ws.cell(row=8, column=7, value="Tratado")
+
+    for index, txn in enumerate(transactions, start=9):
+        ws.cell(row=index, column=1, value=txn["date_posting"])
+        ws.cell(row=index, column=2, value=txn["date_value"])
+        ws.cell(row=index, column=3, value=txn["description"])
+        ws.cell(row=index, column=4, value=txn["amount"])
+        ws.cell(row=index, column=5, value=txn.get("currency", currency))
+        ws.cell(row=index, column=6, value=txn.get("notes", ""))
+        ws.cell(row=index, column=7, value=txn.get("treated", "Nao"))
+
+    wb.save(xlsx_path)
+    wb.close()
+
+
+def write_json(path: Path, data: dict) -> None:
+    path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")

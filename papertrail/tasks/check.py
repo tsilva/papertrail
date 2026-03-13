@@ -4,13 +4,12 @@ from collections import Counter, defaultdict
 from datetime import datetime
 from pathlib import Path
 
+from papertrail.app import get_app
 from papertrail.console import get_console
 from papertrail.hashing import hash_file_fast, hash_file_content, hash_file_text, HashCache
 from papertrail.logging_utils import get_logger, setup_task_logging
-from papertrail.metadata import (
-    load_validated_metadata, save_json_data, find_companion_file, iter_json_files,
-)
 from papertrail.pdf import get_page_count
+from papertrail.store import DocumentStore
 from papertrail.tasks.extraction import DocumentService
 
 logger = get_logger('cli')
@@ -25,6 +24,7 @@ def validate_metadata(output_path: Path):
     from concurrent.futures import ProcessPoolExecutor, as_completed
 
     console = get_console()
+    store = DocumentStore(get_app())
     valid_entries = []
     errors = []
 
@@ -32,8 +32,10 @@ def validate_metadata(output_path: Path):
     logger.debug(f"Hash cache loaded with {len(cache)} entries")
 
     pdf_info = []
-    for metadata_path, pdf_path, metadata in load_validated_metadata(
-        output_path, require_pdf=False, validate=True
+    for metadata_path, pdf_path, metadata in store.iter_documents(
+        output_path,
+        require_companion=False,
+        validate=True,
     ):
         try:
             content_hash = metadata.hash_content
@@ -197,7 +199,8 @@ def _is_sidecar(path: Path) -> bool:
 
 
 def _load_all_metadata(processed_path: Path) -> list[tuple[Path, dict]]:
-    return [(p, d) for p, d in iter_json_files(processed_path) if not _is_sidecar(p)]
+    store = DocumentStore(get_app())
+    return [(p, d) for p, d in store.iter_sidecars(processed_path) if not _is_sidecar(p)]
 
 
 def _section_unknown(records, total):

@@ -8,14 +8,15 @@ from typing import Optional
 
 import openpyxl
 
+from papertrail.app import get_app
 from papertrail.config import get_current_profile, get_openai_client
 from papertrail.rules import RuleEngine
 from papertrail.utils import strip_diacritics
 from papertrail.console import get_console
 from papertrail.llm import _extract_json_from_response
 from papertrail.logging_utils import get_logger
-from papertrail.metadata import iter_json_files, find_companion_file
-from papertrail.tasks import task_log_context
+from papertrail.store import DocumentStore
+from papertrail.workflow_utils import task_log_context
 
 logger = get_logger("reconcile")
 
@@ -124,11 +125,12 @@ def _load_transactions(excel_path: Path) -> list[Transaction]:
 
 def _discover_bank_statements(export_path: Path) -> list[Path]:
     """Find XLSX files in export_path where sidecar JSON has document_type == 'bank-statement'."""
+    store = DocumentStore(get_app())
     statements = []
-    for json_path, data in iter_json_files(export_path):
+    for json_path, data in store.iter_sidecars(export_path):
         if data.get("document_type") != "bank-statement":
             continue
-        doc_path = find_companion_file(json_path, data)
+        doc_path = store.find_companion(json_path, data)
         if doc_path and doc_path.suffix.lower() == ".xlsx":
             statements.append(doc_path)
     return statements
@@ -145,12 +147,13 @@ def _load_pdf_candidates(export_path: Path, exclude_prefixes: list[str] | None =
     """
     if exclude_prefixes is None:
         exclude_prefixes = []
+    store = DocumentStore(get_app())
     candidates = []
-    for json_path, data in iter_json_files(export_path):
+    for json_path, data in store.iter_sidecars(export_path):
         if data.get("document_type") == "bank-statement":
             continue
 
-        doc_path = find_companion_file(json_path, data)
+        doc_path = store.find_companion(json_path, data)
         if doc_path is None:
             continue
 

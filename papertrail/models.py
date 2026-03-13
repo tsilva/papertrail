@@ -219,3 +219,8 @@ class DocumentMetadata(BaseModel):
         value = value.strip().upper()
         currency_map = {'€': 'EUR', 'EURO': 'EUR', '$': 'USD', '£': 'GBP'}
         return currency_map.get(value, value)
+
+    @field_validator('issuing_party', mode='before')
+    @classmethod
+    def validate_issuing_party(cls, value):
+        return _normalize_to_known(value, "IssuingParty", get_issuing_parties, "issuing_party")

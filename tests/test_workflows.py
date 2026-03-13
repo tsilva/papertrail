@@ -1,0 +1,140 @@
+import json
+import tempfile
+import unittest
+from pathlib import Path
+
+from papertrail.hashing import hash_file_fast
+from papertrail.models import DocumentMetadata
+from papertrail.store import DocumentStore
+from papertrail.workflows import copy_matching, reconcile
+
+from tests.support import activate_test_app, create_millennium_statement, create_pdf, make_test_app
+
+
+class WorkflowTests(unittest.TestCase):
+    def setUp(self):
+        self.tmpdir = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmpdir.name)
+        self.app = make_test_app(self.root)
+        activate_test_app(self.app)
+        self.store = DocumentStore(self.app)
+        self.processed = self.app.paths.processed
+        self.export = self.app.paths.export
+
+    def tearDown(self):
+        activate_test_app(None)
+        self.tmpdir.cleanup()
+
+    def _metadata(self, hash_content: str, hash_file: str, **overrides) -> DocumentMetadata:
+        data = {
+            "class_confidence": 1.0,
+            "class_reasoning": "test",
+            "date_created": "2026-01-02",
+            "date_issued": "2026-01-02",
+            "date_updated": "2026-01-02",
+            "document_type": "invoice",
+            "issuing_party": "vendor",
+            "total_amount": 12.34,
+            "total_amount_currency": "EUR",
+            "hash_content": hash_content,
+            "hash_file": hash_file,
+            "document_type_raw": "Invoice",
+            "document_title": "Subscription",
+            "issuing_party_raw": "Vendor, Inc.",
+        }
+        data.update(overrides)
+        return DocumentMetadata(**data)
+
+    def test_copy_matching_applies_prefix_rules_and_content_dedup(self):
+        self.app.profile.export.file_mappings.enabled = True
+        self.app.profile.export.file_mappings.default_prefix = "DIV_"
+        self.app.profile.export.file_mappings.rules = [
+            {"match": {"document_type": "invoice", "issuer_tax_number": "${profile.tax_number}"}, "prefix": "VND_"},
+            {"match": {"document_type": "invoice"}, "prefix": "CMP_"},
+        ]
+        self.app.profile.export.file_mappings.filename_fields = ["date_issued", "document_type", "issuing_party"]
+        self.app.profile.profile.tax_number = "TESTOWNER"
+
+        first_pdf = self.processed / "2026-01-02 - first.pdf"
+        second_pdf = self.processed / "2026-01-02 - second.pdf"
+        create_pdf(first_pdf, ["invoice one"])
+        create_pdf(second_pdf, ["invoice two"])
+        self.store.save_document(
+            first_pdf,
+            self._metadata("shared123", "file1111", issuer_tax_number="TESTOWNER"),
+        )
+        self.store.save_document(
+            second_pdf,
+            self._metadata("shared123", "file2222", issuer_tax_number="TESTUNKNOWN"),
+        )
+
+        dest = self.root / "copied"
+        stats = copy_matching(
+            self.app,
+            self.processed,
+            "2026-01",
+            dest,
+            export_config=self.app.profile.export,
+            profile_context={"tax_number": "TESTOWNER"},
+            quiet=True,
+        )
+
+        copied_docs = sorted(p.name for p in dest.glob("*.pdf"))
+        copied_sidecars = sorted(p.name for p in dest.glob("*.json"))
+        self.assertEqual(stats["copied"], 1)
+        self.assertEqual(stats["deduped"], 1)
+        self.assertEqual(len(copied_docs), 1)
+        self.assertEqual(len(copied_sidecars), 1)
+        self.assertTrue(copied_docs[0].startswith(("VND_", "CMP_")))
+
+    def test_reconcile_writes_reconciliation_sidecar(self):
+        statement_path = self.export / "statement.xlsx"
+        create_millennium_statement(
+            statement_path,
+            transactions=[
+                {
+                    "date_posting": "15/01/2026",
+                    "date_value": "15/01/2026",
+                    "description": "STORE PAYMENT",
+                    "amount": -12.34,
+                    "currency": "EUR",
+                    "notes": "",
+                    "treated": "Nao",
+                }
+            ],
+        )
+
+        from papertrail.bank_statement import classify_bank_statement
+
+        statement_hash = hash_file_fast(statement_path)
+        statement_metadata = classify_bank_statement(statement_path, statement_hash)
+        self.store.save_document(statement_path, statement_metadata)
+
+        bank_note_path = self.export / "bank-note.pdf"
+        receipt_path = self.export / "receipt.pdf"
+        create_pdf(bank_note_path, ["Bank note"])
+        create_pdf(receipt_path, ["Receipt"])
+        self.store.save_document(
+            bank_note_path,
+            self._metadata("bank0001", "bank0001", document_type="bank-note", document_type_raw="Bank Note"),
+        )
+        self.store.save_document(
+            receipt_path,
+            self._metadata("recv0001", "recv0001", document_type="receipt", document_type_raw="Receipt"),
+        )
+
+        reconcile(self.app, self.export, dry_run=False)
+
+        sidecar_path = statement_path.with_suffix(".reconciliation.json")
+        self.assertTrue(sidecar_path.exists())
+        data = json.loads(sidecar_path.read_text(encoding="utf-8"))
+        self.assertEqual(data["source"], statement_path.name)
+        self.assertEqual(data["summary"]["total"], 1)
+        self.assertEqual(data["summary"]["incomplete"], 0)
+        self.assertEqual(len(data["matches"]), 1)
+        self.assertIn("files", data["matches"][0])
+        self.assertIn("unmatched_files", data)
+
+
+if __name__ == "__main__":
+    unittest.main()

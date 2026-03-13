@@ -1,6 +1,5 @@
-"""Extraction and classification tasks."""
+"""Document lifecycle service and classification helpers."""
 
-import fcntl
 import json
 import shutil
 import tempfile
@@ -11,9 +10,7 @@ from datetime import datetime
 from pathlib import Path
 
 from papertrail.app import get_app
-from papertrail.console import get_console
 from papertrail.logging_utils import (
-    setup_failure_logger,
     log_failure,
     get_logger,
     DocumentLogger,
@@ -39,9 +36,7 @@ from papertrail.pdf import (
     render_pdf_to_images,
     split_pdf_bundle,
 )
-from papertrail.metadata import build_hash_index, save_metadata_json, load_json_data, iter_json_files
 from papertrail.hashing import hash_file_fast, hash_file_content, hash_file_text
-from papertrail.tasks import task_log_context
 from papertrail.qr import extract_all_metadata_from_qr, QRExtractedMetadata
 from papertrail.nif_lookup import NIFLookupCache
 from papertrail.store import DocumentStore
@@ -235,7 +230,8 @@ def _phase4_nif_enrich(merged, raw_metadata, normalized_issuing_party, ctx, doc_
         normalized_issuing_party = enriched
     if doc_logger:
         doc_logger.log_timing("nif_enrichment", _time.monotonic() - t0)
-    ctx.nif_cache.save()
+    if ctx.nif_cache is not None:
+        ctx.nif_cache.save()
     return normalized_issuing_party
 
 
@@ -862,6 +858,7 @@ class DocumentService:
         console = self.app.console
         orphans_only = not all and not all_unknown and pattern is None
         targets = _collect_sync_targets(
+            self.store,
             processed_path,
             all_unknown=all_unknown,
             pattern=pattern,
@@ -1017,311 +1014,23 @@ def upsert_document(source_path: Path, mode: str, existing_metadata=None) -> Ups
 
 
 def task_extract_new(processed_path: Path, raw_paths: list[Path], quiet: bool = False) -> dict | None:
-    """Extract and classify new PDF files."""
-    lock_path = Path(__file__).parents[1].parent / ".cache" / ".extract.lock"
-    lock_path.parent.mkdir(parents=True, exist_ok=True)
-    lock_file = open(lock_path, "w")
-    try:
-        fcntl.flock(lock_file, fcntl.LOCK_EX | fcntl.LOCK_NB)
-    except OSError:
-        logger.error("Another extract_new process is already running. Exiting.")
-        lock_file.close()
-        return None
-    try:
-        with task_log_context(processed_path, "extract_new", show_header=not quiet):
-            logs_dir = processed_path / "logs"
-            failure_log_path = logs_dir / "classification_failures.log"
-            failure_logger = setup_failure_logger(failure_log_path)
-            logger.debug(f"Logging failures to: {failure_log_path}")
-            return DocumentService().extract_new(
-                processed_path,
-                raw_paths,
-                quiet=quiet,
-                failure_logger=failure_logger,
-            )
-    finally:
-        fcntl.flock(lock_file, fcntl.LOCK_UN)
-        lock_file.close()
+    """Compatibility wrapper for the canonical extract workflow."""
+    from papertrail.workflows import extract
+
+    return extract(get_app(), processed_path, raw_paths, quiet=quiet)
 
 
-def _process_xlsx_files(xlsx_paths: list[Path], known_file_hashes: set,
-                        known_content_hashes: set, processed_path: Path,
-                        console) -> tuple[int, int]:
-    """Process XLSX files (bank statements). Returns (processed, skipped)."""
-    import warnings
-    from papertrail.bank_statement import classify_bank_statement
-    from papertrail.tasks.organize import file_name_from_metadata
-
-    processed_count = 0
-    skipped_count = 0
-    warnings.filterwarnings("ignore", message="Workbook contains no default style")
-
-    for xlsx_path in console.track(xlsx_paths, "Processing XLSX"):
-        file_hash = hash_file_fast(xlsx_path)
-        if file_hash in known_file_hashes:
-            skipped_count += 1
-            continue
-
-        metadata = classify_bank_statement(xlsx_path, file_hash)
-        if metadata is not None:
-            metadata.file_size_kb = round(xlsx_path.stat().st_size / 1024)
-        if metadata is None:
-            logger.debug(f"Skipping unrecognized XLSX: {xlsx_path.name}")
-            skipped_count += 1
-            continue
-
-        filename = file_name_from_metadata(metadata, file_hash)
-        new_path = processed_path / filename
-        if new_path.exists():
-            logger.warning(f"Skipping {xlsx_path.name}: destination already exists: {filename}")
-            skipped_count += 1
-            continue
-
-        shutil.copy2(xlsx_path, new_path)
-        save_metadata_json(new_path, metadata)
-
-        known_file_hashes.add(file_hash)
-        known_content_hashes.add(file_hash)
-        processed_count += 1
-        logger.debug(f"Processed XLSX: {xlsx_path.name} -> {filename}")
-
-    return processed_count, skipped_count
-
-
-def _task_extract_new_locked(processed_path: Path, raw_paths: list[Path], quiet: bool = False) -> dict:
-    """Extract and classify new PDF files (lock already held)."""
-    from papertrail.tasks.organize import rename_pdf_files
-
-    console = get_console()
-
-    with task_log_context(processed_path, "extract_new", show_header=not quiet):
-        logs_dir = processed_path / "logs"
-        failure_log_path = logs_dir / "classification_failures.log"
-        failure_logger = setup_failure_logger(failure_log_path)
-        logger.debug(f"Logging failures to: {failure_log_path}")
-
-        doc_logger = DocumentLogger()
-        run_start = _time.monotonic()
-
-        logger.debug("Building hash index from metadata files...")
-        known_content_hashes_idx, known_file_hashes_idx, known_text_hashes_idx, known_issuers_before = build_hash_index(processed_path)
-        known_content_hashes = set(known_content_hashes_idx.keys())
-        known_file_hashes = set(known_file_hashes_idx.keys())
-        known_text_hashes = set(known_text_hashes_idx.keys())
-        hashes_before = set(known_content_hashes)
-
-        # Discover all document files (PDF + XLSX + images)
-        all_doc_paths = find_document_files(raw_paths)
-        pdf_paths = [p for p in all_doc_paths if p.suffix.lower() == '.pdf']
-        xlsx_paths = [p for p in all_doc_paths if p.suffix.lower() == '.xlsx']
-        image_paths = [p for p in all_doc_paths if is_image_file(p)]
-
-        logger.debug(f"Found {len(pdf_paths)} PDFs, {len(xlsx_paths)} XLSX, and {len(image_paths)} images in raw directories")
-
-        # Convert images to PDFs in a temp directory
-        temp_dir = None
-        images_converted = 0
-        if image_paths:
-            import tempfile
-            from papertrail.pdf import convert_images_to_pdfs
-            temp_dir = tempfile.TemporaryDirectory()
-            converted_pdfs = convert_images_to_pdfs(image_paths, Path(temp_dir.name), console)
-            images_converted = len(converted_pdfs)
-            pdf_paths.extend(converted_pdfs)
-            if images_converted > 0:
-                logger.debug(f"Converted {images_converted} images to PDF")
-
-        # Split multi-note PDF bundles into individual pages
-        split_temp_dir = None
-        bundles_split = 0
-        split_pages_count = 0
-        if pdf_paths:
-            import tempfile
-            from papertrail.pdf import split_pdf_bundles
-            split_temp_dir = tempfile.TemporaryDirectory()
-            non_split, split_pages, bundles_split = split_pdf_bundles(
-                pdf_paths, Path(split_temp_dir.name), console,
-            )
-            if bundles_split > 0:
-                split_pages_count = len(split_pages)
-                pdf_paths = non_split + split_pages
-                logger.debug(f"[PDF-SPLIT] Split {bundles_split} bundles into {split_pages_count} individual pages")
-            else:
-                logger.debug("[PDF-SPLIT] No splittable bundles found")
-
-        # Process XLSX files first (deterministic, fast)
-        xlsx_processed = 0
-        xlsx_skipped = 0
-        if xlsx_paths:
-            xlsx_processed, xlsx_skipped = _process_xlsx_files(
-                xlsx_paths, known_file_hashes, known_content_hashes,
-                processed_path, console,
-            )
-            if not quiet and xlsx_processed > 0:
-                console.success(f"{xlsx_processed} XLSX file(s) processed", indent=False)
-
-        # Process PDF files
-        logger.debug("Stage 1: Quick filtering using fast file hashes...")
-
-        # Stage 1: Fast hashing with Rich progress
-        fast_hash_map = {}
-        for pdf in console.track(pdf_paths, "Fast hashing"):
-            fast_hash_map[pdf] = hash_file_fast(pdf)
-
-        potentially_new = [pdf for pdf in pdf_paths if fast_hash_map[pdf] not in known_file_hashes]
-
-        # Intra-batch dedup by file hash
-        potentially_new, batch_dedup_stage1 = dedup_batch(
-            potentially_new, hash_fn=lambda pdf: fast_hash_map[pdf], label="Stage 1",
-        )
-
-        already_processed = len(pdf_paths) - len(potentially_new) - batch_dedup_stage1
-        logger.debug(f"Stage 1: Skipped {already_processed} already-processed files (file hash match)")
-        if batch_dedup_stage1 > 0:
-            logger.debug(f"Stage 1: Skipped {batch_dedup_stage1} intra-batch duplicates (file hash)")
-        logger.debug(f"{len(potentially_new)} files need further dedup checks")
-
-        file_hash_duplicates = len(pdf_paths) - len(potentially_new) - batch_dedup_stage1
-
-        if not potentially_new:
-            if not quiet:
-                console.success(f"{len(pdf_paths)} PDFs scanned, 0 new to process", indent=False)
-            logger.debug("No new PDFs to process.")
-            if temp_dir is not None:
-                temp_dir.cleanup()
-            if split_temp_dir is not None:
-                split_temp_dir.cleanup()
-            return {
-                "pdf_scanned": len(pdf_paths),
-                "xlsx_scanned": len(xlsx_paths),
-                "new": xlsx_processed,
-                "duplicates": file_hash_duplicates + xlsx_skipped,
-                "batch_duplicates": 0,
-                "failed": 0,
-                "xlsx_new": xlsx_processed,
-                "pdf_new": 0,
-                "images_converted": images_converted,
-                "bundles_split": bundles_split,
-                "split_pages": split_pages_count,
-                "new_issuers": [],
-                "unknown_document_type": 0,
-                "unknown_issuing_party": 0,
-            }
-
-        # Stage 2: Text-based hashing (fast, catches compression duplicates)
-        logger.debug(f"Stage 2: Text-based hashing for {len(potentially_new)} files...")
-        text_hash_map = {}
-        for pdf in console.track(potentially_new, "Text hashing"):
-            th = hash_file_text(pdf)
-            if th is not None:
-                text_hash_map[pdf] = th
-
-        after_text = [pdf for pdf in potentially_new
-                      if pdf not in text_hash_map or text_hash_map[pdf] not in known_text_hashes]
-        text_duplicates = len(potentially_new) - len(after_text)
-        if text_duplicates > 0:
-            logger.debug(f"Stage 2: Skipped {text_duplicates} text-hash duplicates")
-
-        # Intra-batch dedup by text hash
-        after_text, batch_dedup_stage2 = dedup_batch(
-            after_text, hash_fn=lambda pdf: text_hash_map.get(pdf), label="Stage 2",
-        )
-        if batch_dedup_stage2 > 0:
-            logger.debug(f"Stage 2: Skipped {batch_dedup_stage2} intra-batch duplicates (text hash)")
-
-        logger.debug(f"Stage 3: Content-based hashing for {len(after_text)} files...")
-        content_hash_map = {}
-
-        # Stage 3: Content hashing with Rich progress
-        for pdf in console.track(after_text, "Content hashing"):
-            try:
-                content_hash = hash_file_content(pdf)
-                content_hash_map[pdf] = content_hash
-            except Exception as e:
-                logger.error(f"Error hashing {pdf.name}: {e}")
-
-        files_to_process = [pdf for pdf in after_text if content_hash_map.get(pdf) not in known_content_hashes]
-        content_duplicates = len(after_text) - len(files_to_process)
-
-        # Intra-batch dedup by content hash
-        files_to_process, batch_dedup_stage3 = dedup_batch(
-            files_to_process, hash_fn=lambda pdf: content_hash_map.get(pdf), label="Stage 3",
-        )
-        if batch_dedup_stage3 > 0:
-            logger.debug(f"Stage 3: Skipped {batch_dedup_stage3} intra-batch duplicates (content hash)")
-
-        batch_duplicates = batch_dedup_stage1 + batch_dedup_stage2 + batch_dedup_stage3
-        logger.debug(f"Found {len(files_to_process)} truly new PDFs to process.")
-
-        success_count = len(known_content_hashes)
-        initial_count = success_count
-
-        if files_to_process:
-            rename_pdf_files(files_to_process, content_hash_map, known_content_hashes, known_file_hashes, processed_path,
-                             failure_logger, doc_logger=doc_logger)
-
-        new_processed = len(known_content_hashes) - initial_count
-        failed = len(files_to_process) - new_processed
-        elapsed = _time.monotonic() - run_start
-
-        # Scan newly created files for new issuers and unknowns
-        new_hashes = known_content_hashes - hashes_before
-        new_issuers: set[str] = set()
-        unknown_dt_count = 0
-        unknown_ip_count = 0
-        if new_hashes:
-            for json_path, data in iter_json_files(processed_path):
-                ch = data.get("hash_content")
-                if ch not in new_hashes:
-                    continue
-                ip = data.get("issuing_party")
-                if ip and ip != "$UNKNOWN$" and ip not in known_issuers_before:
-                    new_issuers.add(ip)
-                if data.get("document_type") == "$UNKNOWN$":
-                    unknown_dt_count += 1
-                if ip == "$UNKNOWN$":
-                    unknown_ip_count += 1
-
-        # Console output
-        if not quiet:
-            console.success(f"{len(pdf_paths)} PDFs scanned, {len(files_to_process)} new to process", indent=False)
-            if new_processed > 0 or failed > 0:
-                if failed > 0:
-                    console.warning(f"{new_processed} processed, {failed} failed", indent=False)
-                else:
-                    console.success(f"{new_processed} processed successfully", indent=False)
-
-        logger.debug(f"=== SUMMARY: {len(files_to_process)} attempted, {new_processed} success, {failed} failed, {elapsed:.1f}s total ===")
-
-        if temp_dir is not None:
-            temp_dir.cleanup()
-        if split_temp_dir is not None:
-            split_temp_dir.cleanup()
-
-        return {
-            "pdf_scanned": len(pdf_paths),
-            "xlsx_scanned": len(xlsx_paths),
-            "new": new_processed + xlsx_processed,
-            "duplicates": file_hash_duplicates + text_duplicates + content_duplicates + xlsx_skipped + batch_duplicates,
-            "batch_duplicates": batch_duplicates,
-            "failed": failed,
-            "xlsx_new": xlsx_processed,
-            "pdf_new": new_processed,
-            "images_converted": images_converted,
-            "bundles_split": bundles_split,
-            "split_pages": split_pages_count,
-            "new_issuers": sorted(new_issuers),
-            "unknown_document_type": unknown_dt_count,
-            "unknown_issuing_party": unknown_ip_count,
-        }
-
-
-def _collect_sync_targets(processed_path: Path, all_unknown: bool = False,
-                          pattern: str = None, orphans_only: bool = False) -> list[tuple]:
+def _collect_sync_targets(
+    store: DocumentStore,
+    processed_path: Path,
+    all_unknown: bool = False,
+    pattern: str | None = None,
+    orphans_only: bool = False,
+) -> list[tuple]:
     """Collect files to sync. Returns list of (metadata_path, pdf_path, old_data_or_None)."""
     from papertrail.utils import make_matcher
 
-    console = get_console()
+    console = store.app.console
 
     pdf_files = [f for f in processed_path.rglob("*.pdf")
                  if not any(part.startswith("_dupes") for part in f.parts)]
@@ -1339,7 +1048,7 @@ def _collect_sync_targets(processed_path: Path, all_unknown: bool = False,
             if target_json.exists():
                 if orphans_only:
                     return targets
-                data = load_json_data(target_json)
+                data = store.load_metadata(target_json)
             targets.append((target_json, target_pdf, data))
         else:
             matcher = make_matcher(pattern)
@@ -1356,7 +1065,7 @@ def _collect_sync_targets(processed_path: Path, all_unknown: bool = False,
                 data = None
                 if has_metadata:
                     try:
-                        data = load_json_data(metadata_path)
+                        data = store.load_metadata(metadata_path)
                     except Exception as e:
                         logger.warning(f"Failed to load {metadata_path.name}: {e}")
                 targets.append((metadata_path, pdf_path, data))
@@ -1368,11 +1077,11 @@ def _collect_sync_targets(processed_path: Path, all_unknown: bool = False,
                 targets.append((metadata_path, pdf_path, None))
 
     if all_unknown:
-        json_files = [f for f in processed_path.rglob("*.json")
-                      if not any(part.startswith("_dupes") for part in f.parts)]
-        for metadata_path in console.track(json_files, "Scanning for $UNKNOWN$"):
+        for metadata_path, data in console.track(
+            list(store.iter_sidecars(processed_path)),
+            "Scanning for $UNKNOWN$",
+        ):
             try:
-                data = load_json_data(metadata_path)
                 has_unknown = (
                     data.get("document_type") == "$UNKNOWN$"
                     or data.get("issuing_party") == "$UNKNOWN$"
@@ -1394,14 +1103,16 @@ def _collect_sync_targets(processed_path: Path, all_unknown: bool = False,
 def task_sync(processed_path: Path, dry_run: bool = False,
               all_unknown: bool = False, pattern: str = None,
               workers: int = 1, all: bool = False, quiet: bool = False) -> dict:
-    """Sync metadata by running classification. Default: orphans only."""
-    with task_log_context(processed_path, "sync", show_header=not quiet):
-        return DocumentService().sync(
-            processed_path,
-            dry_run=dry_run,
-            all_unknown=all_unknown,
-            pattern=pattern,
-            workers=workers,
-            all=all,
-            quiet=quiet,
-        )
+    """Compatibility wrapper for the canonical sync workflow."""
+    from papertrail.workflows import sync
+
+    return sync(
+        get_app(),
+        processed_path,
+        dry_run=dry_run,
+        all_unknown=all_unknown,
+        pattern=pattern,
+        workers=workers,
+        all=all,
+        quiet=quiet,
+    )

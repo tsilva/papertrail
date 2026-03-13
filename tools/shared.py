@@ -3,12 +3,50 @@
 import base64
 import html as html_lib
 import warnings
+from functools import lru_cache
 from pathlib import Path
 
 import fitz  # PyMuPDF
 
+from papertrail.app import App, AppPaths
 from papertrail.config import ProfileLoader
-from papertrail.metadata import find_companion_file
+from papertrail.console import PapertrailConsole
+from papertrail.hashing import HashCache
+from papertrail.store import DocumentStore
+
+
+@lru_cache(maxsize=1)
+def _build_store() -> DocumentStore | None:
+    try:
+        profile = ProfileLoader().load_profile("default")
+    except Exception:
+        return None
+
+    processed = Path(profile.paths.processed) if profile.paths.processed else None
+    export = Path(profile.paths.export) if profile.paths.export else None
+    if processed is None:
+        return None
+
+    cache_dir = Path.home() / ".config" / "papertrail" / "cache"
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    app = App(
+        profile=profile,
+        profile_name=profile.profile.name,
+        paths=AppPaths(
+            raw=[Path(p) for p in profile.paths.raw or []],
+            processed=processed,
+            export=export,
+            cache=cache_dir,
+            profiles=Path.home() / ".config" / "papertrail" / "profiles",
+        ),
+        model_id=profile.openrouter.model_id,
+        openai_client=None,
+        nif_cache=None,
+        hash_cache=HashCache(cache_dir / "hash_cache.yaml"),
+        console=PapertrailConsole(),
+        api_accessible=False,
+    )
+    return DocumentStore(app)
 
 
 def get_processed_dir() -> str:
@@ -26,7 +64,10 @@ def get_processed_dir() -> str:
 
 def find_companion(json_path: Path, metadata: dict) -> Path | None:
     """Find companion document file for a JSON sidecar."""
-    return find_companion_file(json_path, metadata)
+    store = _build_store()
+    if store is None:
+        return None
+    return store.find_companion(json_path, metadata)
 
 
 def render_pdf_page_html(pdf_path, page_num=0):

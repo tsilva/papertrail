@@ -11,7 +11,8 @@ import typer
 from papertrail.app import create_app
 from papertrail.config import ConfigError, ProfileNotFoundError
 from papertrail.logging_utils import get_logger
-import papertrail.tasks as tasks
+from papertrail.workflow_utils import task_log_context
+import papertrail.workflows as workflows
 
 logger = get_logger("cli")
 
@@ -33,11 +34,9 @@ def _fail(msg: str):
     raise typer.Exit(1)
 
 
-def _profile_path(name: str) -> Optional[str]:
+def _profile_path(app, name: str) -> Optional[str]:
     """Get a named path ('processed', 'raw', 'export') from the current profile."""
-    from papertrail.config import get_current_profile
-
-    profile = get_current_profile()
+    profile = app.profile if app else None
     if not profile:
         return None
     paths = profile.paths
@@ -48,9 +47,9 @@ def _profile_path(name: str) -> Optional[str]:
     }.get(name)
 
 
-def _resolve_processed(processed_path: Optional[str] = None) -> Path:
+def _resolve_processed(app, processed_path: Optional[str] = None) -> Path:
     """Resolve processed_path from argument or profile, create if needed."""
-    path_str = processed_path or _profile_path("processed")
+    path_str = processed_path or _profile_path(app, "processed")
     if not path_str:
         _fail("processed_path is required.")
     p = Path(path_str)
@@ -92,11 +91,12 @@ def main(
     if "--help" in sys.argv or "-h" in sys.argv:
         return
     try:
-        create_app(profile_name=profile, verbose=verbose)
+        app_instance = create_app(profile_name=profile, verbose=verbose)
     except (ProfileNotFoundError, ConfigError) as e:
         _fail(str(e))
+    ctx.obj = {"app": app_instance}
     if ctx.invoked_subcommand is None:
-        pipeline_cmd(months=2, export_date=None)
+        pipeline_cmd(ctx, months=2, export_date=None)
 
 
 # ── Commands ─────────────────────────────────────────────────────
@@ -104,6 +104,7 @@ def main(
 
 @app.command("pipeline")
 def pipeline_cmd(
+    ctx: typer.Context,
     months: int = typer.Option(2, help="Months to process (default: 2)."),
     export_date: Optional[str] = typer.Option(None, help="Export date in YYYY-MM format."),
 ):
@@ -112,20 +113,20 @@ def pipeline_cmd(
         _fail("--months must be >= 1.")
     if export_date and not re.match(r"^\d{4}-\d{2}$", export_date):
         _fail("--export_date must be in YYYY-MM format.")
-    tasks.pipeline(months=months, export_date_arg=export_date)
+    workflows.pipeline(ctx.obj["app"], months=months, export_date_arg=export_date)
 
 
 @app.command()
 def extract(
+    ctx: typer.Context,
     processed_path: Optional[str] = typer.Argument(None, help="Path to processed folder."),
     raw_path: Optional[str] = typer.Option(None, help="Document folder(s), ';'-separated."),
 ):
     """Process new PDFs/XLSX from raw folder."""
-    pp = _resolve_processed(processed_path)
+    app_instance = ctx.obj["app"]
+    pp = _resolve_processed(app_instance, processed_path)
     if not raw_path:
-        from papertrail.config import get_current_profile
-
-        profile = get_current_profile()
+        profile = app_instance.profile
         if profile and profile.paths.raw:
             raw_path = ";".join(profile.paths.raw)
     if not raw_path:
@@ -133,11 +134,12 @@ def extract(
     raw_paths = [_resolve_dir(p, "raw_path") for p in raw_path.split(";") if p]
     if not raw_paths:
         _fail("--raw_path must contain at least one path.")
-    tasks.task_extract_new(pp, raw_paths)
+    workflows.extract(app_instance, pp, raw_paths)
 
 
 @app.command()
 def sync(
+    ctx: typer.Context,
     processed_path: Optional[str] = typer.Argument(None, help="Path to processed folder."),
     pattern: Optional[str] = typer.Option(None, help="Glob/regex pattern."),
     dry_run: bool = typer.Option(False, help="Preview without modifying."),
@@ -146,8 +148,10 @@ def sync(
     all_pdfs: bool = typer.Option(False, "--all", help="Process all PDFs, not just orphans."),
 ):
     """Sync metadata."""
-    tasks.task_sync(
-        _resolve_processed(processed_path),
+    app_instance = ctx.obj["app"]
+    workflows.sync(
+        app_instance,
+        _resolve_processed(app_instance, processed_path),
         dry_run=dry_run,
         all_unknown=all_unknown,
         pattern=pattern,
@@ -158,39 +162,45 @@ def sync(
 
 @app.command()
 def reconcile(
+    ctx: typer.Context,
     export_path: Optional[str] = typer.Option(None, help="Path to export folder."),
     excel_path: Optional[str] = typer.Option(None, help="Path to transactions Excel file."),
     dry_run: bool = typer.Option(False, help="Preview without modifying."),
 ):
     """Reconcile bank transactions against documents."""
-    export = _resolve_dir(export_path or _profile_path("export"), "export_path")
+    app_instance = ctx.obj["app"]
+    export = _resolve_dir(export_path or _profile_path(app_instance, "export"), "export_path")
     excel = Path(excel_path) if excel_path else None
-    tasks.task_reconcile(export, excel_path=excel, dry_run=dry_run)
+    workflows.reconcile(app_instance, export, excel_path=excel, dry_run=dry_run)
 
 
 @app.command()
 def gmail(
+    ctx: typer.Context,
     months: int = typer.Option(2, help="Months to process (default: 2)."),
 ):
     """Download email attachments from Gmail."""
     if months < 1:
         _fail("--months must be >= 1.")
     try:
-        tasks.task_gmail_download(months=months)
+        workflows.gmail(ctx.obj["app"], months=months)
     except RuntimeError:
         sys.exit(1)
 
 
 @app.command()
 def rename(
+    ctx: typer.Context,
     processed_path: Optional[str] = typer.Argument(None, help="Path to processed folder."),
 ):
     """Rename files based on metadata."""
-    tasks.task_rename_files(_resolve_processed(processed_path))
+    app_instance = ctx.obj["app"]
+    workflows.rename(app_instance, _resolve_processed(app_instance, processed_path))
 
 
 @app.command()
 def check(
+    ctx: typer.Context,
     processed_path: Optional[str] = typer.Argument(None, help="Path to processed folder."),
     verify_hashes: bool = typer.Option(
         False, "--verify-hashes", help="Verify file hashes match metadata."
@@ -198,17 +208,25 @@ def check(
     dry_run: bool = typer.Option(False, help="Report only, don't fix."),
 ):
     """Verify integrity, fill missing fields, audit report."""
-    tasks.task_check(_resolve_processed(processed_path), verify_hashes=verify_hashes, dry_run=dry_run)
+    app_instance = ctx.obj["app"]
+    workflows.check(
+        app_instance,
+        _resolve_processed(app_instance, processed_path),
+        verify_hashes=verify_hashes,
+        dry_run=dry_run,
+    )
 
 
 @app.command()
 def archive(
+    ctx: typer.Context,
     digest: list[str] = typer.Argument(help="One or more hash_file digests to archive."),
     processed_path: Optional[str] = typer.Option(None, help="Path to processed folder."),
     dry_run: bool = typer.Option(False, help="Preview without moving."),
 ):
     """Archive documents by hash digest."""
-    tasks.task_archive(_resolve_processed(processed_path), digest, dry_run=dry_run)
+    app_instance = ctx.obj["app"]
+    workflows.archive(app_instance, _resolve_processed(app_instance, processed_path), digest, dry_run=dry_run)
 
 
 # ── Export subcommands ───────────────────────────────────────────
@@ -216,28 +234,30 @@ def archive(
 
 @export_app.command("excel")
 def export_excel(
+    ctx: typer.Context,
     processed_path: Optional[str] = typer.Argument(None, help="Path to processed folder."),
     output: str = typer.Option(..., help="Output .xlsx file path."),
 ):
     """Export metadata to Excel."""
     if not output.endswith(".xlsx"):
         _fail("--output must end with '.xlsx'.")
-    pp = _resolve_processed(processed_path)
-    with tasks.task_log_context(pp, "export_excel"):
-        tasks.export_metadata_to_excel(pp, output)
+    app_instance = ctx.obj["app"]
+    pp = _resolve_processed(app_instance, processed_path)
+    with task_log_context(pp, "export_excel"):
+        workflows.export_excel(app_instance, pp, output)
 
 
 @export_app.command("dates")
 def export_dates(
+    ctx: typer.Context,
     processed_path: Optional[str] = typer.Argument(None, help="Path to processed folder."),
     base_dir: Optional[str] = typer.Option(None, help="Base export directory."),
     run_merge: bool = typer.Option(False, help="Run PDF merge."),
 ):
     """Export files by date range."""
-    pp = _resolve_processed(processed_path)
-    from papertrail.config import get_current_profile
-
-    profile = get_current_profile()
+    app_instance = ctx.obj["app"]
+    pp = _resolve_processed(app_instance, processed_path)
+    profile = app_instance.profile
     export_base = (
         base_dir or (profile.paths.export if profile else None) or os.getenv("EXPORT_FILES_DIR")
     )
@@ -245,7 +265,8 @@ def export_dates(
     profile_context = None
     if profile and profile.profile.tax_number:
         profile_context = {"tax_number": profile.profile.tax_number}
-    tasks.task_export_all_dates(
+    workflows.export_dates(
+        app_instance,
         pp,
         export_dir,
         run_merge,
@@ -256,15 +277,17 @@ def export_dates(
 
 @export_app.command("copy")
 def export_copy(
+    ctx: typer.Context,
     processed_path: Optional[str] = typer.Argument(None, help="Path to processed folder."),
     pattern: str = typer.Option(..., help="Pattern for matching files."),
     dest: str = typer.Option(..., help="Destination folder."),
 ):
     """Copy files matching pattern."""
-    pp = _resolve_processed(processed_path)
+    app_instance = ctx.obj["app"]
+    pp = _resolve_processed(app_instance, processed_path)
     dest_path = _resolve_dir(dest, "dest", create=True)
-    with tasks.task_log_context(pp, "copy_matching"):
-        tasks.copy_matching_files(pp, pattern, dest_path)
+    with task_log_context(pp, "copy_matching"):
+        workflows.copy_matching(app_instance, pp, pattern, dest_path)
 
 
 if __name__ == "__main__":
