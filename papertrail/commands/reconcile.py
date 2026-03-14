@@ -198,6 +198,35 @@ def discover_bank_statements(repository: DocumentRepository, export_path: Path) 
     return statements
 
 
+def _latest_reconciliation_input_mtime(
+    repository: DocumentRepository,
+    export_path: Path,
+) -> float:
+    latest_mtime = 0.0
+    for json_path, data in repository.iter_sidecars(export_path):
+        latest_mtime = max(latest_mtime, json_path.stat().st_mtime)
+        doc_path = repository.find_companion(json_path, data)
+        if doc_path and doc_path.exists():
+            latest_mtime = max(latest_mtime, doc_path.stat().st_mtime)
+    return latest_mtime
+
+
+def discover_statements_requiring_reconciliation(
+    repository: DocumentRepository,
+    export_path: Path,
+) -> list[Path]:
+    latest_input_mtime = _latest_reconciliation_input_mtime(repository, export_path)
+    pending = []
+    for statement_path in discover_bank_statements(repository, export_path):
+        reconciliation_path = statement_path.with_suffix(".reconciliation.json")
+        if not reconciliation_path.exists():
+            pending.append(statement_path)
+            continue
+        if reconciliation_path.stat().st_mtime < latest_input_mtime:
+            pending.append(statement_path)
+    return pending
+
+
 def _load_pdf_candidates(
     repository: DocumentRepository,
     export_path: Path,

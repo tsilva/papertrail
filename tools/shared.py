@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import html as html_lib
+import os
 import warnings
 from functools import lru_cache
 from pathlib import Path
@@ -13,17 +14,21 @@ from papertrail.repository import DocumentRepository
 from papertrail.runtime import runtime_from_profile
 
 
-@lru_cache(maxsize=1)
-def _load_default_profile():
+@lru_cache(maxsize=8)
+def _load_profile(profile_name: str):
     try:
-        return load_profile("default")
+        return load_profile(profile_name)
     except Exception:
         return None
 
 
-@lru_cache(maxsize=1)
-def build_repository() -> DocumentRepository | None:
-    profile = _load_default_profile()
+def _active_profile_name() -> str:
+    return os.environ.get("PAPERTRAIL_PROFILE", "default")
+
+
+@lru_cache(maxsize=8)
+def build_repository(profile_name: str) -> DocumentRepository | None:
+    profile = _load_profile(profile_name)
     if profile is None or not profile.paths.processed:
         return None
     runtime = runtime_from_profile(profile, enable_client=False, probe_api=False)
@@ -31,7 +36,7 @@ def build_repository() -> DocumentRepository | None:
 
 
 def _get_profile_dir(path_attr: str) -> str:
-    profile = _load_default_profile()
+    profile = _load_profile(_active_profile_name())
     path = Path(getattr(profile.paths, path_attr, "")) if profile is not None else None
     return str(path) if path.is_dir() else ""
 
@@ -45,14 +50,14 @@ def get_export_dir() -> str:
 
 
 def find_companion(json_path: Path, metadata: dict) -> Path | None:
-    repository = build_repository()
+    repository = build_repository(_active_profile_name())
     if repository is None:
         return None
     return repository.find_companion(json_path, metadata)
 
 
 def is_internal_path(path: Path) -> bool:
-    repository = build_repository()
+    repository = build_repository(_active_profile_name())
     if repository is None:
         parts = path.parts
         return any(part.startswith("_") or part == "logs" for part in parts)
@@ -60,7 +65,7 @@ def is_internal_path(path: Path) -> bool:
 
 
 def iter_sidecars(root: Path):
-    repository = build_repository()
+    repository = build_repository(_active_profile_name())
     if repository is None:
         return []
     return repository.iter_sidecars(root)

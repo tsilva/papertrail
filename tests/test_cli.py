@@ -1,6 +1,8 @@
 import unittest
 import sys
+import tempfile
 from types import ModuleType, SimpleNamespace
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 from typer.testing import CliRunner
@@ -14,7 +16,6 @@ def _stub_module(name: str, **attrs):
     return module
 
 
-sys.modules.setdefault("openpyxl", MagicMock())
 _stub_module("google")
 _stub_module("google.auth")
 _stub_module("google.auth.transport")
@@ -67,6 +68,29 @@ class CliTests(unittest.TestCase):
 
         self.assertEqual(result.exit_code, 0)
         pipeline_mock.assert_called_once()
+
+    def test_review_command_dispatches_to_command_layer(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            export_dir = Path(tmpdir)
+            runtime = SimpleNamespace(
+                profile=SimpleNamespace(
+                    paths=SimpleNamespace(
+                        raw=[str(export_dir)],
+                        processed=str(export_dir),
+                        export=str(export_dir),
+                    )
+                ),
+                console=MagicMock(),
+            )
+
+            with (
+                patch("main.create_runtime", return_value=runtime),
+                patch("main.commands.review") as review_mock,
+            ):
+                result = self.runner.invoke(cli_main.app, ["review"])
+
+        self.assertEqual(result.exit_code, 0)
+        review_mock.assert_called_once_with(runtime, export_dir)
 
 
 if __name__ == "__main__":

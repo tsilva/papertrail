@@ -1,5 +1,6 @@
 import json
 import importlib
+import os
 import sys
 import tempfile
 import unittest
@@ -16,7 +17,7 @@ from papertrail.pdf_merge import merge_all_pdfs
 from papertrail.repository import DocumentRepository
 
 from tests.support import create_millennium_statement, create_pdf, make_test_runtime
-from tools import browse, review
+from tools import browse, review, shared
 
 
 class AdapterSmokeTests(unittest.TestCase):
@@ -27,6 +28,8 @@ class AdapterSmokeTests(unittest.TestCase):
         self.repository = DocumentRepository(self.runtime)
 
     def tearDown(self):
+        shared._load_profile.cache_clear()
+        shared.build_repository.cache_clear()
         self.tmpdir.cleanup()
 
     def _metadata(self, hash_content: str, hash_file: str, **overrides) -> DocumentMetadata:
@@ -168,6 +171,19 @@ class AdapterSmokeTests(unittest.TestCase):
         self.assertEqual(len(review_data["bank_statements"]), 1)
         self.assertIn("statement.xlsx", review_data["file_index"])
         self.assertIn("Loaded **1** bank statements", status)
+
+    def test_tools_shared_uses_active_profile_env(self):
+        shared._load_profile.cache_clear()
+        shared.build_repository.cache_clear()
+
+        with (
+            patch.dict(os.environ, {"PAPERTRAIL_PROFILE": "work"}, clear=False),
+            patch("tools.shared.load_profile", return_value=self.runtime.profile) as load_profile_mock,
+        ):
+            export_dir = shared.get_export_dir()
+
+        self.assertEqual(export_dir, str(self.runtime.paths.export))
+        load_profile_mock.assert_called_once_with("work")
 
     def test_submodule_imports_do_not_eager_load_engine(self):
         saved = {

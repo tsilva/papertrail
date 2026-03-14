@@ -185,6 +185,17 @@ def reconcile(
 
 
 @app.command()
+def review(
+    ctx: typer.Context,
+    export_path: Optional[str] = typer.Option(None, help="Path to export folder."),
+):
+    """Refresh reconciliation data if needed, then launch the review UI."""
+    runtime = ctx.obj["runtime"]
+    export = _resolve_dir(export_path or _profile_path(runtime, "export"), "export_path")
+    commands.review(runtime, export)
+
+
+@app.command()
 def gmail(
     ctx: typer.Context,
     months: int = typer.Option(2, help="Months to process (default: 2)."),
