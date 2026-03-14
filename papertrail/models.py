@@ -17,7 +17,8 @@ def clean_enum_string(value: str, enum_prefix: Optional[str] = None) -> str:
         prefix = f"{enum_prefix}."
         if value.startswith(prefix):
             return value.split(".", 1)[-1]
-    elif "." in value and value.count(".") == 1:
+    # Only strip implicit enum prefixes for simple identifier-like values.
+    elif re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*\.[A-Za-z0-9_-]+", value):
         return value.split(".", 1)[-1]
     return value
 

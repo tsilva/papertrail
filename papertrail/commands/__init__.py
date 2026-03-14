@@ -568,6 +568,8 @@ def gmail(runtime: Runtime, *, months: int = 2) -> None:
         "bytes_downloaded": 0,
     }
     gmail_dir = raw_path / "gmail"
+    tracking_dir = Path(processed_path_str) / "logs" / "gmail_tracking"
+    tracking_dir.mkdir(parents=True, exist_ok=True)
     paths = get_gmail_config_paths(runtime.profile)
 
     for month in export_dates_list:
@@ -581,7 +583,7 @@ def gmail(runtime: Runtime, *, months: int = 2) -> None:
                 output_dir=month_dir,
                 start_date=start_date,
                 end_date=end_date,
-                tracking_dir=gmail_dir,
+                tracking_dir=tracking_dir,
                 credentials_path=paths["credentials"],
                 token_path=paths["token"],
                 settings_path=paths["settings"],

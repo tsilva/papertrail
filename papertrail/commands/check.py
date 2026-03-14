@@ -156,7 +156,11 @@ def validate_merged_pdf(folder_path: Path) -> bool:
     merged_path = folder_path / "merged_all.pdf"
     if not merged_path.exists():
         return True
-    source_pdfs = [path for path in folder_path.glob("*.pdf") if path.name != "merged_all.pdf"]
+    source_pdfs = [
+        path
+        for path in folder_path.glob("*.pdf")
+        if not path.name.startswith("merged_")
+    ]
     expected_pages = sum(get_page_count(pdf) for pdf in source_pdfs)
     actual_pages = get_page_count(merged_path)
     if actual_pages != expected_pages:

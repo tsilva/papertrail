@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import re
+import unicodedata
 from datetime import datetime
 from typing import Any
 
@@ -12,6 +14,23 @@ from papertrail.qr.models import QRExtractedMetadata
 
 logger = get_logger("llm")
 
+_LEGAL_SUFFIXES = {
+    "inc",
+    "incorporated",
+    "ltd",
+    "limited",
+    "llc",
+    "llp",
+    "plc",
+    "corp",
+    "corporation",
+    "company",
+    "co",
+    "sa",
+    "lda",
+    "pbc",
+}
+
 
 def _extract_json_from_response(content: str) -> str:
     """Extract JSON from LLM response, handling markdown code blocks."""
@@ -20,6 +39,99 @@ def _extract_json_from_response(content: str) -> str:
     if "```" in content:
         return content.split("```")[1].split("```")[0].strip()
     return content
+
+
+def _ascii_fold(value: str) -> str:
+    return unicodedata.normalize("NFKD", value).encode("ascii", "ignore").decode("ascii")
+
+
+def _simplify_company_name(value: str) -> str:
+    normalized = _ascii_fold(value).lower()
+    normalized = re.sub(r"[^a-z0-9]+", " ", normalized)
+    tokens = [token for token in normalized.split() if token]
+    while tokens and tokens[-1] in _LEGAL_SUFFIXES:
+        tokens.pop()
+    while len(tokens) >= 2 and " ".join(tokens[-2:]) == "s a":
+        tokens = tokens[:-2]
+    return " ".join(tokens)
+
+
+def _slugify_company_name(value: str) -> str:
+    simplified = _simplify_company_name(value)
+    if not simplified:
+        return "$UNKNOWN$"
+    return re.sub(r"\s+", "-", simplified).strip("-") or "$UNKNOWN$"
+
+
+def _canonical_known_party(value: str, known_issuing_parties: list[str]) -> str | None:
+    matches = {known.lower(): known for known in known_issuing_parties if known != "$UNKNOWN$"}
+    return matches.get(value.lower())
+
+
+def _heuristic_normalize_issuing_party(raw_name: str, known_issuing_parties: list[str]) -> str:
+    raw_name = raw_name.strip()
+    if not raw_name:
+        return "$UNKNOWN$"
+
+    canonical = _canonical_known_party(raw_name, known_issuing_parties)
+    if canonical:
+        return canonical
+
+    raw_key = _simplify_company_name(raw_name)
+    if not raw_key:
+        return "$UNKNOWN$"
+
+    exact_matches = {
+        _simplify_company_name(known): known
+        for known in known_issuing_parties
+        if known != "$UNKNOWN$"
+    }
+    if raw_key in exact_matches:
+        return exact_matches[raw_key]
+
+    partial_matches = [
+        known
+        for known in known_issuing_parties
+        if known != "$UNKNOWN$"
+        and (raw_key in _simplify_company_name(known) or _simplify_company_name(known) in raw_key)
+    ]
+    if partial_matches:
+        return max(partial_matches, key=len)
+
+    return _slugify_company_name(raw_name)
+
+
+def _parse_issuing_party_response(content: str) -> str | None:
+    candidates = [content]
+    extracted = _extract_json_from_response(content)
+    if extracted != content:
+        candidates.append(extracted)
+
+    object_match = re.search(r"\{.*\}", extracted, re.DOTALL)
+    if object_match:
+        candidates.append(object_match.group(0))
+
+    for candidate in candidates:
+        try:
+            result = json.loads(candidate)
+        except Exception:
+            continue
+        if isinstance(result, dict):
+            value = result.get("issuing_party")
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+
+    patterns = [
+        r'"issuing_party"\s*:\s*"([^"]+)"',
+        r"'issuing_party'\s*:\s*'([^']+)'",
+        r'"issuing_party"\s*:\s*([A-Za-z0-9][A-Za-z0-9 .,&()/+-]*)',
+    ]
+    for pattern in patterns:
+        match = re.search(pattern, extracted)
+        if match:
+            return match.group(1).strip().rstrip("},")
+
+    return None
 
 
 def build_extraction_tools(exclude_fields: set[str] | None = None) -> list[dict]:
@@ -153,7 +265,7 @@ def normalize_issuing_party(
 ) -> str:
     """Normalize a single issuing party name against the known canonical list."""
     if client is None:
-        return "$UNKNOWN$"
+        return _heuristic_normalize_issuing_party(raw_name, known_issuing_parties)
 
     prompt = (
         "Normalize this company name to a canonical slug form.\n\n"
@@ -174,13 +286,14 @@ def normalize_issuing_party(
         )
         content = response.choices[0].message.content
         if not content:
-            return "$UNKNOWN$"
-        content = _extract_json_from_response(content)
-        result = json.loads(content)
-        return result.get("issuing_party", "$UNKNOWN$")
+            return _heuristic_normalize_issuing_party(raw_name, known_issuing_parties)
+        parsed = _parse_issuing_party_response(content)
+        if parsed:
+            return _heuristic_normalize_issuing_party(parsed, known_issuing_parties)
     except Exception as exc:
         logger.error(f"NIF normalization failed: {exc}")
-        return "$UNKNOWN$"
+
+    return _heuristic_normalize_issuing_party(raw_name, known_issuing_parties)
 
 
 get_system_prompt_raw_extraction = get_system_prompt_classify

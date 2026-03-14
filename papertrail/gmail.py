@@ -220,7 +220,15 @@ class GmailDownloader:
         filename: str,
         *,
         output_dir: Optional[Path] = None,
-    ) -> Optional[Path]:
+    ) -> tuple[Optional[Path], bool]:
+        base_dir = output_dir or self.output_dir
+        base_dir.mkdir(parents=True, exist_ok=True)
+        target_path = base_dir / filename
+
+        # If the file is already present, reuse it instead of creating a duplicate.
+        if self.settings.get("skip_already_downloaded", True) and target_path.exists():
+            return target_path, True
+
         try:
             result = (
                 self.service.users()
@@ -231,14 +239,14 @@ class GmailDownloader:
             )
             data = result.get("data", "")
             file_data = base64.urlsafe_b64decode(data)
-            output_path = self._generate_unique_path(filename, base_dir=output_dir)
+            output_path = self._generate_unique_path(filename, base_dir=base_dir)
             with open(output_path, "wb") as handle:
                 handle.write(file_data)
-            return output_path
+            return output_path, False
         except HttpError as exc:
             if self.failure_logger:
                 self.failure_logger.error(f"Failed to download {filename}: {exc}")
-            return None
+            return None, False
 
     def _generate_unique_path(self, filename: str, *, base_dir: Optional[Path] = None) -> Path:
         directory = base_dir or self.output_dir
@@ -263,6 +271,7 @@ class GmailDownloader:
 
     def save_processed_messages(self, message_ids: set[str]) -> None:
         processed_file = self._get_processed_messages_path()
+        processed_file.parent.mkdir(parents=True, exist_ok=True)
         with open(processed_file, "w", encoding="utf-8") as handle:
             json.dump(sorted(message_ids), handle, indent=2)
 
@@ -283,6 +292,7 @@ class GmailDownloader:
         }
 
         log_path = self.tracking_dir / "gmail_download_failures.log"
+        log_path.parent.mkdir(parents=True, exist_ok=True)
         self.failure_logger = setup_failure_logger(log_path)
 
         query = self.build_search_query(start_date, end_date)
@@ -313,7 +323,7 @@ class GmailDownloader:
 
                 downloaded_count = 0
                 for attachment in attachments:
-                    output_path = self.download_attachment(
+                    output_path, already_present = self.download_attachment(
                         msg_id,
                         attachment["attachment_id"],
                         attachment["filename"],
@@ -321,8 +331,9 @@ class GmailDownloader:
                     )
                     if output_path:
                         downloaded_count += 1
-                        stats["attachments_downloaded"] += 1
-                        stats["bytes_downloaded"] += attachment["size"]
+                        if not already_present:
+                            stats["attachments_downloaded"] += 1
+                            stats["bytes_downloaded"] += attachment["size"]
                     else:
                         stats["attachments_failed"] += 1
 
