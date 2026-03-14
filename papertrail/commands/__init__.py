@@ -697,7 +697,11 @@ def reconcile(
 
 def review(runtime: Runtime, export_path: Path) -> None:
     repository = DocumentRepository(runtime)
-    pending_paths = discover_statements_requiring_reconciliation(repository, export_path)
+    pending_paths = discover_statements_requiring_reconciliation(
+        repository,
+        export_path,
+        include_stale=False,
+    )
 
     if pending_paths:
         with _task_log_context(runtime, export_path, "reconcile"):
@@ -708,7 +712,7 @@ def review(runtime: Runtime, export_path: Path) -> None:
                 with runtime.console.task(f"Reconcile: {path.name}"):
                     reconcile_single(runtime, repository, export_path, path, dry_run=False)
     else:
-        runtime.console.detail("Reconciliation sidecars are up to date.", indent=False)
+        runtime.console.detail("Reconciliation sidecars already exist.", indent=False)
 
     os.environ["PAPERTRAIL_PROFILE"] = runtime.profile_name
     from tools.shared import launch_tool

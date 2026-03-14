@@ -214,6 +214,8 @@ def _latest_reconciliation_input_mtime(
 def discover_statements_requiring_reconciliation(
     repository: DocumentRepository,
     export_path: Path,
+    *,
+    include_stale: bool = True,
 ) -> list[Path]:
     latest_input_mtime = _latest_reconciliation_input_mtime(repository, export_path)
     pending = []
@@ -222,7 +224,7 @@ def discover_statements_requiring_reconciliation(
         if not reconciliation_path.exists():
             pending.append(statement_path)
             continue
-        if reconciliation_path.stat().st_mtime < latest_input_mtime:
+        if include_stale and reconciliation_path.stat().st_mtime < latest_input_mtime:
             pending.append(statement_path)
     return pending
 

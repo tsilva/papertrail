@@ -152,7 +152,7 @@ python3 tools/dedupe.py
 python3 tools/review.py
 ```
 
-`papertrail review` is the higher-level entrypoint: it regenerates missing or stale `.reconciliation.json` files in the active export folder before opening the Review tab.
+`papertrail review` is the higher-level entrypoint: it backfills missing `.reconciliation.json` files in the active export folder before opening the Review tab. To force a fresh reconciliation run, use `papertrail reconcile`.
 
 ## Notes
 

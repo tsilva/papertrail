@@ -3,8 +3,9 @@ import os
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
-from papertrail.commands import copy_matching, reconcile
+from papertrail.commands import copy_matching, reconcile, review
 from papertrail.commands.reconcile import discover_statements_requiring_reconciliation
 from papertrail.hashing import hash_file_fast
 from papertrail.models import DocumentMetadata
@@ -172,6 +173,78 @@ class CommandTests(unittest.TestCase):
         os.utime(receipt_path, (latest_input_mtime + 10, latest_input_mtime + 10))
         pending = discover_statements_requiring_reconciliation(self.repository, self.export)
         self.assertEqual(pending, [statement_path])
+
+    def test_discover_statements_requiring_reconciliation_can_ignore_stale_sidecars(self):
+        statement_path = self.export / "statement.xlsx"
+        create_millennium_statement(statement_path)
+
+        from papertrail.bank_statement import classify_bank_statement
+
+        statement_hash = hash_file_fast(statement_path)
+        statement_metadata = classify_bank_statement(statement_path, statement_hash)
+        self.repository.save_document(statement_path, statement_metadata)
+
+        receipt_path = self.export / "receipt.pdf"
+        create_pdf(receipt_path, ["Receipt"])
+        self.repository.save_document(
+            receipt_path,
+            self._metadata("recv0001", "recv0001", document_type="receipt", document_type_raw="Receipt"),
+        )
+
+        reconciliation_path = statement_path.with_suffix(".reconciliation.json")
+        reconciliation_path.write_text('{"source":"statement.xlsx"}\n', encoding="utf-8")
+
+        latest_input_mtime = max(
+            statement_path.stat().st_mtime,
+            statement_path.with_suffix(".json").stat().st_mtime,
+            receipt_path.stat().st_mtime,
+            receipt_path.with_suffix(".json").stat().st_mtime,
+        )
+        os.utime(reconciliation_path, (latest_input_mtime - 5, latest_input_mtime - 5))
+
+        pending = discover_statements_requiring_reconciliation(
+            self.repository,
+            self.export,
+            include_stale=False,
+        )
+        self.assertEqual(pending, [])
+
+    def test_review_does_not_rerun_existing_reconciliation_sidecars(self):
+        statement_path = self.export / "statement.xlsx"
+        create_millennium_statement(statement_path)
+
+        from papertrail.bank_statement import classify_bank_statement
+
+        statement_hash = hash_file_fast(statement_path)
+        statement_metadata = classify_bank_statement(statement_path, statement_hash)
+        self.repository.save_document(statement_path, statement_metadata)
+
+        receipt_path = self.export / "receipt.pdf"
+        create_pdf(receipt_path, ["Receipt"])
+        self.repository.save_document(
+            receipt_path,
+            self._metadata("recv0001", "recv0001", document_type="receipt", document_type_raw="Receipt"),
+        )
+
+        reconciliation_path = statement_path.with_suffix(".reconciliation.json")
+        reconciliation_path.write_text('{"source":"statement.xlsx"}\n', encoding="utf-8")
+
+        latest_input_mtime = max(
+            statement_path.stat().st_mtime,
+            statement_path.with_suffix(".json").stat().st_mtime,
+            receipt_path.stat().st_mtime,
+            receipt_path.with_suffix(".json").stat().st_mtime,
+        )
+        os.utime(receipt_path, (latest_input_mtime + 10, latest_input_mtime + 10))
+
+        with (
+            patch("papertrail.commands.reconcile_single") as reconcile_single_mock,
+            patch("tools.shared.launch_tool") as launch_tool_mock,
+        ):
+            review(self.runtime, self.export)
+
+        reconcile_single_mock.assert_not_called()
+        launch_tool_mock.assert_called_once_with("review")
 
 
 if __name__ == "__main__":

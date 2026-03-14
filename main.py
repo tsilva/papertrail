@@ -242,7 +242,7 @@ def review(
     profile: Optional[str] = typer.Option(None, help=PROFILE_OPTION_HELP),
     verbose: bool = typer.Option(False, "-v", "--verbose", help="Enable verbose output."),
 ):
-    """Refresh reconciliation data if needed, then launch the review UI."""
+    """Backfill missing reconciliation sidecars, then launch the review UI."""
     runtime = _resolve_runtime(ctx, profile=profile, verbose=verbose)
     export = _resolve_dir(export_path or _profile_path(runtime, "export"), "export_path")
     commands.review(runtime, export)
