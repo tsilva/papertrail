@@ -32,15 +32,15 @@ uv pip install -e '.[dev]'
 papertrail uses profile-based configuration. Create a profile at:
 
 ```text
-~/.config/papertrail/profiles/default/profile.yaml
+~/.config/papertrail/profiles/<name>/profile.yaml
 ```
 
 Example:
 
 ```yaml
 profile:
-  name: "default"
-  description: "Default configuration"
+  name: "personal"
+  description: "Personal configuration"
   tax_number: "TESTOWNER"
 
 paths:
@@ -67,9 +67,11 @@ Full profile documentation lives in [`profiles/README.md`](/Users/tsilva/repos/t
 Use either the entrypoint or `python3 main.py`:
 
 ```bash
-papertrail --profile default pipeline
-python3 main.py --profile default pipeline
+papertrail --profile personal pipeline
+python3 main.py --profile personal pipeline
 ```
+
+`--profile` is required for every command.
 
 Core commands:
 
@@ -91,13 +93,13 @@ Core commands:
 Examples:
 
 ```bash
-python3 main.py extract
-python3 main.py sync --all-unknown
-python3 main.py check --verify-hashes
-python3 main.py export excel --output /tmp/processed_files.xlsx
-python3 main.py export copy --pattern 2026-01 --dest /tmp/january
-python3 main.py reconcile
-papertrail review
+python3 main.py --profile personal extract
+python3 main.py --profile personal sync --all-unknown
+python3 main.py --profile personal check --verify-hashes
+python3 main.py --profile personal export excel --output /tmp/processed_files.xlsx
+python3 main.py --profile personal export copy --pattern 2026-01 --dest /tmp/january
+python3 main.py --profile personal reconcile
+papertrail --profile personal review
 ```
 
 ## Supported Inputs

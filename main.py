@@ -25,6 +25,8 @@ app = typer.Typer(
 export_app = typer.Typer(help="Export documents and metadata.")
 app.add_typer(export_app, name="export")
 
+PROFILE_OPTION_HELP = "Configuration profile to use. Required."
+
 
 # ── Helpers ──────────────────────────────────────────────────────
 
@@ -105,13 +107,32 @@ def _task_log_context(runtime: Runtime, processed_path: Path, task_name: str):
     yield log_file_path
 
 
+def _run_pipeline(
+    ctx: typer.Context,
+    *,
+    months: int,
+    export_date: Optional[str],
+    profile: Optional[str] = None,
+    verbose: bool = False,
+):
+    if months < 1:
+        _fail("--months must be >= 1.")
+    if export_date and not re.match(r"^\d{4}-\d{2}$", export_date):
+        _fail("--export_date must be in YYYY-MM format.")
+    commands.pipeline(
+        _resolve_runtime(ctx, profile=profile, verbose=verbose),
+        months=months,
+        export_date_arg=export_date,
+    )
+
+
 # ── App callback (global options + default command) ──────────────
 
 
 @app.callback()
 def main(
     ctx: typer.Context,
-    profile: Optional[str] = typer.Option(None, help="Configuration profile to use."),
+    profile: Optional[str] = typer.Option(None, help=PROFILE_OPTION_HELP),
     verbose: bool = typer.Option(False, "-v", "--verbose", help="Enable verbose output."),
 ):
     """AI-powered document classification and organization."""
@@ -132,7 +153,7 @@ def main(
             )
             typer.echo(ctx.get_help())
             return
-        pipeline_cmd(ctx, months=2, export_date=None)
+        _run_pipeline(ctx, months=2, export_date=None, profile=profile, verbose=verbose)
 
 
 # ── Commands ─────────────────────────────────────────────────────
@@ -143,15 +164,11 @@ def pipeline_cmd(
     ctx: typer.Context,
     months: int = typer.Option(2, help="Months to process (default: 2)."),
     export_date: Optional[str] = typer.Option(None, help="Export date in YYYY-MM format."),
-    profile: Optional[str] = typer.Option(None, help="Configuration profile to use."),
+    profile: Optional[str] = typer.Option(None, help=PROFILE_OPTION_HELP),
     verbose: bool = typer.Option(False, "-v", "--verbose", help="Enable verbose output."),
 ):
     """Full end-to-end workflow (default)."""
-    if months < 1:
-        _fail("--months must be >= 1.")
-    if export_date and not re.match(r"^\d{4}-\d{2}$", export_date):
-        _fail("--export_date must be in YYYY-MM format.")
-    commands.pipeline(_resolve_runtime(ctx, profile=profile, verbose=verbose), months=months, export_date_arg=export_date)
+    _run_pipeline(ctx, months=months, export_date=export_date, profile=profile, verbose=verbose)
 
 
 @app.command()
@@ -159,7 +176,7 @@ def extract(
     ctx: typer.Context,
     processed_path: Optional[str] = typer.Argument(None, help="Path to processed folder."),
     raw_path: Optional[str] = typer.Option(None, help="Document folder(s), ';'-separated."),
-    profile: Optional[str] = typer.Option(None, help="Configuration profile to use."),
+    profile: Optional[str] = typer.Option(None, help=PROFILE_OPTION_HELP),
     verbose: bool = typer.Option(False, "-v", "--verbose", help="Enable verbose output."),
 ):
     """Process new PDFs/XLSX from raw folder."""
@@ -186,7 +203,7 @@ def sync(
     all_unknown: bool = typer.Option(False, help="Re-extract all $UNKNOWN$ values."),
     workers: int = typer.Option(1, "-w", "--workers", help="Parallel workers."),
     all_pdfs: bool = typer.Option(False, "--all", help="Process all PDFs, not just orphans."),
-    profile: Optional[str] = typer.Option(None, help="Configuration profile to use."),
+    profile: Optional[str] = typer.Option(None, help=PROFILE_OPTION_HELP),
     verbose: bool = typer.Option(False, "-v", "--verbose", help="Enable verbose output."),
 ):
     """Sync metadata."""
@@ -208,7 +225,7 @@ def reconcile(
     export_path: Optional[str] = typer.Option(None, help="Path to export folder."),
     excel_path: Optional[str] = typer.Option(None, help="Path to transactions Excel file."),
     dry_run: bool = typer.Option(False, help="Preview without modifying."),
-    profile: Optional[str] = typer.Option(None, help="Configuration profile to use."),
+    profile: Optional[str] = typer.Option(None, help=PROFILE_OPTION_HELP),
     verbose: bool = typer.Option(False, "-v", "--verbose", help="Enable verbose output."),
 ):
     """Reconcile bank transactions against documents."""
@@ -222,7 +239,7 @@ def reconcile(
 def review(
     ctx: typer.Context,
     export_path: Optional[str] = typer.Option(None, help="Path to export folder."),
-    profile: Optional[str] = typer.Option(None, help="Configuration profile to use."),
+    profile: Optional[str] = typer.Option(None, help=PROFILE_OPTION_HELP),
     verbose: bool = typer.Option(False, "-v", "--verbose", help="Enable verbose output."),
 ):
     """Refresh reconciliation data if needed, then launch the review UI."""
@@ -235,7 +252,7 @@ def review(
 def gmail(
     ctx: typer.Context,
     months: int = typer.Option(2, help="Months to process (default: 2)."),
-    profile: Optional[str] = typer.Option(None, help="Configuration profile to use."),
+    profile: Optional[str] = typer.Option(None, help=PROFILE_OPTION_HELP),
     verbose: bool = typer.Option(False, "-v", "--verbose", help="Enable verbose output."),
 ):
     """Download email attachments from Gmail."""
@@ -251,7 +268,7 @@ def gmail(
 def rename(
     ctx: typer.Context,
     processed_path: Optional[str] = typer.Argument(None, help="Path to processed folder."),
-    profile: Optional[str] = typer.Option(None, help="Configuration profile to use."),
+    profile: Optional[str] = typer.Option(None, help=PROFILE_OPTION_HELP),
     verbose: bool = typer.Option(False, "-v", "--verbose", help="Enable verbose output."),
 ):
     """Rename files based on metadata."""
@@ -267,7 +284,7 @@ def check(
         False, "--verify-hashes", help="Verify file hashes match metadata."
     ),
     dry_run: bool = typer.Option(False, help="Report only, don't fix."),
-    profile: Optional[str] = typer.Option(None, help="Configuration profile to use."),
+    profile: Optional[str] = typer.Option(None, help=PROFILE_OPTION_HELP),
     verbose: bool = typer.Option(False, "-v", "--verbose", help="Enable verbose output."),
 ):
     """Verify integrity, fill missing fields, audit report."""
@@ -286,7 +303,7 @@ def archive(
     digest: list[str] = typer.Argument(help="One or more hash_file digests to archive."),
     processed_path: Optional[str] = typer.Option(None, help="Path to processed folder."),
     dry_run: bool = typer.Option(False, help="Preview without moving."),
-    profile: Optional[str] = typer.Option(None, help="Configuration profile to use."),
+    profile: Optional[str] = typer.Option(None, help=PROFILE_OPTION_HELP),
     verbose: bool = typer.Option(False, "-v", "--verbose", help="Enable verbose output."),
 ):
     """Archive documents by hash digest."""
@@ -302,7 +319,7 @@ def export_excel(
     ctx: typer.Context,
     processed_path: Optional[str] = typer.Argument(None, help="Path to processed folder."),
     output: str = typer.Option(..., help="Output .xlsx file path."),
-    profile: Optional[str] = typer.Option(None, help="Configuration profile to use."),
+    profile: Optional[str] = typer.Option(None, help=PROFILE_OPTION_HELP),
     verbose: bool = typer.Option(False, "-v", "--verbose", help="Enable verbose output."),
 ):
     """Export metadata to Excel."""
@@ -320,7 +337,7 @@ def export_dates(
     processed_path: Optional[str] = typer.Argument(None, help="Path to processed folder."),
     base_dir: Optional[str] = typer.Option(None, help="Base export directory."),
     run_merge: bool = typer.Option(False, help="Run PDF merge."),
-    profile: Optional[str] = typer.Option(None, help="Configuration profile to use."),
+    profile: Optional[str] = typer.Option(None, help=PROFILE_OPTION_HELP),
     verbose: bool = typer.Option(False, "-v", "--verbose", help="Enable verbose output."),
 ):
     """Export files by date range."""
@@ -350,7 +367,7 @@ def export_copy(
     processed_path: Optional[str] = typer.Argument(None, help="Path to processed folder."),
     pattern: str = typer.Option(..., help="Pattern for matching files."),
     dest: str = typer.Option(..., help="Destination folder."),
-    profile: Optional[str] = typer.Option(None, help="Configuration profile to use."),
+    profile: Optional[str] = typer.Option(None, help=PROFILE_OPTION_HELP),
     verbose: bool = typer.Option(False, "-v", "--verbose", help="Enable verbose output."),
 ):
     """Copy files matching pattern."""

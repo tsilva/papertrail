@@ -82,16 +82,14 @@ def create_runtime(
         raise ConfigError(
             "No profiles found in ~/.config/papertrail/profiles/. "
             "Copy profiles/profile.yaml.example to "
-            "~/.config/papertrail/profiles/default/profile.yaml and configure it."
+            "~/.config/papertrail/profiles/<name>/profile.yaml, configure it, "
+            "and pass --profile <name>."
         )
 
     if profile_name is None:
-        if "default" not in available:
-            raise ConfigError(
-                f"No 'default' profile found. Available profiles: {', '.join(available)}. "
-                "Use --profile to specify one."
-            )
-        profile_name = "default"
+        raise ConfigError(
+            f"A profile is required. Use --profile <name>. Available profiles: {', '.join(available)}."
+        )
 
     profile = loader.load_profile(profile_name)
     return runtime_from_profile(
