@@ -37,7 +37,14 @@ def build_repository(profile_name: str) -> DocumentRepository | None:
 
 def _get_profile_dir(path_attr: str) -> str:
     profile = _load_profile(_active_profile_name())
-    path = Path(getattr(profile.paths, path_attr, "")) if profile is not None else None
+    if profile is None:
+        return ""
+
+    path_value = getattr(profile.paths, path_attr, None)
+    if not path_value:
+        return ""
+
+    path = Path(path_value)
     return str(path) if path.is_dir() else ""
 
 

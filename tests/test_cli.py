@@ -92,6 +92,54 @@ class CliTests(unittest.TestCase):
         self.assertEqual(result.exit_code, 0)
         review_mock.assert_called_once_with(runtime, export_dir)
 
+    def test_review_accepts_profile_after_subcommand(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            export_dir = Path(tmpdir)
+            runtime = SimpleNamespace(
+                profile=SimpleNamespace(
+                    paths=SimpleNamespace(
+                        raw=[str(export_dir)],
+                        processed=str(export_dir),
+                        export=str(export_dir),
+                    )
+                ),
+                console=MagicMock(),
+            )
+
+            with (
+                patch("main.create_runtime", return_value=runtime) as create_runtime_mock,
+                patch("main.commands.review") as review_mock,
+            ):
+                result = self.runner.invoke(cli_main.app, ["review", "--profile", "default"])
+
+        self.assertEqual(result.exit_code, 0)
+        create_runtime_mock.assert_called_once_with(profile_name="default", verbose=False)
+        review_mock.assert_called_once_with(runtime, export_dir)
+
+    def test_review_accepts_profile_before_subcommand(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            export_dir = Path(tmpdir)
+            runtime = SimpleNamespace(
+                profile=SimpleNamespace(
+                    paths=SimpleNamespace(
+                        raw=[str(export_dir)],
+                        processed=str(export_dir),
+                        export=str(export_dir),
+                    )
+                ),
+                console=MagicMock(),
+            )
+
+            with (
+                patch("main.create_runtime", return_value=runtime) as create_runtime_mock,
+                patch("main.commands.review") as review_mock,
+            ):
+                result = self.runner.invoke(cli_main.app, ["--profile", "puzzle", "review"])
+
+        self.assertEqual(result.exit_code, 0)
+        create_runtime_mock.assert_called_once_with(profile_name="default", verbose=False)
+        review_mock.assert_called_once_with(runtime, export_dir)
+
 
 if __name__ == "__main__":
     unittest.main()

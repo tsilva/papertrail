@@ -34,6 +34,35 @@ def _fail(msg: str):
     raise typer.Exit(1)
 
 
+def _resolve_runtime(
+    ctx: typer.Context,
+    *,
+    profile: Optional[str] = None,
+    verbose: bool = False,
+) -> Runtime:
+    """Create or reuse runtime using root or subcommand overrides."""
+    state = dict(ctx.obj or {})
+    selected_profile = profile or state.get("profile")
+    selected_verbose = bool(state.get("verbose")) or verbose
+
+    runtime = state.get("runtime")
+    runtime_profile = state.get("runtime_profile")
+    runtime_verbose = state.get("runtime_verbose")
+    if runtime is None or runtime_profile != selected_profile or runtime_verbose != selected_verbose:
+        try:
+            runtime = create_runtime(profile_name=selected_profile, verbose=selected_verbose)
+        except (ProfileNotFoundError, ConfigError) as e:
+            _fail(str(e))
+        state["runtime"] = runtime
+        state["runtime_profile"] = selected_profile
+        state["runtime_verbose"] = selected_verbose
+
+    state["profile"] = selected_profile
+    state["verbose"] = selected_verbose
+    ctx.obj = state
+    return runtime
+
+
 def _profile_path(runtime: Runtime | None, name: str) -> Optional[str]:
     """Get a named path ('processed', 'raw', 'export') from the current profile."""
     profile = runtime.profile if runtime else None
@@ -89,12 +118,9 @@ def main(
     # Skip heavy initialization when showing subcommand help
     if "--help" in sys.argv or "-h" in sys.argv:
         return
-    try:
-        runtime = create_runtime(profile_name=profile, verbose=verbose)
-    except (ProfileNotFoundError, ConfigError) as e:
-        _fail(str(e))
-    ctx.obj = {"runtime": runtime}
+    ctx.obj = {"profile": profile, "verbose": verbose}
     if ctx.invoked_subcommand is None:
+        runtime = _resolve_runtime(ctx)
         if not runtime.api_accessible:
             runtime.console.warning(
                 "Skipping default pipeline because the LLM API is unavailable.",
@@ -117,13 +143,15 @@ def pipeline_cmd(
     ctx: typer.Context,
     months: int = typer.Option(2, help="Months to process (default: 2)."),
     export_date: Optional[str] = typer.Option(None, help="Export date in YYYY-MM format."),
+    profile: Optional[str] = typer.Option(None, help="Configuration profile to use."),
+    verbose: bool = typer.Option(False, "-v", "--verbose", help="Enable verbose output."),
 ):
     """Full end-to-end workflow (default)."""
     if months < 1:
         _fail("--months must be >= 1.")
     if export_date and not re.match(r"^\d{4}-\d{2}$", export_date):
         _fail("--export_date must be in YYYY-MM format.")
-    commands.pipeline(ctx.obj["runtime"], months=months, export_date_arg=export_date)
+    commands.pipeline(_resolve_runtime(ctx, profile=profile, verbose=verbose), months=months, export_date_arg=export_date)
 
 
 @app.command()
@@ -131,9 +159,11 @@ def extract(
     ctx: typer.Context,
     processed_path: Optional[str] = typer.Argument(None, help="Path to processed folder."),
     raw_path: Optional[str] = typer.Option(None, help="Document folder(s), ';'-separated."),
+    profile: Optional[str] = typer.Option(None, help="Configuration profile to use."),
+    verbose: bool = typer.Option(False, "-v", "--verbose", help="Enable verbose output."),
 ):
     """Process new PDFs/XLSX from raw folder."""
-    runtime = ctx.obj["runtime"]
+    runtime = _resolve_runtime(ctx, profile=profile, verbose=verbose)
     pp = _resolve_processed(runtime, processed_path)
     if not raw_path:
         profile = runtime.profile
@@ -156,9 +186,11 @@ def sync(
     all_unknown: bool = typer.Option(False, help="Re-extract all $UNKNOWN$ values."),
     workers: int = typer.Option(1, "-w", "--workers", help="Parallel workers."),
     all_pdfs: bool = typer.Option(False, "--all", help="Process all PDFs, not just orphans."),
+    profile: Optional[str] = typer.Option(None, help="Configuration profile to use."),
+    verbose: bool = typer.Option(False, "-v", "--verbose", help="Enable verbose output."),
 ):
     """Sync metadata."""
-    runtime = ctx.obj["runtime"]
+    runtime = _resolve_runtime(ctx, profile=profile, verbose=verbose)
     commands.sync(
         runtime,
         _resolve_processed(runtime, processed_path),
@@ -176,9 +208,11 @@ def reconcile(
     export_path: Optional[str] = typer.Option(None, help="Path to export folder."),
     excel_path: Optional[str] = typer.Option(None, help="Path to transactions Excel file."),
     dry_run: bool = typer.Option(False, help="Preview without modifying."),
+    profile: Optional[str] = typer.Option(None, help="Configuration profile to use."),
+    verbose: bool = typer.Option(False, "-v", "--verbose", help="Enable verbose output."),
 ):
     """Reconcile bank transactions against documents."""
-    runtime = ctx.obj["runtime"]
+    runtime = _resolve_runtime(ctx, profile=profile, verbose=verbose)
     export = _resolve_dir(export_path or _profile_path(runtime, "export"), "export_path")
     excel = Path(excel_path) if excel_path else None
     commands.reconcile(runtime, export, excel_path=excel, dry_run=dry_run)
@@ -188,9 +222,11 @@ def reconcile(
 def review(
     ctx: typer.Context,
     export_path: Optional[str] = typer.Option(None, help="Path to export folder."),
+    profile: Optional[str] = typer.Option(None, help="Configuration profile to use."),
+    verbose: bool = typer.Option(False, "-v", "--verbose", help="Enable verbose output."),
 ):
     """Refresh reconciliation data if needed, then launch the review UI."""
-    runtime = ctx.obj["runtime"]
+    runtime = _resolve_runtime(ctx, profile=profile, verbose=verbose)
     export = _resolve_dir(export_path or _profile_path(runtime, "export"), "export_path")
     commands.review(runtime, export)
 
@@ -199,12 +235,14 @@ def review(
 def gmail(
     ctx: typer.Context,
     months: int = typer.Option(2, help="Months to process (default: 2)."),
+    profile: Optional[str] = typer.Option(None, help="Configuration profile to use."),
+    verbose: bool = typer.Option(False, "-v", "--verbose", help="Enable verbose output."),
 ):
     """Download email attachments from Gmail."""
     if months < 1:
         _fail("--months must be >= 1.")
     try:
-        commands.gmail(ctx.obj["runtime"], months=months)
+        commands.gmail(_resolve_runtime(ctx, profile=profile, verbose=verbose), months=months)
     except RuntimeError:
         sys.exit(1)
 
@@ -213,9 +251,11 @@ def gmail(
 def rename(
     ctx: typer.Context,
     processed_path: Optional[str] = typer.Argument(None, help="Path to processed folder."),
+    profile: Optional[str] = typer.Option(None, help="Configuration profile to use."),
+    verbose: bool = typer.Option(False, "-v", "--verbose", help="Enable verbose output."),
 ):
     """Rename files based on metadata."""
-    runtime = ctx.obj["runtime"]
+    runtime = _resolve_runtime(ctx, profile=profile, verbose=verbose)
     commands.rename(runtime, _resolve_processed(runtime, processed_path))
 
 
@@ -227,9 +267,11 @@ def check(
         False, "--verify-hashes", help="Verify file hashes match metadata."
     ),
     dry_run: bool = typer.Option(False, help="Report only, don't fix."),
+    profile: Optional[str] = typer.Option(None, help="Configuration profile to use."),
+    verbose: bool = typer.Option(False, "-v", "--verbose", help="Enable verbose output."),
 ):
     """Verify integrity, fill missing fields, audit report."""
-    runtime = ctx.obj["runtime"]
+    runtime = _resolve_runtime(ctx, profile=profile, verbose=verbose)
     commands.check(
         runtime,
         _resolve_processed(runtime, processed_path),
@@ -244,9 +286,11 @@ def archive(
     digest: list[str] = typer.Argument(help="One or more hash_file digests to archive."),
     processed_path: Optional[str] = typer.Option(None, help="Path to processed folder."),
     dry_run: bool = typer.Option(False, help="Preview without moving."),
+    profile: Optional[str] = typer.Option(None, help="Configuration profile to use."),
+    verbose: bool = typer.Option(False, "-v", "--verbose", help="Enable verbose output."),
 ):
     """Archive documents by hash digest."""
-    runtime = ctx.obj["runtime"]
+    runtime = _resolve_runtime(ctx, profile=profile, verbose=verbose)
     commands.archive(runtime, _resolve_processed(runtime, processed_path), digest, dry_run=dry_run)
 
 
@@ -258,11 +302,13 @@ def export_excel(
     ctx: typer.Context,
     processed_path: Optional[str] = typer.Argument(None, help="Path to processed folder."),
     output: str = typer.Option(..., help="Output .xlsx file path."),
+    profile: Optional[str] = typer.Option(None, help="Configuration profile to use."),
+    verbose: bool = typer.Option(False, "-v", "--verbose", help="Enable verbose output."),
 ):
     """Export metadata to Excel."""
     if not output.endswith(".xlsx"):
         _fail("--output must end with '.xlsx'.")
-    runtime = ctx.obj["runtime"]
+    runtime = _resolve_runtime(ctx, profile=profile, verbose=verbose)
     pp = _resolve_processed(runtime, processed_path)
     with _task_log_context(runtime, pp, "export_excel"):
         commands.export_excel(runtime, pp, output)
@@ -274,9 +320,11 @@ def export_dates(
     processed_path: Optional[str] = typer.Argument(None, help="Path to processed folder."),
     base_dir: Optional[str] = typer.Option(None, help="Base export directory."),
     run_merge: bool = typer.Option(False, help="Run PDF merge."),
+    profile: Optional[str] = typer.Option(None, help="Configuration profile to use."),
+    verbose: bool = typer.Option(False, "-v", "--verbose", help="Enable verbose output."),
 ):
     """Export files by date range."""
-    runtime = ctx.obj["runtime"]
+    runtime = _resolve_runtime(ctx, profile=profile, verbose=verbose)
     pp = _resolve_processed(runtime, processed_path)
     profile = runtime.profile
     export_base = (
@@ -302,9 +350,11 @@ def export_copy(
     processed_path: Optional[str] = typer.Argument(None, help="Path to processed folder."),
     pattern: str = typer.Option(..., help="Pattern for matching files."),
     dest: str = typer.Option(..., help="Destination folder."),
+    profile: Optional[str] = typer.Option(None, help="Configuration profile to use."),
+    verbose: bool = typer.Option(False, "-v", "--verbose", help="Enable verbose output."),
 ):
     """Copy files matching pattern."""
-    runtime = ctx.obj["runtime"]
+    runtime = _resolve_runtime(ctx, profile=profile, verbose=verbose)
     pp = _resolve_processed(runtime, processed_path)
     dest_path = _resolve_dir(dest, "dest", create=True)
     with _task_log_context(runtime, pp, "copy_matching"):
