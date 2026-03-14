@@ -96,6 +96,7 @@ def create_runtime(
     profile = loader.load_profile(profile_name)
     return runtime_from_profile(
         profile,
+        profile_name=profile_name,
         profiles_dir=loader.profiles_dir,
         verbose=verbose,
         enable_client=enable_client,
@@ -106,6 +107,7 @@ def create_runtime(
 def runtime_from_profile(
     profile: ProfileSettings,
     *,
+    profile_name: str | None = None,
     profiles_dir: Path | None = None,
     verbose: bool = False,
     enable_client: bool = True,
@@ -140,7 +142,7 @@ def runtime_from_profile(
 
     runtime = Runtime(
         profile=profile,
-        profile_name=profile.profile.name,
+        profile_name=profile_name or profile.profile.name,
         paths=RuntimePaths(
             raw=[Path(path) for path in profile.paths.raw],
             processed=Path(profile.paths.processed) if profile.paths.processed else None,

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import html as html_lib
+import importlib
 import os
 import warnings
 from functools import lru_cache
@@ -161,11 +162,19 @@ def render_document_preview(doc_path: str | Path, page_num: int = 0) -> tuple[st
 
 
 def launch_tool(initial_tab: str) -> None:
+    module_name = initial_tab.replace("-", "_")
     try:
-        from tools.app import build_ui as build_tools_ui
+        module = importlib.import_module(f"tools.{module_name}")
     except ModuleNotFoundError:
-        from app import build_ui as build_tools_ui
-    build_tools_ui(initial_tab=initial_tab).launch()
+        module = importlib.import_module(module_name)
+
+    css = "\n".join(
+        part for part in (FULLSCREEN_CSS, getattr(module, "_CSS", "")) if part
+    )
+    js = "\n".join(
+        part for part in (FULLSCREEN_JS, getattr(module, "_JS", "")) if part
+    )
+    module.build_ui().launch(css=css, js=js)
 
 
 FULLSCREEN_CSS = """

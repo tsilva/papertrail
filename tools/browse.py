@@ -14,7 +14,6 @@ if __package__:
         find_companion,
         get_processed_dir,
         iter_sidecars,
-        launch_tool,
         placeholder_html,
         render_document_preview,
     )
@@ -26,7 +25,6 @@ else:
         find_companion,
         get_processed_dir,
         iter_sidecars,
-        launch_tool,
         placeholder_html,
         render_document_preview,
     )
@@ -433,4 +431,4 @@ def build_ui():
     return app
 
 if __name__ == "__main__":
-    launch_tool("browse")
+    build_ui().launch(css="\n".join([FULLSCREEN_CSS, _CSS]), js="\n".join([FULLSCREEN_JS, _JS]))

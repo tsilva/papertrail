@@ -37,8 +37,5 @@ def build_ui(initial_tab: str = "browse"):
                 review.build_ui().render()
     return app
 
-
-demo = build_ui()
-
 if __name__ == "__main__":
-    demo.launch(css=_CSS, js=_JS)
+    build_ui().launch(css=_CSS, js=_JS)

@@ -14,7 +14,6 @@ if __package__:
         FULLSCREEN_CSS,
         find_companion,
         get_processed_dir,
-        launch_tool,
         placeholder_html,
         render_document_preview,
     )
@@ -23,7 +22,6 @@ else:
         FULLSCREEN_CSS,
         find_companion,
         get_processed_dir,
-        launch_tool,
         placeholder_html,
         render_document_preview,
     )
@@ -536,4 +534,4 @@ def build_ui():
     return app
 
 if __name__ == "__main__":
-    launch_tool("dedupe")
+    build_ui().launch(css=FULLSCREEN_CSS + _CSS)
