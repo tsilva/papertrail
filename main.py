@@ -95,6 +95,17 @@ def main(
         _fail(str(e))
     ctx.obj = {"runtime": runtime}
     if ctx.invoked_subcommand is None:
+        if not runtime.api_accessible:
+            runtime.console.warning(
+                "Skipping default pipeline because the LLM API is unavailable.",
+                indent=False,
+            )
+            runtime.console.detail(
+                "Run an offline subcommand explicitly, or retry once the API base URL is reachable.",
+                indent=False,
+            )
+            typer.echo(ctx.get_help())
+            return
         pipeline_cmd(ctx, months=2, export_date=None)
 
 
