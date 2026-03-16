@@ -17,6 +17,7 @@ from papertrail.config import (
     get_cache_dir,
 )
 from papertrail.console import PapertrailConsole
+from papertrail.dependencies import validate_runtime_dependencies
 from papertrail.hashing import HashCache
 from papertrail.logging_utils import get_logger, setup_logging
 from papertrail.nif_lookup import NIFLookupCache
@@ -114,6 +115,7 @@ def runtime_from_profile(
     """Build a runtime from an already-loaded profile object."""
 
     setup_logging(verbose=verbose)
+    validate_runtime_dependencies()
 
     console = PapertrailConsole()
     api_accessible = False

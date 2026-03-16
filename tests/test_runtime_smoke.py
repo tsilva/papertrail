@@ -10,11 +10,13 @@ from unittest.mock import patch
 
 from papertrail.archive_extract import extract_archives
 from papertrail.commands import pipeline
+from papertrail.config import ConfigError
 from papertrail.hashing import hash_file_fast
 from papertrail.models import DocumentMetadata
 from papertrail.pdf import get_page_count
 from papertrail.pdf_merge import merge_all_pdfs
 from papertrail.repository import DocumentRepository
+from papertrail.runtime import runtime_from_profile
 
 from tests.support import create_millennium_statement, create_pdf, make_test_runtime
 from tools import browse, review, shared
@@ -184,6 +186,21 @@ class AdapterSmokeTests(unittest.TestCase):
 
         self.assertEqual(export_dir, str(self.runtime.paths.export))
         load_profile_mock.assert_called_once_with("work")
+
+    def test_runtime_hard_fails_when_required_dependency_is_missing(self):
+        real_import_module = importlib.import_module
+
+        def fake_import_module(name, package=None):
+            if name == "pikepdf":
+                raise ModuleNotFoundError("No module named 'pikepdf'")
+            return real_import_module(name, package)
+
+        with (
+            patch("papertrail.dependencies.import_module", side_effect=fake_import_module),
+            patch("papertrail.dependencies.check_pyzbar_available", return_value=(True, "")),
+        ):
+            with self.assertRaisesRegex(ConfigError, "pikepdf"):
+                runtime_from_profile(self.runtime.profile, enable_client=False, probe_api=False)
 
     def test_submodule_imports_do_not_eager_load_engine(self):
         saved = {
