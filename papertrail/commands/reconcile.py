@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Optional
 
@@ -214,16 +214,167 @@ def discover_bank_statements(repository: DocumentRepository, export_path: Path) 
     return statements
 
 
+def _reconciliation_search_paths(export_path: Path) -> list[Path]:
+    paths = [export_path]
+    parts = export_path.name.split("-")
+    if len(parts) != 2:
+        return paths
+
+    try:
+        year = int(parts[0])
+        month = int(parts[1])
+    except ValueError:
+        return paths
+
+    if not (1 <= month <= 12):
+        return paths
+
+    def shift_month(base_year: int, base_month: int, delta: int) -> tuple[int, int]:
+        month_index = (base_year * 12 + (base_month - 1)) + delta
+        return month_index // 12, month_index % 12 + 1
+
+    for delta in (-1, 1):
+        neighbor_year, neighbor_month = shift_month(year, month, delta)
+        neighbor = export_path.parent / f"{neighbor_year:04d}-{neighbor_month:02d}"
+        if neighbor.exists():
+            paths.append(neighbor)
+    return paths
+
+
+def _date_from_iso(value: Optional[str]) -> Optional[date]:
+    if not value:
+        return None
+    try:
+        return datetime.strptime(value, "%Y-%m-%d").date()
+    except ValueError:
+        return None
+
+
+def _transaction_date_bounds(transactions: list[Transaction]) -> tuple[Optional[date], Optional[date]]:
+    dates = [
+        parsed
+        for txn in transactions
+        if (parsed := _date_from_iso(_parse_date(txn.date_posting or txn.date_value)))
+    ]
+    if not dates:
+        return None, None
+    return min(dates), max(dates)
+
+
+def _relevant_companion_amounts(transactions: list[Transaction], rules: list) -> set[float]:
+    relevant_amounts: set[float] = set()
+    rules_with_companions = [rule for rule in rules if rule.companions]
+    if not rules_with_companions:
+        return relevant_amounts
+
+    txns_by_rule: dict[str, list[Transaction]] = {}
+    for txn in transactions:
+        category, _ = _classify_transaction(txn, rules)
+        txns_by_rule.setdefault(category, []).append(txn)
+
+    seen_groups: set[frozenset[int]] = set()
+    for rule in rules_with_companions:
+        companion_names = [rule.name] + rule.companions
+        companion_txns: list[Transaction] = []
+        for name in companion_names:
+            companion_txns.extend(txns_by_rule.get(name, []))
+        if len(companion_txns) < 2:
+            continue
+
+        by_date: dict[str, list[Transaction]] = {}
+        for txn in companion_txns:
+            txn_date = txn.date_posting or txn.date_value
+            if txn_date:
+                by_date.setdefault(txn_date, []).append(txn)
+
+        for group_txns in by_date.values():
+            group_rules = {_classify_transaction(txn, rules)[0] for txn in group_txns}
+            if len(group_rules) < 2:
+                continue
+            group_key = frozenset(txn.row_number for txn in group_txns)
+            if group_key in seen_groups:
+                continue
+            seen_groups.add(group_key)
+            relevant_amounts.add(sum(abs(txn.amount) for txn in group_txns))
+
+    return relevant_amounts
+
+
+def _shared_requirements(transactions: list[Transaction], rules: list) -> list[tuple[str, Optional[str]]]:
+    requirements: list[tuple[str, Optional[str]]] = []
+    seen: set[tuple[str, Optional[str]]] = set()
+    for txn in transactions:
+        _, rule = _classify_transaction(txn, rules)
+        if rule is None or not rule.shared_types:
+            continue
+        for type_pattern, issuing_party_filter in rule.shared_types.items():
+            key = (type_pattern, issuing_party_filter)
+            if key in seen:
+                continue
+            seen.add(key)
+            requirements.append(key)
+    return requirements
+
+
+def _candidate_matches_relevant_amounts(candidate: PDFCandidate, relevant_amounts: set[float]) -> bool:
+    if candidate.total_amount is None:
+        return False
+    return any(abs(candidate.total_amount - amount) <= _AMOUNT_TOLERANCE for amount in relevant_amounts)
+
+
+def _candidate_matches_shared_requirements(
+    candidate: PDFCandidate,
+    shared_requirements: list[tuple[str, Optional[str]]],
+) -> bool:
+    doc_type = candidate.effective_document_type or candidate.document_type
+    if not doc_type:
+        return False
+
+    engine = RuleEngine()
+    for type_pattern, issuing_party_filter in shared_requirements:
+        if not engine.match_doc_type(doc_type, type_pattern):
+            continue
+        if issuing_party_filter is None:
+            return True
+        if _normalize_for_match(candidate.issuing_party or "") == _normalize_for_match(issuing_party_filter):
+            return True
+    return False
+
+
+def _is_relevant_supplemental_candidate(
+    candidate: PDFCandidate,
+    *,
+    min_txn_date: Optional[date],
+    max_txn_date: Optional[date],
+    relevant_amounts: set[float],
+    shared_requirements: list[tuple[str, Optional[str]]],
+) -> bool:
+    candidate_date = _date_from_iso(candidate.date_issued)
+    if candidate_date is None or min_txn_date is None or max_txn_date is None:
+        return False
+
+    window_start = min_txn_date - timedelta(days=_DATE_WINDOW_DAYS)
+    window_end = max_txn_date + timedelta(days=_DATE_WINDOW_DAYS)
+    if candidate_date < window_start or candidate_date > window_end:
+        return False
+
+    return (
+        _candidate_matches_relevant_amounts(candidate, relevant_amounts)
+        or _candidate_matches_shared_requirements(candidate, shared_requirements)
+    )
+
+
 def _latest_reconciliation_input_mtime(
     repository: DocumentRepository,
     export_path: Path,
 ) -> float:
     latest_mtime = 0.0
-    for json_path, data in repository.iter_sidecars(export_path):
-        latest_mtime = max(latest_mtime, json_path.stat().st_mtime)
-        doc_path = repository.find_companion(json_path, data)
-        if doc_path and doc_path.exists():
-            latest_mtime = max(latest_mtime, doc_path.stat().st_mtime)
+    for search_path in _reconciliation_search_paths(export_path):
+        for json_path, data in repository.iter_sidecars(search_path):
+            latest_mtime = max(latest_mtime, json_path.stat().st_mtime)
+            doc_path = repository.find_companion(json_path, data)
+            if doc_path and doc_path.exists():
+                latest_mtime = max(latest_mtime, doc_path.stat().st_mtime)
     return latest_mtime
 
 
@@ -299,6 +450,45 @@ def _load_pdf_candidates(
             continue
         seen_candidate_ids.add(candidate.candidate_id)
         candidates.append(candidate)
+    return candidates
+
+
+def _load_reconciliation_candidates(
+    repository: DocumentRepository,
+    export_path: Path,
+    transactions: list[Transaction],
+    *,
+    exclude_prefixes: list[str] | None = None,
+    rules: list | None = None,
+) -> list[PDFCandidate]:
+    search_paths = _reconciliation_search_paths(export_path)
+    if len(search_paths) == 1:
+        return _load_pdf_candidates(repository, export_path, exclude_prefixes=exclude_prefixes)
+
+    rules = rules or []
+    min_txn_date, max_txn_date = _transaction_date_bounds(transactions)
+    relevant_amounts = {abs(txn.amount) for txn in transactions}
+    relevant_amounts.update(_relevant_companion_amounts(transactions, rules))
+    shared_requirements = _shared_requirements(transactions, rules)
+
+    candidates: list[PDFCandidate] = []
+    seen_candidate_ids: set[str] = set()
+    primary_path = export_path.resolve()
+    for search_path in search_paths:
+        is_primary_path = search_path.resolve() == primary_path
+        for candidate in _load_pdf_candidates(repository, search_path, exclude_prefixes=exclude_prefixes):
+            if candidate.candidate_id in seen_candidate_ids:
+                continue
+            if not is_primary_path and not _is_relevant_supplemental_candidate(
+                candidate,
+                min_txn_date=min_txn_date,
+                max_txn_date=max_txn_date,
+                relevant_amounts=relevant_amounts,
+                shared_requirements=shared_requirements,
+            ):
+                continue
+            seen_candidate_ids.add(candidate.candidate_id)
+            candidates.append(candidate)
     return candidates
 
 
@@ -809,7 +999,13 @@ def reconcile_single(
 
     profile = runtime.profile
     exclude_prefixes = profile.reconciliation.exclude_prefixes
-    candidates = _load_pdf_candidates(repository, export_path, exclude_prefixes=exclude_prefixes)
+    candidates = _load_reconciliation_candidates(
+        repository,
+        export_path,
+        transactions,
+        exclude_prefixes=exclude_prefixes,
+        rules=profile.reconciliation.rules,
+    )
     matchable = [candidate for candidate in candidates if not candidate.exclude_from_matching]
 
     p1_matches, unmatched_txns, remaining_cands = _phase1_deterministic_match(transactions, matchable)

@@ -541,6 +541,221 @@ class CommandTests(unittest.TestCase):
             sorted(["shared-toll-bank-note.pdf", "shared-toll-feb.pdf"]),
         )
 
+    def test_reconcile_month_folder_uses_adjacent_month_candidates_selectively(self):
+        self.runtime.profile.reconciliation.rules = [
+            {
+                "name": "benefit-benefits-provider",
+                "match_description": ["ORDEM PAGAMENTO S/ESTRANGEIRO"],
+                "required_types": {"bank-note": 1, "receipt|invoice-receipt": 1},
+                "shared_types": {},
+                "companions": [],
+                "expected_page_count": {},
+            },
+            {
+                "name": "payroll-salary-employee-one",
+                "match_description": ["EMPLOYEE ONE"],
+                "required_types": {"bank-note": 1, "payroll-salary": 1},
+                "shared_types": {"payroll-salary": None},
+                "companions": [],
+                "expected_page_count": {},
+            },
+            {
+                "name": "payroll-salary-employee-two",
+                "match_description": ["EMPLOYEE TWO"],
+                "required_types": {"bank-note": 1, "payroll-salary": 1},
+                "shared_types": {"payroll-salary": None},
+                "companions": [],
+                "expected_page_count": {},
+            },
+        ]
+
+        jan_dir = self.export / "2026-01"
+        feb_dir = self.export / "2026-02"
+        mar_dir = self.export / "2026-03"
+        jan_dir.mkdir()
+        feb_dir.mkdir()
+        mar_dir.mkdir()
+
+        statement_path = feb_dir / "statement.xlsx"
+        create_millennium_statement(
+            statement_path,
+            period_start="01/02/2026",
+            period_end="28/02/2026",
+            transactions=[
+                {
+                    "date_posting": "27/02/2026",
+                    "date_value": "27/02/2026",
+                    "description": "Ordem Pagamento s/Estrangeiro   Ref.FOREIGNPAYREF001",
+                    "amount": -364.80,
+                    "currency": "EUR",
+                    "notes": "",
+                    "treated": "Nao",
+                },
+                {
+                    "date_posting": "27/02/2026",
+                    "date_value": "27/02/2026",
+                    "description": "TRF P/ Employee One",
+                    "amount": -964.85,
+                    "currency": "EUR",
+                    "notes": "",
+                    "treated": "Nao",
+                },
+                {
+                    "date_posting": "27/02/2026",
+                    "date_value": "27/02/2026",
+                    "description": "TRF P/ Employee Two",
+                    "amount": -557.72,
+                    "currency": "EUR",
+                    "notes": "",
+                    "treated": "Nao",
+                },
+            ],
+        )
+
+        from papertrail.bank_statement import classify_bank_statement
+
+        statement_hash = hash_file_fast(statement_path)
+        statement_metadata = classify_bank_statement(statement_path, statement_hash)
+        self.repository.save_document(statement_path, statement_metadata)
+
+        benefits-provider_bank_note = feb_dir / "benefits-provider-bank-note.pdf"
+        employee-one_bank_note = feb_dir / "employee-one-bank-note.pdf"
+        employee-two_bank_note = feb_dir / "employee-two-bank-note.pdf"
+        payroll_receipt = jan_dir / "january-payroll.pdf"
+        benefits-provider_receipt = mar_dir / "march-benefits-provider.pdf"
+        unrelated_mar_invoice = mar_dir / "unrelated-march-invoice.pdf"
+
+        create_pdf(benefits-provider_bank_note, ["Benefits Provider bank note"])
+        create_pdf(employee-one_bank_note, ["Employee One salary bank note"])
+        create_pdf(employee-two_bank_note, ["Employee Two salary bank note"])
+        create_pdf(payroll_receipt, ["January payroll receipt"])
+        create_pdf(benefits-provider_receipt, ["March benefits-provider receipt"])
+        create_pdf(unrelated_mar_invoice, ["Unrelated invoice"])
+
+        self.repository.save_document(
+            benefits-provider_bank_note,
+            self._metadata(
+                "cfbank01",
+                "cfbank01",
+                date_created="2026-02-27",
+                date_issued="2026-02-27",
+                date_updated="2026-02-27",
+                document_type="bank-note",
+                document_type_raw="Bank Note",
+                issuing_party="MillenniumBCP",
+                issuing_party_raw="MillenniumBCP",
+                document_title="Ordem de pagamento sobre o estrangeiro",
+                total_amount=364.80,
+            ),
+        )
+        self.repository.save_document(
+            employee-one_bank_note,
+            self._metadata(
+                "crbank01",
+                "crbank01",
+                date_created="2026-02-27",
+                date_issued="2026-02-27",
+                date_updated="2026-02-27",
+                document_type="bank-note",
+                document_type_raw="Bank Note",
+                issuing_party="MillenniumBCP",
+                issuing_party_raw="MillenniumBCP",
+                document_title="Transferencia pontual a debito",
+                total_amount=964.85,
+            ),
+        )
+        self.repository.save_document(
+            employee-two_bank_note,
+            self._metadata(
+                "tibank01",
+                "tibank01",
+                date_created="2026-02-27",
+                date_issued="2026-02-27",
+                date_updated="2026-02-27",
+                document_type="bank-note",
+                document_type_raw="Bank Note",
+                issuing_party="MillenniumBCP",
+                issuing_party_raw="MillenniumBCP",
+                document_title="Transferencia pontual a debito",
+                total_amount=557.72,
+            ),
+        )
+        self.repository.save_document(
+            payroll_receipt,
+            self._metadata(
+                "payjan01",
+                "payjan01",
+                date_created="2026-01-31",
+                date_issued="2026-01-31",
+                date_updated="2026-01-31",
+                document_type="payroll-salary",
+                document_type_raw="Recibo Remuneracao",
+                issuing_party="Example Company, Unipessoal Lda.",
+                issuing_party_raw="Example Company, Unipessoal Lda.",
+                document_title="Janeiro 2026",
+                total_amount=1522.57,
+            ),
+        )
+        self.repository.save_document(
+            benefits-provider_receipt,
+            self._metadata(
+                "covmar01",
+                "covmar01",
+                date_created="2026-03-05",
+                date_issued="2026-03-05",
+                date_updated="2026-03-05",
+                document_type="receipt",
+                document_type_raw="Receipt",
+                issuing_party="benefits-provider",
+                issuing_party_raw="benefits-provider",
+                document_title="Carregamento subsidio de alimentacao",
+                total_amount=364.80,
+            ),
+        )
+        self.repository.save_document(
+            unrelated_mar_invoice,
+            self._metadata(
+                "noise001",
+                "noise001",
+                date_created="2026-03-08",
+                date_issued="2026-03-08",
+                date_updated="2026-03-08",
+                document_type="invoice",
+                document_type_raw="Invoice",
+                issuing_party="Other Vendor",
+                issuing_party_raw="Other Vendor",
+                document_title="Unrelated march invoice",
+                total_amount=999.99,
+            ),
+        )
+
+        reconcile(self.runtime, feb_dir, dry_run=False)
+
+        sidecar_path = statement_path.with_suffix(".reconciliation.json")
+        data = json.loads(sidecar_path.read_text(encoding="utf-8"))
+
+        self.assertEqual(data["summary"]["reconciled"], 3)
+        self.assertEqual(data["summary"]["incomplete"], 0)
+        self.assertEqual(data["summary"]["unmatched"], 0)
+
+        files_by_row = {match["row"]: set(match["files"]) for match in data["matches"]}
+        self.assertEqual(
+            files_by_row[9],
+            {"benefits-provider-bank-note.pdf", "march-benefits-provider.pdf"},
+        )
+        self.assertEqual(
+            files_by_row[10],
+            {"employee-one-bank-note.pdf", "january-payroll.pdf"},
+        )
+        self.assertEqual(
+            files_by_row[11],
+            {"employee-two-bank-note.pdf", "january-payroll.pdf"},
+        )
+        self.assertNotIn(
+            "unrelated-march-invoice.pdf",
+            {entry["file"] for entry in data["unmatched_files"]},
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
