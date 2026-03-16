@@ -10,6 +10,7 @@ from typing import Optional
 
 import openpyxl
 
+from papertrail.document_types import normalize_document_type
 from papertrail.llm import _extract_json_from_response
 from papertrail.logging_utils import get_logger
 from papertrail.repository import DocumentRepository
@@ -63,9 +64,7 @@ class PDFCandidate:
     @property
     def effective_document_type(self) -> Optional[str]:
         if (self.file_extension or "").lower() == ".pdf":
-            raw_type = _normalize_for_match(self.document_type_raw or "")
-            if raw_type in {"movimento", "notadelancamento"}:
-                return "bank-note"
+            return normalize_document_type(self.document_type, self.document_type_raw)
         return self.document_type
 
 

@@ -209,7 +209,7 @@ class CommandTests(unittest.TestCase):
         )
         self.assertEqual(pending, [])
 
-    def test_review_reruns_stale_reconciliation_sidecars(self):
+    def test_review_does_not_rerun_reconciliation(self):
         statement_path = self.export / "statement.xlsx"
         create_millennium_statement(statement_path)
 
@@ -243,10 +243,7 @@ class CommandTests(unittest.TestCase):
         ):
             review(self.runtime, self.export)
 
-        reconcile_single_mock.assert_called_once()
-        self.assertEqual(reconcile_single_mock.call_args.args[2], self.export)
-        self.assertEqual(reconcile_single_mock.call_args.args[3], statement_path)
-        self.assertFalse(reconcile_single_mock.call_args.kwargs["dry_run"])
+        reconcile_single_mock.assert_not_called()
         launch_tool_mock.assert_called_once_with("review")
 
     def test_reconcile_keeps_pdf_bank_screenshots_and_prefers_nearest_same_signature(self):

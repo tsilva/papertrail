@@ -12,6 +12,7 @@ from datetime import datetime
 from pathlib import Path
 
 from papertrail.bank_statement import classify_bank_statement
+from papertrail.document_types import normalize_document_type
 from papertrail.hashing import hash_file_content, hash_file_fast, hash_file_text
 from papertrail.llm import (
     build_extraction_tools,
@@ -514,7 +515,9 @@ class DocumentEngine:
 
             merged = {
                 "issue_date": raw_metadata.issue_date,
-                "document_type": self.repository.registry.canonicalize_document_type(raw_metadata.document_type),
+                "document_type": self.repository.registry.canonicalize_document_type(
+                    normalize_document_type(raw_metadata.document_type, raw_metadata.document_type_raw)
+                ),
                 "total_amount": raw_metadata.total_amount,
                 "total_amount_currency": raw_metadata.total_amount_currency,
                 "issuer_tax_number": raw_metadata.issuer_tax_number,

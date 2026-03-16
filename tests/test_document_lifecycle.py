@@ -209,6 +209,30 @@ class DocumentLifecycleTests(unittest.TestCase):
         self.assertEqual(len(metadata.sub_documents), 2)
         self.assertEqual(metadata.sub_documents[0]["document_type"], "receipt")
 
+    def test_bank_movement_raw_type_is_normalized_to_bank_note(self):
+        pdf_path = self.raw / "movement.pdf"
+        create_pdf(pdf_path, ["Shared Toll movement"])
+        raw_metadata = DocumentMetadataRaw(
+            issue_date="2026-02-02",
+            document_type="receipt",
+            document_type_raw="Movimento",
+            issuing_party="via verde",
+            issuing_party_raw="SHAREDTOLL",
+            total_amount=2.79,
+            total_amount_currency="EUR",
+            confidence=0.7,
+            reasoning="movement screenshot",
+            issuer_tax_number=None,
+            locale="pt-PT",
+        )
+
+        with patch("papertrail.engine._phase0_qr_extract", return_value=(None, None, [])):
+            with patch("papertrail.engine._phase1_llm_extract", return_value=raw_metadata):
+                metadata = self.engine.classify_pdf_document(pdf_path, "contentmov1")
+
+        self.assertEqual(metadata.document_type, "bank-note")
+        self.assertEqual(metadata.document_type_raw, "Movimento")
+
 
 if __name__ == "__main__":
     unittest.main()

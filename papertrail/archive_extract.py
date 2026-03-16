@@ -38,6 +38,7 @@ _ARCHIVE_SUFFIXES = (
     ".rar",
 )
 _COMPRESSED_SUFFIXES = {".gz", ".bz2", ".xz"}
+_SEVEN_ZIP_BINARIES = ("7z", "7zz", "7zr")
 
 
 def _archive_stem(path: Path) -> str:
@@ -125,15 +126,18 @@ def _extract_single_file(archive_path: Path, output_dir: Path) -> int:
 
 
 def _extract_with_7z(archive_path: Path, output_dir: Path, passwords: list[str]) -> int:
-    if shutil.which("7z") is None:
-        raise RuntimeError("7z is not installed")
+    binary = next((candidate for candidate in _SEVEN_ZIP_BINARIES if shutil.which(candidate)), None)
+    if binary is None:
+        raise RuntimeError(
+            f"no 7-Zip CLI found (tried: {', '.join(_SEVEN_ZIP_BINARIES)})"
+        )
 
     password_candidates = [None, *passwords]
     with TemporaryDirectory(dir=archive_path.parent) as temp_dir_name:
         temp_dir = Path(temp_dir_name) / "content"
         temp_dir.mkdir()
         for password in password_candidates:
-            cmd = ["7z", "x", "-y", f"-o{temp_dir}", str(archive_path)]
+            cmd = [binary, "x", "-y", f"-o{temp_dir}", str(archive_path)]
             if password:
                 cmd.insert(3, f"-p{password}")
             result = subprocess.run(cmd, capture_output=True, text=True, check=False)

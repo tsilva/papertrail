@@ -39,7 +39,6 @@ from papertrail.utils import compute_month_range, make_matcher, month_to_date_ra
 from .check import run_check, validate_merged_pdf
 from .reconcile import (
     discover_bank_statements,
-    discover_statements_requiring_reconciliation,
     reconcile_single,
 )
 
@@ -696,24 +695,6 @@ def reconcile(
 
 
 def review(runtime: Runtime, export_path: Path) -> None:
-    repository = DocumentRepository(runtime)
-    pending_paths = discover_statements_requiring_reconciliation(
-        repository,
-        export_path,
-        include_stale=True,
-    )
-
-    if pending_paths:
-        with _task_log_context(runtime, export_path, "reconcile"):
-            for path in pending_paths:
-                if not path.exists():
-                    runtime.console.error(f"Excel file not found: {path}", indent=False)
-                    continue
-                with runtime.console.task(f"Reconcile: {path.name}"):
-                    reconcile_single(runtime, repository, export_path, path, dry_run=False)
-    else:
-        runtime.console.detail("Reconciliation sidecars already exist.", indent=False)
-
     os.environ["PAPERTRAIL_PROFILE"] = runtime.profile_name
     from tools.shared import launch_tool
     launch_tool("review")

@@ -83,7 +83,7 @@ Core commands:
 | `rename` | Rename document files from sidecar JSON |
 | `check` | Backfill missing metadata and audit integrity |
 | `reconcile` | Reconcile bank statements against exported documents |
-| `review` | Refresh needed reconciliation sidecars, then launch the review UI |
+| `review` | Launch the review UI for existing reconciliation sidecars |
 | `gmail` | Download Gmail attachments into raw folders |
 | `archive` | Move documents by `hash_file` digest into `_archived/` |
 | `export excel` | Export metadata to an Excel workbook |
@@ -152,7 +152,7 @@ python3 tools/dedupe.py
 python3 tools/review.py
 ```
 
-`papertrail review` is the higher-level entrypoint: it backfills missing `.reconciliation.json` files in the active export folder before opening the Review tab. To force a fresh reconciliation run, use `papertrail reconcile`.
+`papertrail review` only opens the Review tab against the existing `.reconciliation.json` sidecars in the active export folder. To generate or refresh reconciliation output, use `papertrail reconcile`.
 
 ## Notes
 
