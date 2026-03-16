@@ -700,7 +700,7 @@ def review(runtime: Runtime, export_path: Path) -> None:
     pending_paths = discover_statements_requiring_reconciliation(
         repository,
         export_path,
-        include_stale=False,
+        include_stale=True,
     )
 
     if pending_paths:
