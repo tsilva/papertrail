@@ -78,6 +78,10 @@ class RuleEngine:
                 return True
         return False
 
+    def candidate_doc_type(self, candidate) -> Optional[str]:
+        """Resolve the effective document type for reconciliation candidates."""
+        return getattr(candidate, "effective_document_type", None) or getattr(candidate, "document_type", None)
+
     def evaluate_export_prefix(self, metadata: dict, file_mappings=None) -> str:
         """Evaluate file mapping rules. First match wins."""
         if file_mappings is None:
@@ -138,7 +142,8 @@ class RuleEngine:
             count = sum(
                 1
                 for candidate in match.pdf_candidates
-                if candidate.document_type and self.match_doc_type(candidate.document_type, pattern)
+                if self.candidate_doc_type(candidate)
+                and self.match_doc_type(self.candidate_doc_type(candidate), pattern)
             )
             display_pattern = pattern.replace("|", "/")
             if count < min_count:
@@ -150,18 +155,20 @@ class RuleEngine:
 
         all_patterns = list(rule.required_types.keys()) + list(rule.shared_types.keys())
         for candidate in match.pdf_candidates:
-            if candidate.document_type is None:
+            candidate_doc_type = self.candidate_doc_type(candidate)
+            if candidate_doc_type is None:
                 errors.append(f"unexpected document with unknown type ({candidate.pdf_filename})")
-            elif not any(self.match_doc_type(candidate.document_type, pattern) for pattern in all_patterns):
+            elif not any(self.match_doc_type(candidate_doc_type, pattern) for pattern in all_patterns):
                 errors.append(f"unexpected {candidate.document_type} ({candidate.pdf_filename})")
 
         if rule.expected_page_count:
             for candidate in match.pdf_candidates:
-                if candidate.document_type and candidate.page_count is not None:
+                candidate_doc_type = self.candidate_doc_type(candidate)
+                if candidate_doc_type and candidate.page_count is not None:
                     for pattern, expected in rule.expected_page_count.items():
-                        if self.match_doc_type(candidate.document_type, pattern) and candidate.page_count != expected:
+                        if self.match_doc_type(candidate_doc_type, pattern) and candidate.page_count != expected:
                             errors.append(
-                                f"{candidate.document_type} has {candidate.page_count} pages (expected {expected})"
+                                f"{candidate_doc_type} has {candidate.page_count} pages (expected {expected})"
                             )
 
         return errors
@@ -177,15 +184,15 @@ class RuleEngine:
             targets = [
                 candidate
                 for candidate in match.pdf_candidates
-                if candidate.document_type
-                and self.match_doc_type(candidate.document_type, rule.target_type)
+                if self.candidate_doc_type(candidate)
+                and self.match_doc_type(self.candidate_doc_type(candidate), rule.target_type)
                 and not candidate.is_sub_document
             ]
             attachments = [
                 candidate
                 for candidate in match.pdf_candidates
-                if candidate.document_type
-                and self.match_doc_type(candidate.document_type, rule.attach_type)
+                if self.candidate_doc_type(candidate)
+                and self.match_doc_type(self.candidate_doc_type(candidate), rule.attach_type)
                 and not candidate.is_sub_document
             ]
             for target in targets:

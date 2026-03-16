@@ -245,6 +245,58 @@ def _list_export_folders(base_dir):
             folders.append(d.name)
     return sorted(folders, reverse=True)
 
+
+def _collect_referenced_files(bank_statements):
+    referenced = set()
+    for bank_statement in bank_statements:
+        recon = bank_statement.get("reconciliation")
+        if not recon:
+            continue
+        for match in recon.get("matches", []):
+            referenced.update(f for f in match.get("files", []) if f)
+        for unmatched_file in recon.get("unmatched_files", []):
+            filename = unmatched_file.get("file", "")
+            if filename:
+                referenced.add(filename)
+    return referenced
+
+
+def _build_cross_folder_index(folder, file_index, referenced_files):
+    export_base = _get_export_base_dir()
+    if not export_base or export_base == folder or not referenced_files:
+        return {}
+
+    missing_files = {
+        filename for filename in referenced_files
+        if filename not in file_index
+    }
+    if not missing_files:
+        return {}
+
+    cross_file_index = {}
+    for json_path, metadata in iter_sidecars(export_base):
+        if json_path.name.endswith(".reconciliation.json"):
+            continue
+
+        doc_path = find_companion(json_path, metadata)
+        if not doc_path:
+            continue
+
+        filename = doc_path.name
+        if filename not in missing_files or filename in cross_file_index:
+            continue
+
+        cross_file_index[filename] = {
+            "json_path": str(json_path),
+            "doc_path": str(doc_path),
+            "metadata": metadata,
+        }
+        if len(cross_file_index) == len(missing_files):
+            break
+
+    return cross_file_index
+
+
 def load_export_folder(folder_path):
     folder = Path(folder_path.strip().strip("'\""))
     if not folder.is_dir():
@@ -284,9 +336,10 @@ def load_export_folder(folder_path):
         recon = bs.get("reconciliation")
         if recon:
             for m in recon.get("matches", []):
-                for f in m.get("files", []):
-                    if f in file_index:
-                        bank_files.add(f)
+                bank_files.update(f for f in m.get("files", []) if f)
+
+    referenced_files = _collect_referenced_files(bank_statements)
+    cross_file_index = _build_cross_folder_index(folder, file_index, referenced_files)
 
     unmatched_files_map: dict[str, dict] = {}
     for bs in bank_statements:
@@ -306,6 +359,8 @@ def load_export_folder(folder_path):
     if n_recon:
         status += f" ({n_recon} with reconciliation)"
     status += f", **{len(file_index)}** files indexed"
+    if cross_file_index:
+        status += f", **{len(cross_file_index)}** cross-folder files indexed"
     if unmatched_files:
         status += f", **{len(unmatched_files)}** unmatched files"
 
@@ -313,6 +368,7 @@ def load_export_folder(folder_path):
         "bank_statements": bank_statements,
         "bank_files": sorted(bank_files),
         "file_index": file_index,
+        "cross_file_index": cross_file_index,
         "unmatched_files": unmatched_files,
         "folder_path": str(folder),
     }, status
@@ -515,6 +571,8 @@ def _do_preview(filename, page):
     filename = bridge_value(filename)
 
     entry = data.get("file_index", {}).get(filename)
+    if not entry:
+        entry = data.get("cross_file_index", {}).get(filename)
     if not entry:
         return (
             placeholder_html(f"File not found: {filename}"),

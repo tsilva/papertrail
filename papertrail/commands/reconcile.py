@@ -41,20 +41,32 @@ class PDFCandidate:
     pdf_filename: str
     date_issued: Optional[str]
     document_type: Optional[str]
+    document_type_raw: Optional[str]
     document_title: Optional[str]
     issuing_party: Optional[str]
     total_amount: Optional[float]
     total_amount_currency: Optional[str]
     page_count: Optional[int] = None
+    file_extension: Optional[str] = None
+    hash_file: Optional[str] = None
     sub_doc_index: Optional[int] = None
     is_sub_document: bool = False
     exclude_from_matching: bool = False
 
     @property
     def candidate_id(self) -> str:
+        base_id = self.hash_file or str(self.json_path)
         if self.sub_doc_index is not None:
-            return f"{self.json_path}#sub{self.sub_doc_index}"
-        return str(self.json_path)
+            return f"{base_id}#sub{self.sub_doc_index}"
+        return base_id
+
+    @property
+    def effective_document_type(self) -> Optional[str]:
+        if (self.file_extension or "").lower() == ".pdf":
+            raw_type = _normalize_for_match(self.document_type_raw or "")
+            if raw_type in {"movimento", "notadelancamento"}:
+                return "bank-note"
+        return self.document_type
 
 
 @dataclass
@@ -82,6 +94,7 @@ def _build_candidate(
     *,
     document_title: Optional[str],
     page_count: Optional[int] = None,
+    file_extension: Optional[str] = None,
     sub_doc_index: Optional[int] = None,
     is_sub_document: bool = False,
     exclude_from_matching: bool = False,
@@ -91,11 +104,14 @@ def _build_candidate(
         pdf_filename=pdf_filename,
         date_issued=data.get("date_issued"),
         document_type=data.get("document_type"),
+        document_type_raw=data.get("document_type_raw"),
         document_title=document_title,
         issuing_party=data.get("issuing_party"),
         total_amount=_coerce_amount(data.get("total_amount")),
         total_amount_currency=data.get("total_amount_currency"),
         page_count=page_count,
+        file_extension=file_extension,
+        hash_file=data.get("hash_file"),
         sub_doc_index=sub_doc_index,
         is_sub_document=is_sub_document,
         exclude_from_matching=exclude_from_matching,
@@ -138,7 +154,7 @@ def _serialize_unmatched_candidate(cand: PDFCandidate) -> dict:
     return {
         "file": cand.pdf_filename,
         "date_issued": cand.date_issued,
-        "document_type": cand.document_type,
+        "document_type": cand.effective_document_type or cand.document_type,
         "issuing_party": cand.issuing_party,
         "total_amount": cand.total_amount,
         "currency": cand.total_amount_currency,
@@ -236,13 +252,13 @@ def _load_pdf_candidates(
     exclude_prefixes: list[str] | None = None,
 ) -> list[PDFCandidate]:
     exclude_prefixes = exclude_prefixes or []
-    candidates = []
+    candidates: list[PDFCandidate] = []
+    seen_candidate_ids: set[str] = set()
     for json_path, data in repository.iter_sidecars(export_path):
-        if data.get("document_type") == "bank-statement":
-            continue
-
         doc_path = repository.find_companion(json_path, data)
         if doc_path is None:
+            continue
+        if data.get("document_type") == "bank-statement" and doc_path.suffix.lower() == ".xlsx":
             continue
 
         excluded = any(doc_path.name.startswith(prefix) for prefix in exclude_prefixes)
@@ -258,22 +274,31 @@ def _load_pdf_candidates(
                         doc_path.name,
                         sub_doc,
                         document_title=None,
+                        file_extension=doc_path.suffix.lower(),
                         sub_doc_index=index,
                         is_sub_document=True,
                         exclude_from_matching=excluded,
                     )
                 )
+                candidate = candidates[-1]
+                if candidate.candidate_id in seen_candidate_ids:
+                    candidates.pop()
+                else:
+                    seen_candidate_ids.add(candidate.candidate_id)
 
-        candidates.append(
-            _build_candidate(
-                json_path,
-                doc_path.name,
-                data,
-                document_title=data.get("document_title"),
-                page_count=data.get("page_count"),
-                exclude_from_matching=excluded,
-            )
+        candidate = _build_candidate(
+            json_path,
+            doc_path.name,
+            data,
+            document_title=data.get("document_title"),
+            page_count=data.get("page_count"),
+            file_extension=doc_path.suffix.lower(),
+            exclude_from_matching=excluded,
         )
+        if candidate.candidate_id in seen_candidate_ids:
+            continue
+        seen_candidate_ids.add(candidate.candidate_id)
+        candidates.append(candidate)
     return candidates
 
 
@@ -288,6 +313,31 @@ def _days_between(date_str1: Optional[str], date_str2: Optional[str]) -> Optiona
         return None
 
 
+def _signed_days_between(date_str1: Optional[str], date_str2: Optional[str]) -> Optional[int]:
+    if not date_str1 or not date_str2:
+        return None
+    try:
+        left = datetime.strptime(date_str1, "%Y-%m-%d")
+        right = datetime.strptime(date_str2, "%Y-%m-%d")
+        return (right - left).days
+    except ValueError:
+        return None
+
+
+def _candidate_signature(cand: PDFCandidate) -> tuple[str, str]:
+    doc_type = (cand.effective_document_type or cand.document_type or "$unknown$").lower()
+    issuing_party = _normalize_for_match(cand.issuing_party or "$unknown$")
+    return doc_type, issuing_party
+
+
+def _candidate_date_rank(txn_date: Optional[str], cand: PDFCandidate) -> Optional[tuple[int, bool, int]]:
+    days = _days_between(txn_date, cand.date_issued)
+    if days is None or days > _DATE_WINDOW_DAYS:
+        return None
+    signed_days = _signed_days_between(txn_date, cand.date_issued) or 0
+    return (days, signed_days > 0, abs(signed_days))
+
+
 def _phase1_deterministic_match(
     transactions: list[Transaction],
     candidates: list[PDFCandidate],
@@ -298,23 +348,35 @@ def _phase1_deterministic_match(
 
     for txn in transactions:
         abs_amount = abs(txn.amount)
-        amount_matches = []
+        amount_matches: dict[tuple[str, str], tuple[PDFCandidate, int, int]] = {}
+        txn_date = txn.date_posting or txn.date_value
         for cand in candidates:
             if cand.total_amount is None:
                 continue
             if abs(abs_amount - cand.total_amount) <= _AMOUNT_TOLERANCE:
-                txn_date = txn.date_posting or txn.date_value
-                days = _days_between(txn_date, cand.date_issued)
-                if days is not None and days <= _DATE_WINDOW_DAYS:
-                    amount_matches.append((cand, days))
+                rank = _candidate_date_rank(txn_date, cand)
+                if rank is not None:
+                    key = _candidate_signature(cand)
+                    current = amount_matches.get(key)
+                    candidate_tuple = (cand, rank[0], _signed_days_between(txn_date, cand.date_issued) or 0)
+                    if current is None:
+                        amount_matches[key] = candidate_tuple
+                        continue
+                    _, current_days, current_signed = current
+                    current_rank = (current_days, current_signed > 0, abs(current_signed))
+                    if rank < current_rank:
+                        amount_matches[key] = candidate_tuple
 
         if not amount_matches:
             unmatched.append(txn)
             continue
 
-        amount_matches.sort(key=lambda item: item[1])
-        matched_pdfs = [candidate for candidate, _ in amount_matches]
-        closest_days = amount_matches[0][1]
+        selected_matches = sorted(
+            amount_matches.values(),
+            key=lambda item: (item[1], item[2] > 0, abs(item[2]), item[0].pdf_filename),
+        )
+        matched_pdfs = [candidate for candidate, _, _ in selected_matches]
+        closest_days = selected_matches[0][1]
 
         for cand in matched_pdfs:
             used_candidates.add(cand.candidate_id)
@@ -491,6 +553,34 @@ def _validate_required_documents(matches: list[MatchResult], rules: list) -> dic
     return errors
 
 
+def _prune_unexpected_candidates(matches: list[MatchResult], rules: list) -> None:
+    engine = RuleEngine()
+    for match in matches:
+        _, rule = _classify_transaction(match.transaction, rules)
+        if rule is None:
+            continue
+
+        allowed_patterns = list(rule.required_types.keys()) + list(rule.shared_types.keys())
+        if not allowed_patterns:
+            continue
+
+        filtered_candidates = []
+        seen_candidate_ids: set[str] = set()
+        for candidate in match.pdf_candidates:
+            doc_type = engine.candidate_doc_type(candidate)
+            if not doc_type:
+                continue
+            if not any(engine.match_doc_type(doc_type, pattern) for pattern in allowed_patterns):
+                continue
+            if candidate.candidate_id in seen_candidate_ids:
+                continue
+            seen_candidate_ids.add(candidate.candidate_id)
+            filtered_candidates.append(candidate)
+
+        if filtered_candidates:
+            match.pdf_candidates = filtered_candidates
+
+
 def _link_shared_documents(
     all_matches: list[MatchResult],
     final_unmatched: list[Transaction],
@@ -511,16 +601,22 @@ def _link_shared_documents(
 
         txn_date = txn.date_posting or txn.date_value
         for type_pattern, issuing_party_filter in rule.shared_types.items():
-            shared_cands = []
+            best_shared_match: tuple[PDFCandidate, tuple[int, bool, int]] | None = None
             for cand in all_candidates:
-                if not cand.document_type or not RuleEngine().match_doc_type(cand.document_type, type_pattern):
+                doc_type = cand.effective_document_type
+                if not doc_type or not RuleEngine().match_doc_type(doc_type, type_pattern):
                     continue
                 if issuing_party_filter is not None and cand.issuing_party:
                     if _normalize_for_match(cand.issuing_party) != _normalize_for_match(issuing_party_filter):
                         continue
-                days = _days_between(txn_date, cand.date_issued)
-                if days is not None and days <= _DATE_WINDOW_DAYS:
-                    shared_cands.append(cand)
+                rank = _candidate_date_rank(txn_date, cand)
+                if rank is None:
+                    continue
+
+                if best_shared_match is None or rank < best_shared_match[1]:
+                    best_shared_match = (cand, rank)
+
+            shared_cands = [best_shared_match[0]] if best_shared_match else []
 
             if not shared_cands:
                 continue
@@ -736,6 +832,7 @@ def reconcile_single(
         matchable,
         rules,
     )
+    _prune_unexpected_candidates(all_matches, rules)
 
     candidate_match_counts: dict[str, int] = {}
     for match in all_matches:

@@ -246,6 +246,301 @@ class CommandTests(unittest.TestCase):
         reconcile_single_mock.assert_not_called()
         launch_tool_mock.assert_called_once_with("review")
 
+    def test_reconcile_keeps_pdf_bank_screenshots_and_prefers_nearest_same_signature(self):
+        feb_dir = self.export / "2026-02"
+        mar_dir = self.export / "2026-03"
+        feb_dir.mkdir()
+        mar_dir.mkdir()
+
+        statement_path = feb_dir / "statement.xlsx"
+        create_millennium_statement(
+            statement_path,
+            period_start="01/02/2026",
+            period_end="28/02/2026",
+            transactions=[
+                {
+                    "date_posting": "13/02/2026",
+                    "date_value": "13/02/2026",
+                    "description": "MDB1717 MDB Google Y 17.99EUR",
+                    "amount": -17.99,
+                    "currency": "EUR",
+                    "notes": "",
+                    "treated": "Nao",
+                }
+            ],
+        )
+
+        from papertrail.bank_statement import classify_bank_statement
+
+        statement_hash = hash_file_fast(statement_path)
+        statement_metadata = classify_bank_statement(statement_path, statement_hash)
+        self.repository.save_document(statement_path, statement_metadata)
+
+        bank_screenshot = feb_dir / "google-bank.pdf"
+        unrelated_statement = feb_dir / "account-summary.pdf"
+        feb_invoice = feb_dir / "google-feb.pdf"
+        mar_invoice = mar_dir / "google-mar.pdf"
+        create_pdf(bank_screenshot, ["Google movement"])
+        create_pdf(unrelated_statement, ["Account summary"])
+        create_pdf(feb_invoice, ["Google invoice feb"])
+        create_pdf(mar_invoice, ["Google invoice mar"])
+
+        self.repository.save_document(
+            bank_screenshot,
+            self._metadata(
+                "bank1719",
+                "bank1719",
+                date_created="2026-02-13",
+                date_issued="2026-02-13",
+                date_updated="2026-02-13",
+                document_type="bank-statement",
+                document_type_raw="Movimento",
+                issuing_party="Google",
+                issuing_party_raw="Google Y",
+                document_title="Google Y",
+                total_amount=17.99,
+            ),
+        )
+        self.repository.save_document(
+            unrelated_statement,
+            self._metadata(
+                "acct1719",
+                "acct1719",
+                date_created="2026-02-06",
+                date_issued="2026-02-06",
+                date_updated="2026-02-06",
+                document_type="bank-statement",
+                document_type_raw="Extrato",
+                issuing_party="MillenniumBCP",
+                issuing_party_raw="MillenniumBCP",
+                document_title="Conta a ordem",
+                total_amount=17.99,
+            ),
+        )
+        self.repository.save_document(
+            feb_invoice,
+            self._metadata(
+                "invfeb17",
+                "invfeb17",
+                date_created="2026-02-10",
+                date_issued="2026-02-10",
+                date_updated="2026-02-10",
+                document_type="invoice",
+                document_type_raw="Invoice",
+                issuing_party="Google",
+                issuing_party_raw="Google",
+                document_title="YouTube Premium",
+                total_amount=17.99,
+            ),
+        )
+        self.repository.save_document(
+            mar_invoice,
+            self._metadata(
+                "invmar17",
+                "invmar17",
+                date_created="2026-03-10",
+                date_issued="2026-03-10",
+                date_updated="2026-03-10",
+                document_type="invoice",
+                document_type_raw="Invoice",
+                issuing_party="Google",
+                issuing_party_raw="Google",
+                document_title="YouTube Premium",
+                total_amount=17.99,
+            ),
+        )
+
+        reconcile(self.runtime, self.export, dry_run=False)
+
+        sidecar_path = statement_path.with_suffix(".reconciliation.json")
+        data = json.loads(sidecar_path.read_text(encoding="utf-8"))
+        self.assertEqual(data["summary"]["reconciled"], 1)
+        self.assertEqual(data["summary"]["incomplete"], 0)
+        self.assertEqual(
+            sorted(data["matches"][0]["files"]),
+            sorted(["google-bank.pdf", "google-feb.pdf"]),
+        )
+
+    def test_reconcile_deduplicates_same_document_copied_into_multiple_export_months(self):
+        jan_dir = self.export / "2026-01"
+        feb_dir = self.export / "2026-02"
+        jan_dir.mkdir()
+        feb_dir.mkdir()
+
+        statement_path = feb_dir / "statement.xlsx"
+        create_millennium_statement(
+            statement_path,
+            period_start="01/02/2026",
+            period_end="28/02/2026",
+            transactions=[
+                {
+                    "date_posting": "15/02/2026",
+                    "date_value": "15/02/2026",
+                    "description": "STORE PAYMENT",
+                    "amount": -12.34,
+                    "currency": "EUR",
+                    "notes": "",
+                    "treated": "Nao",
+                }
+            ],
+        )
+
+        from papertrail.bank_statement import classify_bank_statement
+
+        statement_hash = hash_file_fast(statement_path)
+        statement_metadata = classify_bank_statement(statement_path, statement_hash)
+        self.repository.save_document(statement_path, statement_metadata)
+
+        bank_note_path = feb_dir / "bank-note.pdf"
+        receipt_jan = jan_dir / "receipt-copy-a.pdf"
+        receipt_feb = feb_dir / "receipt-copy-b.pdf"
+        create_pdf(bank_note_path, ["Bank note"])
+        create_pdf(receipt_jan, ["Receipt"])
+        create_pdf(receipt_feb, ["Receipt"])
+
+        self.repository.save_document(
+            bank_note_path,
+            self._metadata(
+                "bank1234",
+                "bank1234",
+                date_created="2026-02-15",
+                date_issued="2026-02-15",
+                date_updated="2026-02-15",
+                document_type="bank-note",
+                document_type_raw="Bank Note",
+                total_amount=12.34,
+            ),
+        )
+
+        duplicate_receipt = self._metadata(
+            "recv1234",
+            "sharedrcp",
+            date_created="2026-02-14",
+            date_issued="2026-02-14",
+            date_updated="2026-02-14",
+            document_type="receipt",
+            document_type_raw="Receipt",
+            total_amount=12.34,
+        )
+        self.repository.save_document(receipt_jan, duplicate_receipt)
+        self.repository.save_document(receipt_feb, duplicate_receipt)
+
+        reconcile(self.runtime, self.export, dry_run=False)
+
+        sidecar_path = statement_path.with_suffix(".reconciliation.json")
+        data = json.loads(sidecar_path.read_text(encoding="utf-8"))
+        self.assertEqual(data["summary"]["reconciled"], 1)
+        self.assertEqual(data["summary"]["incomplete"], 0)
+        self.assertEqual(len(data["matches"][0]["files"]), 2)
+
+    def test_reconcile_shared_matching_prefers_nearest_shared_document_per_signature(self):
+        self.runtime.profile.reconciliation.rules = [
+            {
+                "name": "vendor-sharedtoll",
+                "match_description": ["SHAREDTOLL"],
+                "required_types": {"bank-note": 1, "receipt|invoice-receipt": [1, None]},
+                "shared_types": {"receipt|invoice-receipt": "Shared Toll"},
+                "companions": [],
+                "expected_page_count": {},
+            },
+        ]
+
+        jan_dir = self.export / "2026-01"
+        feb_dir = self.export / "2026-02"
+        jan_dir.mkdir()
+        feb_dir.mkdir()
+
+        statement_path = feb_dir / "statement.xlsx"
+        create_millennium_statement(
+            statement_path,
+            period_start="01/02/2026",
+            period_end="28/02/2026",
+            transactions=[
+                {
+                    "date_posting": "23/02/2026",
+                    "date_value": "23/02/2026",
+                    "description": "MDB TESTREF PAG BX VAL-SHAREDTOLL MOV 15",
+                    "amount": -5.70,
+                    "currency": "EUR",
+                    "notes": "",
+                    "treated": "Nao",
+                }
+            ],
+        )
+
+        from papertrail.bank_statement import classify_bank_statement
+
+        statement_hash = hash_file_fast(statement_path)
+        statement_metadata = classify_bank_statement(statement_path, statement_hash)
+        self.repository.save_document(statement_path, statement_metadata)
+
+        bank_note_path = feb_dir / "shared-toll-bank-note.pdf"
+        shared_jan_path = jan_dir / "shared-toll-jan.pdf"
+        shared_feb_path = feb_dir / "shared-toll-feb.pdf"
+        create_pdf(bank_note_path, ["Shared Toll movement"])
+        create_pdf(shared_jan_path, ["Shared Toll january receipt"])
+        create_pdf(shared_feb_path, ["Shared Toll february receipt"])
+
+        self.repository.save_document(
+            bank_note_path,
+            self._metadata(
+                "bank5700",
+                "bank5700",
+                date_created="2026-02-23",
+                date_issued="2026-02-23",
+                date_updated="2026-02-23",
+                document_type="bank-note",
+                document_type_raw="Bank Note",
+                issuing_party="Shared Toll",
+                issuing_party_raw="Shared Toll",
+                document_title="Shared Toll movement",
+                total_amount=5.70,
+            ),
+        )
+        self.repository.save_document(
+            shared_jan_path,
+            self._metadata(
+                "sharedjan",
+                "sharedjan",
+                date_created="2026-01-31",
+                date_issued="2026-01-31",
+                date_updated="2026-01-31",
+                document_type="receipt",
+                document_type_raw="Extrato/Recibo",
+                issuing_party="Shared Toll",
+                issuing_party_raw="Shared Toll",
+                document_title="Pagamentos de Servicos Shared Toll",
+                total_amount=26.51,
+            ),
+        )
+        self.repository.save_document(
+            shared_feb_path,
+            self._metadata(
+                "sharedfeb",
+                "sharedfeb",
+                date_created="2026-02-28",
+                date_issued="2026-02-28",
+                date_updated="2026-02-28",
+                document_type="invoice-receipt",
+                document_type_raw="Extrato/Recibo",
+                issuing_party="Shared Toll",
+                issuing_party_raw="Shared Toll",
+                document_title="Pagamentos de Servicos Shared Toll",
+                total_amount=18.25,
+            ),
+        )
+
+        reconcile(self.runtime, self.export, dry_run=False)
+
+        sidecar_path = statement_path.with_suffix(".reconciliation.json")
+        data = json.loads(sidecar_path.read_text(encoding="utf-8"))
+        self.assertEqual(data["summary"]["reconciled"], 1)
+        self.assertEqual(data["summary"]["incomplete"], 0)
+        self.assertEqual(
+            sorted(data["matches"][0]["files"]),
+            sorted(["shared-toll-bank-note.pdf", "shared-toll-feb.pdf"]),
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
