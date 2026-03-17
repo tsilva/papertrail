@@ -88,6 +88,25 @@ class CommandTests(unittest.TestCase):
         self.assertEqual(len(copied_sidecars), 1)
         self.assertTrue(copied_docs[0].startswith(("VND_", "CMP_")))
 
+    def test_copy_matching_compresses_exported_pdfs(self):
+        source_pdf = self.processed / "2026-01-02 - invoice.pdf"
+        create_pdf(source_pdf, ["invoice"])
+        self.repository.save_document(source_pdf, self._metadata("hash1111", "file1111"))
+
+        dest = self.root / "copied"
+        with patch("papertrail.commands._compress_pdf_export") as compress_mock:
+            stats = copy_matching(
+                self.runtime,
+                self.processed,
+                "2026-01",
+                dest,
+                quiet=True,
+            )
+
+        self.assertEqual(stats["copied"], 1)
+        exported_pdf = next(dest.glob("*.pdf"))
+        compress_mock.assert_called_once_with(exported_pdf)
+
     def test_reconcile_writes_reconciliation_sidecar(self):
         statement_path = self.export / "statement.xlsx"
         create_millennium_statement(

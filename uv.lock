@@ -1077,6 +1077,7 @@ dependencies = [
     { name = "openpyxl" },
     { name = "orjson" },
     { name = "pandas" },
+    { name = "pdfpress" },
     { name = "pikepdf" },
     { name = "pillow" },
     { name = "pydantic" },
@@ -1109,6 +1110,7 @@ requires-dist = [
     { name = "openpyxl" },
     { name = "orjson", specifier = ">=3.9.0" },
     { name = "pandas" },
+    { name = "pdfpress", specifier = ">=1.0.5" },
     { name = "pikepdf" },
     { name = "pillow" },
     { name = "pydantic" },
@@ -1120,6 +1122,20 @@ requires-dist = [
     { name = "typer", specifier = ">=0.9.0" },
 ]
 provides-extras = ["similarity", "dev"]
+
+[[package]]
+name = "pdfpress"
+version = "1.0.5"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "pikepdf" },
+    { name = "rich" },
+    { name = "typer" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/a6/0a/e69399f889750a504a69ff66895425d0971f3838776c335612e6fe4ea380/pdfpress-1.0.5.tar.gz", hash = "sha256:604e1bacf143d4e8c526baf77b8b8261013a31d2151be1193ffac9dff7c0b2ab", size = 352092, upload-time = "2026-02-20T17:49:37.882Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/6c/d2/3d6635b9f7ee2b5154f79d00cf484669b85eb3d7c3a7ff74c466861be17c/pdfpress-1.0.5-py3-none-any.whl", hash = "sha256:ad5733019f9f16c96e2249804e772c2f9e97dbbcee2a45538e7949e24b0614a4", size = 29204, upload-time = "2026-02-20T17:49:36.38Z" },
+]
 
 [[package]]
 name = "pikepdf"

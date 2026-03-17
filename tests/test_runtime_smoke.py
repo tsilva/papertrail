@@ -138,8 +138,8 @@ class AdapterSmokeTests(unittest.TestCase):
         )
         copy_matching_mock.assert_called_once()
         discover_mock.assert_called_once_with(unittest.mock.ANY, export_dir / "2026-01")
-        merge_mock.assert_called_once_with(str(export_dir / "2026-01"))
-        validate_mock.assert_called_once_with(export_dir / "2026-01")
+        merge_mock.assert_not_called()
+        validate_mock.assert_not_called()
 
     def test_gradio_loaders_use_repository_helpers_without_network(self):
         processed_pdf = self.runtime.paths.processed / "invoice.pdf"

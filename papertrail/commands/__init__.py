@@ -9,6 +9,7 @@ import os
 import re
 import shutil
 import sys
+import tempfile
 import time
 import warnings
 from contextlib import contextmanager, redirect_stderr, redirect_stdout
@@ -43,6 +44,7 @@ from .reconcile import (
 )
 
 logger = get_logger("commands")
+_PDFPRESS_COMPRESSOR = None
 
 
 @contextmanager
@@ -73,6 +75,7 @@ def _run_export_period(
     export_file_config,
     profile_context: dict | None,
     merge_rules,
+    run_merge_pdfs: bool = False,
 ) -> tuple[Path, list[dict]]:
     console = runtime.console
     export_date_dir = export_dir / export_date
@@ -160,26 +163,28 @@ def _run_export_period(
                 step.warning(f"Merge attachments failed: {exc}")
                 logger.warning(f"Merge attachments failed: {exc}")
 
-    def merge_pdfs(step):
+    if run_merge_pdfs:
+        def merge_pdfs(step):
+            with suppress_console_logging():
+                merged_outputs = merge_all_pdfs(str(export_date_dir))
+                _compress_exported_pdfs(list(merged_outputs.values()))
+            merged_files = list(export_date_dir.glob("merged_*.pdf"))
+            if merged_files:
+                prefixes = sorted(
+                    {
+                        file.stem.split("_", 1)[1].upper() + "_"
+                        for file in merged_files
+                        if "_" in file.stem
+                    }
+                )
+                step.success(f"{len(merged_files)} merged PDFs ({', '.join(prefixes)})")
+            else:
+                step.success("0 merged PDFs")
+
+        _pipeline_step(console, f"Merge PDFs ({export_date})", merge_pdfs)
+
         with suppress_console_logging():
-            merge_all_pdfs(str(export_date_dir))
-        merged_files = list(export_date_dir.glob("merged_*.pdf"))
-        if merged_files:
-            prefixes = sorted(
-                {
-                    file.stem.split("_", 1)[1].upper() + "_"
-                    for file in merged_files
-                    if "_" in file.stem
-                }
-            )
-            step.success(f"{len(merged_files)} merged PDFs ({', '.join(prefixes)})")
-        else:
-            step.success("0 merged PDFs")
-
-    _pipeline_step(console, f"Merge PDFs ({export_date})", merge_pdfs)
-
-    with suppress_console_logging():
-        validate_merged_pdf(export_date_dir)
+            validate_merged_pdf(export_date_dir)
 
     return export_date_dir, recon_stats_all
 
@@ -285,6 +290,43 @@ def _check_file_size(src: Path, max_file_size_mb: float | None) -> None:
         logger.warning(f"Large file: {src.name} ({size_mb:.1f} MB exceeds {max_file_size_mb} MB threshold)")
 
 
+def _get_pdfpress_compressor():
+    global _PDFPRESS_COMPRESSOR
+    if _PDFPRESS_COMPRESSOR is None:
+        try:
+            from pdfpress import PDFCompressor
+        except ImportError as exc:
+            raise RuntimeError(
+                "pdfpress is required for export PDF compression. Install the project dependencies again."
+            ) from exc
+        _PDFPRESS_COMPRESSOR = PDFCompressor(quality="ebook")
+    return _PDFPRESS_COMPRESSOR
+
+
+def _compress_pdf_export(pdf_path: Path) -> None:
+    if pdf_path.suffix.lower() != ".pdf" or not pdf_path.exists():
+        return
+
+    original_size = pdf_path.stat().st_size
+    compressor = _get_pdfpress_compressor()
+
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        tmp_output = Path(tmp_dir) / pdf_path.name
+        outcome = compressor.compress(pdf_path, tmp_output)
+        shutil.move(tmp_output, pdf_path)
+
+    final_size = pdf_path.stat().st_size
+    logger.debug(
+        f"[EXPORT-COMPRESS] {pdf_path.name}: {original_size} -> {final_size} bytes "
+        f"(strategy={outcome.best_strategy})"
+    )
+
+
+def _compress_exported_pdfs(pdf_paths: list[Path]) -> None:
+    for pdf_path in pdf_paths:
+        _compress_pdf_export(pdf_path)
+
+
 def copy_matching(
     runtime: Runtime,
     processed_path: Path,
@@ -347,6 +389,8 @@ def copy_matching(
 
         _check_file_size(doc_path, max_file_size_mb)
         shutil.copy2(doc_path, dest_doc)
+        if dest_doc.suffix.lower() == ".pdf":
+            _compress_pdf_export(dest_doc)
         metadata_copy = dict(metadata_dict)
         metadata_copy["source_filename"] = doc_path.name
         repository.save_json(dest_json, metadata_copy)
@@ -520,7 +564,8 @@ def export_dates(
         if run_merge and changed_directories:
             for export_dir in runtime.console.track(changed_directories, "Merging PDFs"):
                 try:
-                    merge_all_pdfs(str(export_dir))
+                    merged_outputs = merge_all_pdfs(str(export_dir))
+                    _compress_exported_pdfs(list(merged_outputs.values()))
                     validate_merged_pdf(export_dir)
                 except Exception as exc:
                     logger.error(f"Merge failed: {exc}")
@@ -628,6 +673,7 @@ def merge_reconciled_attachments(runtime: Runtime, export_path: Path, all_matche
         return stats
 
     merged_attachments: set[str] = set()
+    modified_targets: set[Path] = set()
     engine = RuleEngine()
 
     for match in all_matches:
@@ -654,12 +700,15 @@ def merge_reconciled_attachments(runtime: Runtime, export_path: Path, all_matche
                         target_doc.pages.extend(attach_doc.pages)
                     target_doc.save(target_pdf)
                 merged_attachments.add(attachment.pdf_filename)
+                modified_targets.add(target_pdf)
                 stats["merged"] += 1
             except Exception as exc:
                 stats["errors"] += 1
                 logger.error(
                     f"[MERGE] Failed to append {attachment.pdf_filename} to {target.pdf_filename}: {exc}"
                 )
+
+    _compress_exported_pdfs(sorted(modified_targets))
 
     return stats
 
@@ -872,6 +921,7 @@ def pipeline(
                 export_file_config=export_file_config,
                 profile_context=profile_context,
                 merge_rules=merge_rules,
+                run_merge_pdfs=False,
             )
         except Exception as exc:
             logger.error(f"Export pipeline failed for {export_date}: {exc}")
