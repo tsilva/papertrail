@@ -109,7 +109,7 @@ papertrail --profile personal review
 - XLSX bank statements classified deterministically
 - Gmail attachments
 - mbox attachments
-- compressed archives discovered in raw folders via `archex`
+- compressed archives discovered in raw folders via `unarch`
 
 ## Invariants
 

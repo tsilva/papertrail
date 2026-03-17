@@ -1279,8 +1279,8 @@ dependencies = [
     { name = "pyyaml" },
     { name = "pyzbar" },
     { name = "rich" },
-    { name = "tsilva-archex" },
     { name = "typer" },
+    { name = "unarch" },
 ]
 
 [package.optional-dependencies]
@@ -1314,8 +1314,8 @@ requires-dist = [
     { name = "pyyaml", specifier = ">=6.0" },
     { name = "pyzbar", specifier = ">=0.1.9" },
     { name = "rich", specifier = ">=13.0.0" },
-    { name = "tsilva-archex", directory = "../archex" },
     { name = "typer", specifier = ">=0.9.0" },
+    { name = "unarch", specifier = ">=0.6.0" },
 ]
 provides-extras = ["similarity", "dev"]
 
@@ -2064,28 +2064,6 @@ wheels = [
 ]
 
 [[package]]
-name = "tsilva-archex"
-version = "0.5.0"
-source = { directory = "../archex" }
-dependencies = [
-    { name = "py7zr" },
-    { name = "rarfile" },
-    { name = "rich" },
-    { name = "rich-argparse" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "py7zr" },
-    { name = "rarfile" },
-    { name = "rich", specifier = ">=13.0" },
-    { name = "rich-argparse", specifier = ">=1.4" },
-]
-
-[package.metadata.requires-dev]
-dev = [{ name = "pytest", specifier = ">=8.0" }]
-
-[[package]]
 name = "typer"
 version = "0.21.1"
 source = { registry = "https://pypi.org/simple" }
@@ -2153,6 +2131,21 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/95/32/1a225d6164441be760d75c2c42e2780dc0873fe382da3e98a2e1e48361e5/tzdata-2025.2.tar.gz", hash = "sha256:b60a638fcc0daffadf82fe0f57e53d06bdec2f36c4df66280ae79bce6bd6f2b9", size = 196380, upload-time = "2025-03-23T13:54:43.652Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/5c/23/c7abc0ca0a1526a0774eca151daeb8de62ec457e77262b66b359c3c7679e/tzdata-2025.2-py2.py3-none-any.whl", hash = "sha256:1a403fada01ff9221ca8044d701868fa132215d84beb92242d9acd2147f667a8", size = 347839, upload-time = "2025-03-23T13:54:41.845Z" },
+]
+
+[[package]]
+name = "unarch"
+version = "0.6.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "py7zr" },
+    { name = "rarfile" },
+    { name = "rich" },
+    { name = "rich-argparse" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/50/4f/9b8660941941fce84bae9c08c87b829de118fd086f7ace32b6b663e0c4dc/unarch-0.6.0.tar.gz", hash = "sha256:83c58d8e0354e3397355e0e424c1f9ffb1294090160f8d477c4824d26ab75f80", size = 228346, upload-time = "2026-03-17T15:23:31.824Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/05/70/ae31a08f78b810d710572902a06f5e0d8893bde1b008ff0cf26c50c650ff/unarch-0.6.0-py3-none-any.whl", hash = "sha256:29f4028c9339cbbe34abf0ba1bb576dbb90c2b3895c1724a2dec622790804b42", size = 13678, upload-time = "2026-03-17T15:23:30.617Z" },
 ]
 
 [[package]]

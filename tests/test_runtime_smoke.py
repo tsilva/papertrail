@@ -75,7 +75,7 @@ class AdapterSmokeTests(unittest.TestCase):
         archive_path = raw_dir / "docs.7z"
         archive_path.write_bytes(b"placeholder")
 
-        with patch("papertrail.archive_extract.archex_extract_archives", return_value={str(archive_path): 1}) as mock:
+        with patch("papertrail.archive_extract.unarch_extract_archives", return_value={str(archive_path): 1}) as mock:
             results = extract_archives(raw_dir)
 
         mock.assert_called_once_with(

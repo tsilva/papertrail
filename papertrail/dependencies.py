@@ -8,7 +8,7 @@ from papertrail.config import ConfigError
 from papertrail.qr import check_pyzbar_available
 
 _REQUIRED_IMPORTS = [
-    ("archex", "archex"),
+    ("unarch", "unarch"),
     ("yaml", "pyyaml"),
     ("fitz", "PyMuPDF"),
     ("pandas", "pandas"),
