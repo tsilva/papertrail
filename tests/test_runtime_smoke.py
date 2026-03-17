@@ -1,7 +1,6 @@
 import json
 import importlib
 import os
-import subprocess
 import sys
 import tempfile
 import unittest
@@ -76,22 +75,18 @@ class AdapterSmokeTests(unittest.TestCase):
         archive_path = raw_dir / "docs.7z"
         archive_path.write_bytes(b"placeholder")
 
-        def fake_run(cmd, capture_output, text, check):
-            self.assertEqual(cmd[0], "7zz")
-            output_dir = Path(cmd[3][2:])
-            output_dir.mkdir(parents=True, exist_ok=True)
-            (output_dir / "invoice.txt").write_text("hello", encoding="utf-8")
-            return subprocess.CompletedProcess(cmd, 0, "", "")
-
-        with (
-            patch("papertrail.archive_extract.shutil.which", side_effect=lambda name: "/opt/homebrew/bin/7zz" if name == "7zz" else None),
-            patch("papertrail.archive_extract.subprocess.run", side_effect=fake_run),
-        ):
+        with patch("papertrail.archive_extract.archex_extract_archives", return_value={str(archive_path): 1}) as mock:
             results = extract_archives(raw_dir)
 
-        output_dir = raw_dir / "docs_archive"
+        mock.assert_called_once_with(
+            str(raw_dir),
+            output_dir=str(raw_dir),
+            passwords=None,
+            show_progress=False,
+            output_suffix="_archive",
+            skip_existing=True,
+        )
         self.assertEqual(results[str(archive_path)], 1)
-        self.assertTrue((output_dir / "invoice.txt").exists())
 
     def test_merge_all_pdfs_creates_all_and_prefix_outputs(self):
         export_dir = self.runtime.paths.export

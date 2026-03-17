@@ -10,6 +10,7 @@ authors = [
     { name = "Employee Two", email = "eng.employee-two.silva@gmail.com" }
 ]
 dependencies = [
+    "tsilva-archex>=0.5.0",
     "openai",
     "PyMuPDF",
     "pandas",
@@ -43,6 +44,9 @@ include = [
     "main.py",
     "papertrail/**",
 ]
+
+[tool.uv.sources]
+tsilva-archex = { path = "../archex" }
 
 [tool.ruff]
 line-length = 100

@@ -41,7 +41,7 @@ class CliTests(unittest.TestCase):
 
         with (
             patch("main.create_runtime", return_value=runtime),
-            patch("main.pipeline_cmd") as pipeline_mock,
+            patch("main._run_pipeline") as pipeline_mock,
         ):
             result = self.runner.invoke(cli_main.app, [])
 
@@ -62,7 +62,7 @@ class CliTests(unittest.TestCase):
 
         with (
             patch("main.create_runtime", return_value=runtime),
-            patch("main.pipeline_cmd") as pipeline_mock,
+            patch("main._run_pipeline") as pipeline_mock,
         ):
             result = self.runner.invoke(cli_main.app, [])
 
