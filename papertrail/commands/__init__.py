@@ -16,6 +16,7 @@ from contextlib import contextmanager, redirect_stderr, redirect_stdout
 from pathlib import Path
 from typing import Optional
 
+import fitz
 import pandas as pd
 
 from papertrail.config import get_gmail_config_paths, get_passwords_from_profile
@@ -246,6 +247,15 @@ def sync(
 
 
 def rename(runtime: Runtime, processed_path: Path, *, quiet: bool = False) -> dict:
+    export_root = runtime.profile.paths.export
+    if export_root:
+        export_path = Path(export_root).resolve()
+        target_path = processed_path.resolve()
+        if target_path == export_path or export_path in target_path.parents:
+            raise RuntimeError(
+                "rename cannot be run on export directories; regenerate exports instead."
+            )
+
     repository = DocumentRepository(runtime)
     with _task_log_context(runtime, processed_path, "rename_files", show_header=not quiet):
         stats = repository.repair_filenames(processed_path)
@@ -667,6 +677,28 @@ def check(runtime: Runtime, processed_path: Path, *, verify_hashes: bool = False
     run_check(runtime, repository, engine, processed_path, verify_hashes=verify_hashes, dry_run=dry_run)
 
 
+def _page_signature(page: fitz.Page) -> str:
+    text = page.get_text("text").strip()
+    if text:
+        payload = text.encode("utf-8")
+    else:
+        pix = page.get_pixmap(matrix=fitz.Matrix(0.5, 0.5), colorspace=fitz.csGRAY, alpha=False)
+        payload = f"{pix.width}x{pix.height}:".encode("ascii") + bytes(pix.samples)
+    return hashlib.sha256(payload).hexdigest()
+
+
+def _pdf_tail_matches_attachment(target_pdf: Path, attach_pdf: Path) -> bool:
+    with fitz.open(target_pdf) as target_doc, fitz.open(attach_pdf) as attach_doc:
+        attach_page_count = len(attach_doc)
+        if attach_page_count == 0 or len(target_doc) < attach_page_count:
+            return False
+        start_index = len(target_doc) - attach_page_count
+        for offset in range(attach_page_count):
+            if _page_signature(target_doc[start_index + offset]) != _page_signature(attach_doc[offset]):
+                return False
+    return True
+
+
 def merge_reconciled_attachments(runtime: Runtime, export_path: Path, all_matches: list, merge_rules: list) -> dict:
     stats = {"merged": 0, "skipped": 0, "errors": 0}
     if not merge_rules or not all_matches:
@@ -690,6 +722,10 @@ def merge_reconciled_attachments(runtime: Runtime, export_path: Path, all_matche
             if not attach_pdf.exists() or attach_pdf.suffix.lower() != ".pdf":
                 continue
             if target_pdf == attach_pdf:
+                continue
+            if _pdf_tail_matches_attachment(target_pdf, attach_pdf):
+                merged_attachments.add(attachment.pdf_filename)
+                stats["skipped"] += 1
                 continue
 
             try:
@@ -721,6 +757,7 @@ def reconcile(
     dry_run: bool = False,
 ) -> None:
     repository = DocumentRepository(runtime)
+    merge_rules = runtime.profile.export.merge_rules
     with _task_log_context(runtime, export_path, "reconcile"):
         if excel_path is not None:
             excel_paths = [excel_path]
@@ -735,12 +772,27 @@ def reconcile(
             runtime.console.warning("No bank statements found to reconcile", indent=False)
             return
 
+        all_recon_matches: list[dict] = []
         for path in excel_paths:
             if not path.exists():
                 runtime.console.error(f"Excel file not found: {path}", indent=False)
                 continue
             with runtime.console.task(f"Reconcile: {path.name}"):
-                reconcile_single(runtime, repository, export_path, path, dry_run=dry_run)
+                stats = reconcile_single(runtime, repository, export_path, path, dry_run=dry_run)
+                all_recon_matches.extend(stats.get("matches", []))
+
+        if not dry_run and merge_rules and all_recon_matches:
+            merge_stats = merge_reconciled_attachments(runtime, export_path, all_recon_matches, merge_rules)
+            if merge_stats["merged"] > 0:
+                runtime.console.success(
+                    f"Merged attachments into {merge_stats['merged']} document(s)",
+                    indent=False,
+                )
+            elif merge_stats["errors"] > 0:
+                runtime.console.warning(
+                    f"Attachment merge completed with {merge_stats['errors']} error(s)",
+                    indent=False,
+                )
 
 
 def review(runtime: Runtime, export_path: Path) -> None:

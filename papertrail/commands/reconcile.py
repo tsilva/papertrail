@@ -22,6 +22,12 @@ logger = get_logger("reconcile")
 
 _AMOUNT_TOLERANCE = 0.01
 _DATE_WINDOW_DAYS = 30
+_BANK_GENERATED_DOC_TYPES = {
+    "bank-note",
+    "bank-transfer",
+    "bank-statement",
+    "bank-investment",
+}
 
 
 @dataclass
@@ -315,6 +321,29 @@ def _shared_requirements(transactions: list[Transaction], rules: list) -> list[t
     return requirements
 
 
+def _required_patterns(transactions: list[Transaction], rules: list) -> list[str]:
+    patterns: list[str] = []
+    seen: set[str] = set()
+    for txn in transactions:
+        _, rule = _classify_transaction(txn, rules)
+        if rule is None:
+            continue
+        for pattern in list(rule.required_types.keys()) + list(rule.shared_types.keys()):
+            if pattern in seen:
+                continue
+            seen.add(pattern)
+            patterns.append(pattern)
+    return patterns
+
+
+def _candidate_matches_patterns(candidate: PDFCandidate, patterns: list[str]) -> bool:
+    doc_type = candidate.effective_document_type or candidate.document_type
+    if not doc_type:
+        return False
+    engine = RuleEngine()
+    return any(engine.match_doc_type(doc_type, pattern) for pattern in patterns)
+
+
 def _candidate_matches_relevant_amounts(candidate: PDFCandidate, relevant_amounts: set[float]) -> bool:
     if candidate.total_amount is None:
         return False
@@ -347,6 +376,7 @@ def _is_relevant_supplemental_candidate(
     max_txn_date: Optional[date],
     relevant_amounts: set[float],
     shared_requirements: list[tuple[str, Optional[str]]],
+    required_patterns: list[str],
 ) -> bool:
     candidate_date = _date_from_iso(candidate.date_issued)
     if candidate_date is None or min_txn_date is None or max_txn_date is None:
@@ -357,10 +387,16 @@ def _is_relevant_supplemental_candidate(
     if candidate_date < window_start or candidate_date > window_end:
         return False
 
-    return (
+    if not (
         _candidate_matches_relevant_amounts(candidate, relevant_amounts)
         or _candidate_matches_shared_requirements(candidate, shared_requirements)
-    )
+    ):
+        return False
+
+    if not required_patterns:
+        return True
+
+    return _candidate_matches_patterns(candidate, required_patterns)
 
 
 def _latest_reconciliation_input_mtime(
@@ -469,6 +505,7 @@ def _load_reconciliation_candidates(
     relevant_amounts = {abs(txn.amount) for txn in transactions}
     relevant_amounts.update(_relevant_companion_amounts(transactions, rules))
     shared_requirements = _shared_requirements(transactions, rules)
+    required_patterns = _required_patterns(transactions, rules)
 
     candidates: list[PDFCandidate] = []
     seen_candidate_ids: set[str] = set()
@@ -484,6 +521,7 @@ def _load_reconciliation_candidates(
                 max_txn_date=max_txn_date,
                 relevant_amounts=relevant_amounts,
                 shared_requirements=shared_requirements,
+                required_patterns=required_patterns,
             ):
                 continue
             seen_candidate_ids.add(candidate.candidate_id)
@@ -527,15 +565,109 @@ def _candidate_date_rank(txn_date: Optional[str], cand: PDFCandidate) -> Optiona
     return (days, signed_days > 0, abs(signed_days))
 
 
+def _same_calendar_month(date_str1: Optional[str], date_str2: Optional[str]) -> bool:
+    if not date_str1 or not date_str2:
+        return False
+    try:
+        left = datetime.strptime(date_str1, "%Y-%m-%d")
+        right = datetime.strptime(date_str2, "%Y-%m-%d")
+    except ValueError:
+        return False
+    return (left.year, left.month) == (right.year, right.month)
+
+
+def _is_bank_generated_candidate(candidate: PDFCandidate) -> bool:
+    doc_type = candidate.effective_document_type or candidate.document_type
+    return bool(doc_type and doc_type.lower() in _BANK_GENERATED_DOC_TYPES)
+
+
+def _rule_allowed_patterns(rule) -> list[str]:
+    return list(rule.required_types.keys()) + list(rule.shared_types.keys())
+
+
+def _is_same_month_shared_candidate(rule, txn_date: Optional[str], candidate: PDFCandidate) -> bool:
+    if rule.name != "vendor-sharedtoll":
+        return True
+    return _same_calendar_month(txn_date, candidate.date_issued)
+
+
+def _prune_rule_aware_exact_candidates(
+    txn: Transaction,
+    candidates: list[PDFCandidate],
+    rule,
+) -> list[PDFCandidate]:
+    if not candidates:
+        return candidates
+
+    engine = RuleEngine()
+    txn_date = txn.date_posting or txn.date_value
+    allowed_patterns = _rule_allowed_patterns(rule)
+    filtered = [
+        candidate
+        for candidate in candidates
+        if _candidate_matches_patterns(candidate, allowed_patterns)
+    ]
+    if not filtered:
+        return []
+
+    keep_ids: set[str] = set()
+
+    for pattern in rule.shared_types.keys():
+        for candidate in filtered:
+            doc_type = engine.candidate_doc_type(candidate)
+            if doc_type and engine.match_doc_type(doc_type, pattern):
+                keep_ids.add(candidate.candidate_id)
+
+    for pattern, cardinality in rule.required_types.items():
+        matching = []
+        for candidate in filtered:
+            doc_type = engine.candidate_doc_type(candidate)
+            if doc_type and engine.match_doc_type(doc_type, pattern):
+                matching.append(candidate)
+        if not matching:
+            continue
+
+        same_month_exists = any(
+            _same_calendar_month(txn_date, candidate.date_issued)
+            for candidate in matching
+        )
+        if same_month_exists:
+            matching = [
+                candidate
+                for candidate in matching
+                if not (
+                    _is_bank_generated_candidate(candidate)
+                    and not _same_calendar_month(txn_date, candidate.date_issued)
+                )
+            ]
+
+        _, max_count = engine.parse_cardinality(cardinality)
+        if max_count is not None:
+            matching = sorted(
+                matching,
+                key=lambda candidate: (
+                    _candidate_date_rank(txn_date, candidate) or (9999, True, 9999),
+                    candidate.pdf_filename,
+                ),
+            )[:max_count]
+
+        for candidate in matching:
+            keep_ids.add(candidate.candidate_id)
+
+    return [candidate for candidate in filtered if candidate.candidate_id in keep_ids]
+
+
 def _phase1_deterministic_match(
     transactions: list[Transaction],
     candidates: list[PDFCandidate],
+    rules: list,
 ) -> tuple[list[MatchResult], list[Transaction], list[PDFCandidate]]:
     matches: list[MatchResult] = []
     unmatched: list[Transaction] = []
     used_candidates: set[str] = set()
 
     for txn in transactions:
+        _, rule = _classify_transaction(txn, rules)
         abs_amount = abs(txn.amount)
         amount_matches: dict[tuple[str, str], tuple[PDFCandidate, int, int]] = {}
         txn_date = txn.date_posting or txn.date_value
@@ -565,6 +697,11 @@ def _phase1_deterministic_match(
             key=lambda item: (item[1], item[2] > 0, abs(item[2]), item[0].pdf_filename),
         )
         matched_pdfs = [candidate for candidate, _, _ in selected_matches]
+        if rule is not None:
+            matched_pdfs = _prune_rule_aware_exact_candidates(txn, matched_pdfs, rule)
+            if not matched_pdfs:
+                unmatched.append(txn)
+                continue
         closest_days = selected_matches[0][1]
 
         for cand in matched_pdfs:
@@ -795,6 +932,8 @@ def _link_shared_documents(
                 doc_type = cand.effective_document_type
                 if not doc_type or not RuleEngine().match_doc_type(doc_type, type_pattern):
                     continue
+                if not _is_same_month_shared_candidate(rule, txn_date, cand):
+                    continue
                 if issuing_party_filter is not None and cand.issuing_party:
                     if _normalize_for_match(cand.issuing_party) != _normalize_for_match(issuing_party_filter):
                         continue
@@ -997,24 +1136,28 @@ def reconcile_single(
         return empty_stats
 
     profile = runtime.profile
+    rules = profile.reconciliation.rules
     exclude_prefixes = profile.reconciliation.exclude_prefixes
     candidates = _load_reconciliation_candidates(
         repository,
         export_path,
         transactions,
         exclude_prefixes=exclude_prefixes,
-        rules=profile.reconciliation.rules,
+        rules=rules,
     )
     matchable = [candidate for candidate in candidates if not candidate.exclude_from_matching]
 
-    p1_matches, unmatched_txns, remaining_cands = _phase1_deterministic_match(transactions, matchable)
+    p1_matches, unmatched_txns, remaining_cands = _phase1_deterministic_match(
+        transactions,
+        matchable,
+        rules,
+    )
     p2_matches = _phase2_llm_match(runtime, unmatched_txns, remaining_cands) if unmatched_txns and remaining_cands else []
     all_matches = p1_matches + p2_matches
 
     p2_matched_rows = {match.transaction.row_number for match in p2_matches}
     final_unmatched = [txn for txn in unmatched_txns if txn.row_number not in p2_matched_rows]
 
-    rules = profile.reconciliation.rules
     all_matches, final_unmatched, companion_candidate_ids = _link_companion_documents(
         all_matches,
         final_unmatched,

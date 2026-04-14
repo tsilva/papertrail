@@ -5,7 +5,9 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from papertrail.commands import copy_matching, reconcile, review
+import fitz
+
+from papertrail.commands import copy_matching, reconcile, rename, review
 from papertrail.commands.reconcile import discover_statements_requiring_reconciliation
 from papertrail.hashing import hash_file_fast
 from papertrail.models import DocumentMetadata
@@ -155,6 +157,151 @@ class CommandTests(unittest.TestCase):
         self.assertIn("files", data["matches"][0])
         self.assertIn("unmatched_files", data)
 
+    def test_reconcile_merges_tax_attachments_and_is_idempotent(self):
+        self.runtime.profile.reconciliation.rules = [
+            {
+                "name": "tax-social-security",
+                "match_description": ["PTU-TAXA SOCIAL UNICA"],
+                "required_types": {"bank-note": 1, "payroll-social": 1},
+                "shared_types": {},
+                "companions": [],
+                "expected_page_count": {},
+            },
+            {
+                "name": "tax-irs",
+                "match_description": ["PAG.DUC"],
+                "required_types": {"bank-note": 1, "tax-irs": 1},
+                "shared_types": {},
+                "companions": [],
+                "expected_page_count": {},
+            },
+        ]
+        self.runtime.profile.export.merge_rules = [
+            {"target_type": "payroll-social", "attach_type": "bank-note"},
+            {"target_type": "tax-irs", "attach_type": "bank-note"},
+        ]
+
+        statement_path = self.export / "statement.xlsx"
+        create_millennium_statement(
+            statement_path,
+            period_start="01/03/2026",
+            period_end="31/03/2026",
+            transactions=[
+                {
+                    "date_posting": "17/03/2026",
+                    "date_value": "17/03/2026",
+                    "description": "PTU-TAXA SOCIAL UNICA TESTCOMPANY 202602",
+                    "amount": -596.83,
+                    "currency": "EUR",
+                    "notes": "",
+                    "treated": "Nao",
+                },
+                {
+                    "date_posting": "17/03/2026",
+                    "date_value": "17/03/2026",
+                    "description": "PAG.DUC -TAXREF001",
+                    "amount": -6.00,
+                    "currency": "EUR",
+                    "notes": "",
+                    "treated": "Nao",
+                },
+            ],
+        )
+
+        from papertrail.bank_statement import classify_bank_statement
+
+        statement_hash = hash_file_fast(statement_path)
+        statement_metadata = classify_bank_statement(statement_path, statement_hash)
+        self.repository.save_document(statement_path, statement_metadata)
+
+        social_target = self.export / "payroll-social.pdf"
+        social_attachment = self.export / "payroll-social-bank-note.pdf"
+        irs_target = self.export / "tax-irs.pdf"
+        irs_attachment = self.export / "tax-irs-bank-note.pdf"
+        create_pdf(social_target, ["Payroll social"])
+        create_pdf(social_attachment, ["Payroll social bank note"])
+        create_pdf(irs_target, ["Tax IRS"])
+        create_pdf(irs_attachment, ["Tax IRS bank note"])
+
+        self.repository.save_document(
+            social_target,
+            self._metadata(
+                "social001",
+                "social001",
+                date_created="2026-03-17",
+                date_issued="2026-03-17",
+                date_updated="2026-03-17",
+                document_type="payroll-social",
+                document_type_raw="Payroll Social",
+                issuing_party="Seguranca Social",
+                issuing_party_raw="Seguranca Social",
+                document_title="Ficheiro de remuneracoes",
+                total_amount=596.83,
+            ),
+        )
+        self.repository.save_document(
+            social_attachment,
+            self._metadata(
+                "socialbn",
+                "socialbn",
+                date_created="2026-03-17",
+                date_issued="2026-03-17",
+                date_updated="2026-03-17",
+                document_type="bank-note",
+                document_type_raw="Movimento",
+                issuing_party="MillenniumBCP",
+                issuing_party_raw="MillenniumBCP",
+                document_title="Transferencia pontual a debito",
+                total_amount=596.83,
+            ),
+        )
+        self.repository.save_document(
+            irs_target,
+            self._metadata(
+                "irsdoc01",
+                "irsdoc01",
+                date_created="2026-03-17",
+                date_issued="2026-03-17",
+                date_updated="2026-03-17",
+                document_type="tax-irs",
+                document_type_raw="Tax IRS",
+                issuing_party="AT",
+                issuing_party_raw="AT",
+                document_title="Periodo 20262",
+                total_amount=6.00,
+            ),
+        )
+        self.repository.save_document(
+            irs_attachment,
+            self._metadata(
+                "irsbn001",
+                "irsbn001",
+                date_created="2026-03-17",
+                date_issued="2026-03-17",
+                date_updated="2026-03-17",
+                document_type="bank-note",
+                document_type_raw="Movimento",
+                issuing_party="MillenniumBCP",
+                issuing_party_raw="MillenniumBCP",
+                document_title="Pagamento de servicos",
+                total_amount=6.00,
+            ),
+        )
+
+        reconcile(self.runtime, self.export, dry_run=False)
+
+        with fitz.open(social_target) as doc:
+            self.assertEqual(len(doc), 2)
+        with fitz.open(irs_target) as doc:
+            self.assertEqual(len(doc), 2)
+
+        reconcile(self.runtime, self.export, dry_run=False)
+
+        with fitz.open(social_target) as doc:
+            self.assertEqual(len(doc), 2)
+        with fitz.open(irs_target) as doc:
+            self.assertEqual(len(doc), 2)
+
     def test_discover_statements_requiring_reconciliation_flags_missing_and_stale(self):
         statement_path = self.export / "statement.xlsx"
         create_millennium_statement(statement_path)
@@ -227,6 +374,10 @@ class CommandTests(unittest.TestCase):
             include_stale=False,
         )
         self.assertEqual(pending, [])
+
+    def test_rename_rejects_export_directory(self):
+        with self.assertRaisesRegex(RuntimeError, "rename cannot be run on export directories"):
+            rename(self.runtime, self.export, quiet=True)
 
     def test_review_does_not_rerun_reconciliation(self):
         statement_path = self.export / "statement.xlsx"
@@ -458,7 +609,7 @@ class CommandTests(unittest.TestCase):
                 "name": "vendor-sharedtoll",
                 "match_description": ["SHAREDTOLL"],
                 "required_types": {"bank-note": 1, "receipt|invoice-receipt": [1, None]},
-                "shared_types": {"receipt|invoice-receipt": "Shared Toll"},
+                "shared_types": {"invoice-receipt": "Shared Toll"},
                 "companions": [],
                 "expected_page_count": {},
             },
@@ -558,6 +709,220 @@ class CommandTests(unittest.TestCase):
         self.assertEqual(
             sorted(data["matches"][0]["files"]),
             sorted(["shared-toll-bank-note.pdf", "shared-toll-feb.pdf"]),
+        )
+
+    def test_reconcile_does_not_use_adjacent_month_shared_doc_for_via_verde(self):
+        self.runtime.profile.reconciliation.rules = [
+            {
+                "name": "vendor-sharedtoll",
+                "match_description": ["SHAREDTOLL"],
+                "required_types": {"bank-note": 1, "receipt|invoice-receipt": [1, None]},
+                "shared_types": {"invoice-receipt": "Shared Toll"},
+                "companions": [],
+                "expected_page_count": {},
+            },
+        ]
+
+        feb_dir = self.export / "2026-02"
+        mar_dir = self.export / "2026-03"
+        feb_dir.mkdir()
+        mar_dir.mkdir()
+
+        statement_path = mar_dir / "statement.xlsx"
+        create_millennium_statement(
+            statement_path,
+            period_start="01/03/2026",
+            period_end="31/03/2026",
+            transactions=[
+                {
+                    "date_posting": "02/03/2026",
+                    "date_value": "02/03/2026",
+                    "description": "MDB TESTREF PAG BX VAL-SHAREDTOLL MOV 16",
+                    "amount": -4.00,
+                    "currency": "EUR",
+                    "notes": "",
+                    "treated": "Nao",
+                }
+            ],
+        )
+
+        from papertrail.bank_statement import classify_bank_statement
+
+        statement_hash = hash_file_fast(statement_path)
+        statement_metadata = classify_bank_statement(statement_path, statement_hash)
+        self.repository.save_document(statement_path, statement_metadata)
+
+        bank_note_path = mar_dir / "shared-toll-bank-note.pdf"
+        shared_feb_path = feb_dir / "shared-toll-feb.pdf"
+        create_pdf(bank_note_path, ["Shared Toll movement"])
+        create_pdf(shared_feb_path, ["Shared Toll february receipt"])
+
+        self.repository.save_document(
+            bank_note_path,
+            self._metadata(
+                "bank4000",
+                "bank4000",
+                date_created="2026-03-02",
+                date_issued="2026-03-02",
+                date_updated="2026-03-02",
+                document_type="bank-note",
+                document_type_raw="Bank Note",
+                issuing_party="Shared Toll",
+                issuing_party_raw="Shared Toll",
+                document_title="Shared Toll movement",
+                total_amount=4.00,
+            ),
+        )
+        self.repository.save_document(
+            shared_feb_path,
+            self._metadata(
+                "sharedfeb",
+                "sharedfeb",
+                date_created="2026-02-28",
+                date_issued="2026-02-28",
+                date_updated="2026-02-28",
+                document_type="invoice-receipt",
+                document_type_raw="Extrato/Recibo",
+                issuing_party="Shared Toll",
+                issuing_party_raw="Shared Toll",
+                document_title="Pagamentos de Servicos Shared Toll",
+                total_amount=18.25,
+            ),
+        )
+
+        reconcile(self.runtime, mar_dir, dry_run=False)
+
+        sidecar_path = statement_path.with_suffix(".reconciliation.json")
+        data = json.loads(sidecar_path.read_text(encoding="utf-8"))
+        self.assertEqual(data["summary"]["reconciled"], 0)
+        self.assertEqual(data["summary"]["incomplete"], 1)
+        self.assertEqual(data["matches"][0]["files"], ["shared-toll-bank-note.pdf"])
+        self.assertIn("missing receipt/invoice-receipt", data["matches"][0]["errors"][0])
+
+    def test_reconcile_prunes_cross_month_bank_generated_candidates_when_same_month_exists(self):
+        self.runtime.profile.reconciliation.rules = [
+            {
+                "name": "bank-fee-stamp-duty",
+                "match_description": ["IMPOSTO DO SELO"],
+                "required_types": {"invoice-receipt": 1, "bank-note": [0, 1]},
+                "shared_types": {},
+                "companions": [],
+                "expected_page_count": {},
+            },
+        ]
+
+        feb_dir = self.export / "2026-02"
+        mar_dir = self.export / "2026-03"
+        feb_dir.mkdir()
+        mar_dir.mkdir()
+
+        statement_path = mar_dir / "statement.xlsx"
+        create_millennium_statement(
+            statement_path,
+            period_start="01/03/2026",
+            period_end="31/03/2026",
+            transactions=[
+                {
+                    "date_posting": "13/03/2026",
+                    "date_value": "13/03/2026",
+                    "description": "IMPOSTO DO SELO",
+                    "amount": -0.03,
+                    "currency": "EUR",
+                    "notes": "",
+                    "treated": "Nao",
+                }
+            ],
+        )
+
+        from papertrail.bank_statement import classify_bank_statement
+
+        statement_hash = hash_file_fast(statement_path)
+        statement_metadata = classify_bank_statement(statement_path, statement_hash)
+        self.repository.save_document(statement_path, statement_metadata)
+
+        same_month_bank_note = mar_dir / "march-stamp-duty.pdf"
+        prior_month_bank_note = feb_dir / "february-stamp-duty.pdf"
+        unrelated_cross_month_bank_transfer = mar_dir / "bank-transfer-fee.pdf"
+        invoice_receipt = mar_dir / "march-invoice-receipt.pdf"
+        create_pdf(same_month_bank_note, ["March stamp duty"])
+        create_pdf(prior_month_bank_note, ["February stamp duty"])
+        create_pdf(unrelated_cross_month_bank_transfer, ["Unrelated transfer fee"])
+        create_pdf(invoice_receipt, ["Invoice receipt"])
+
+        self.repository.save_document(
+            same_month_bank_note,
+            self._metadata(
+                "stampmar0",
+                "stampmar0",
+                date_created="2026-03-13",
+                date_issued="2026-03-13",
+                date_updated="2026-03-13",
+                document_type="bank-note",
+                document_type_raw="Movimento",
+                issuing_party="MillenniumBCP",
+                issuing_party_raw="MillenniumBCP",
+                document_title="Imposto do selo",
+                total_amount=0.03,
+            ),
+        )
+        self.repository.save_document(
+            prior_month_bank_note,
+            self._metadata(
+                "stampfeb0",
+                "stampfeb0",
+                date_created="2026-02-13",
+                date_issued="2026-02-13",
+                date_updated="2026-02-13",
+                document_type="bank-note",
+                document_type_raw="Movimento",
+                issuing_party="MillenniumBCP",
+                issuing_party_raw="MillenniumBCP",
+                document_title="Imposto do selo",
+                total_amount=0.03,
+            ),
+        )
+        self.repository.save_document(
+            unrelated_cross_month_bank_transfer,
+            self._metadata(
+                "txfer003",
+                "txfer003",
+                date_created="2026-03-24",
+                date_issued="2026-03-24",
+                date_updated="2026-03-24",
+                document_type="bank-transfer",
+                document_type_raw="Transferencia",
+                issuing_party="ActivoBank",
+                issuing_party_raw="ActivoBank",
+                document_title="Transferencia internacional eurid",
+                total_amount=0.03,
+            ),
+        )
+        self.repository.save_document(
+            invoice_receipt,
+            self._metadata(
+                "invrcpt0",
+                "invrcpt0",
+                date_created="2026-03-31",
+                date_issued="2026-03-31",
+                date_updated="2026-03-31",
+                document_type="invoice-receipt",
+                document_type_raw="Fatura-Recibo",
+                issuing_party="MillenniumBCP",
+                issuing_party_raw="Banco Comercial Portugues, S.A.",
+                document_title="Custo de Servico Internacional",
+                total_amount=0.03,
+            ),
+        )
+
+        reconcile(self.runtime, mar_dir, dry_run=False)
+
+        sidecar_path = statement_path.with_suffix(".reconciliation.json")
+        data = json.loads(sidecar_path.read_text(encoding="utf-8"))
+        self.assertEqual(data["summary"]["reconciled"], 1)
+        self.assertEqual(data["summary"]["incomplete"], 0)
+        self.assertEqual(
+            set(data["matches"][0]["files"]),
+            {"march-stamp-duty.pdf", "march-invoice-receipt.pdf"},
         )
 
     def test_reconcile_month_folder_uses_adjacent_month_candidates_selectively(self):
