@@ -5,12 +5,13 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Callable
+from typing import Callable
+
+import openai
 
 from papertrail.config import (
     ConfigError,
     ProfileLoader,
-    ProfileNotFoundError,
     ProfileSettings,
     build_openai_client,
     check_api_accessibility,
@@ -42,7 +43,7 @@ class Runtime:
     profile_name: str
     paths: RuntimePaths
     model_id: str | None
-    openai_client: Any
+    openai_client: openai.OpenAI | None
     nif_cache: NIFLookupCache | None
     hash_cache: HashCache
     console: PapertrailConsole

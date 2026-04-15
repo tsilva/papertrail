@@ -115,7 +115,7 @@ def _run_export_period(
         if statement_json.exists():
             try:
                 statement_info = repository.load_metadata(statement_json).get("bank_statement", {}) or {}
-            except Exception:
+            except (OSError, UnicodeDecodeError, ValueError):
                 pass
         account = statement_info.get("account_number", statement_path.stem)
         period = statement_info.get("period_start", export_date)
@@ -763,10 +763,6 @@ def reconcile(
             excel_paths = [excel_path]
         else:
             excel_paths = discover_bank_statements(repository, export_path)
-            if not excel_paths:
-                fallback = export_path / "transactions.xlsx"
-                if fallback.exists():
-                    excel_paths = [fallback]
 
         if not excel_paths:
             runtime.console.warning("No bank statements found to reconcile", indent=False)

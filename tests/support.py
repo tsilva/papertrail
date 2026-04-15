@@ -1,4 +1,3 @@
-import json
 from pathlib import Path
 
 import fitz
@@ -146,7 +145,3 @@ def create_millennium_statement(
 
     wb.save(xlsx_path)
     wb.close()
-
-
-def write_json(path: Path, data: dict) -> None:
-    path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")

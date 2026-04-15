@@ -53,7 +53,6 @@ window.selectBrowseEntry = function(idx) {
     input.dispatchEvent(new Event('change', { bubbles: true }));
 };
 
-/* Highlight selected row */
 window._highlightRow = function(idx) {
     document.querySelectorAll('.browse-row').forEach(function(r) {
         r.classList.remove('browse-row-selected');
@@ -65,9 +64,7 @@ window._highlightRow = function(idx) {
     }
 };
 
-/* Keyboard navigation */
 document.addEventListener('keydown', function(e) {
-    /* Skip when typing in search */
     if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
     var overlay = document.querySelector('.preview-fullscreen-overlay');
     if (e.key === 'Escape' && overlay) { overlay.remove(); return; }

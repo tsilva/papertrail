@@ -8,8 +8,7 @@ from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Optional
 
-import openpyxl
-
+from papertrail.bank_statement import load_transactions as load_bank_statement_transactions
 from papertrail.document_types import normalize_document_type
 from papertrail.llm import _extract_json_from_response
 from papertrail.logging_utils import get_logger
@@ -183,29 +182,7 @@ def _parse_date(value) -> Optional[str]:
 
 
 def _load_transactions(excel_path: Path) -> list[Transaction]:
-    import warnings
-
-    warnings.filterwarnings("ignore", message="Workbook contains no default style")
-    from papertrail.bank_statement.extractor import _PARSERS
-
-    workbook = openpyxl.load_workbook(excel_path, data_only=True)
-    worksheet = workbook.active
-
-    selected_parser = None
-    for parser in _PARSERS:
-        if parser.can_parse(worksheet):
-            selected_parser = parser
-            break
-    workbook.close()
-
-    if selected_parser is None:
-        logger.warning(f"No parser recognized format of {excel_path.name}")
-        return []
-
-    txn_dicts = selected_parser.load_transactions(excel_path)
-    if txn_dicts is None:
-        return []
-    return [Transaction(**data) for data in txn_dicts]
+    return [Transaction(**data) for data in load_bank_statement_transactions(excel_path)]
 
 
 def discover_bank_statements(repository: DocumentRepository, export_path: Path) -> list[Path]:

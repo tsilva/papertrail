@@ -95,7 +95,7 @@ def _render_file_card(entry, role, directory):
                 preview_html = render_document_preview(companion)[0]
             else:
                 preview_html = placeholder_html("No companion file")
-        except Exception:
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError):
             preview_html = placeholder_html("Error loading metadata")
     else:
         preview_html = placeholder_html("JSON not found")
@@ -244,7 +244,7 @@ def on_scan(directory_path):
                     key = group.get("group_hash", group.get("hash_text"))
                     if key:
                         old_decisions[key] = group["decision"]
-        except Exception:
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError):
             pass
 
     plan_data = scan_directory(directory)
@@ -392,11 +392,11 @@ def on_confirm():
                 companion = find_companion(json_path, data)
                 if companion and companion.exists():
                     files_to_move.append(companion)
-            except Exception:
+            except (OSError, UnicodeDecodeError, json.JSONDecodeError):
                 pass
 
             stem = json_path.stem
-            for extra_suffix in (".embeddings.json", ".reconciliation.json"):
+            for extra_suffix in (".reconciliation.json",):
                 extra = json_path.parent / (stem + extra_suffix)
                 if extra.exists():
                     files_to_move.append(extra)
@@ -487,7 +487,7 @@ def build_ui():
 
         confirm_row = gr.Row(visible=False)
         with confirm_row:
-            confirm_msg = gr.Markdown("")
+            gr.Markdown("")
             confirm_btn = gr.Button("Confirm", variant="primary", size="sm")
             cancel_btn = gr.Button("Cancel", size="sm")
 

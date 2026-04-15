@@ -6,7 +6,6 @@ import shutil
 import urllib.error
 import urllib.request
 from pathlib import Path
-from typing import Any
 
 import openai
 from pydantic import BaseModel, ConfigDict, Field, field_validator
@@ -52,12 +51,16 @@ class PathsSettings(SettingsModel):
 
     @field_validator("raw", mode="before")
     @classmethod
-    def _normalize_raw(cls, value: Any) -> list[str]:
+    def _normalize_raw(_cls, value: object) -> list[str]:
         if value is None:
             return []
         if isinstance(value, str):
             return [value]
         return list(value)
+
+
+RuleCardinality = int | list[int | None]
+ExportMatchValue = str | int | float | bool
 
 
 class OpenRouterSettings(SettingsModel):
@@ -89,7 +92,7 @@ class ReconciliationRule(SettingsModel):
     name: str
     match_description: list[str] = Field(default_factory=list)
     direction: str | None = None
-    required_types: dict[str, Any] = Field(default_factory=dict)
+    required_types: dict[str, RuleCardinality] = Field(default_factory=dict)
     shared_types: dict[str, str | None] = Field(default_factory=dict)
     companions: list[str] = Field(default_factory=list)
     expected_page_count: dict[str, int] = Field(default_factory=dict)
@@ -101,7 +104,7 @@ class ReconciliationSettings(SettingsModel):
 
 
 class ExportRule(SettingsModel):
-    match: dict[str, Any] = Field(default_factory=dict)
+    match: dict[str, ExportMatchValue] = Field(default_factory=dict)
     prefix: str = ""
 
 
@@ -182,7 +185,7 @@ def _resolve_path(path_str: str | None, profile_path: Path | None) -> str | None
     return str((profile_path.parent / path).resolve())
 
 
-def _normalize_profile_data(data: dict[str, Any], profile_path: Path | None) -> dict[str, Any]:
+def _normalize_profile_data(data: dict[str, object], profile_path: Path | None) -> dict[str, object]:
     normalized = dict(data)
 
     defaults = {
@@ -281,7 +284,7 @@ def get_cache_dir() -> Path:
 
 
 class ProfileLoader:
-    """Profile discovery and loading with repo migration support."""
+    """Profile discovery and loading."""
 
     @property
     def profiles_dir(self) -> Path:

@@ -11,6 +11,7 @@ from papertrail.logging_utils import get_logger
 from papertrail.utils import load_yaml, save_yaml
 
 logger = get_logger('nif_lookup')
+_CACHE_LOAD_EXCEPTIONS = (OSError, UnicodeDecodeError, ValueError)
 
 
 class NIFLookupCache:
@@ -33,7 +34,7 @@ class NIFLookupCache:
             data = load_yaml(self.path)
             self._cache = data.get("nif_to_issuer", {})
             self._normalized = data.get("nif_to_normalized", {})
-        except Exception:
+        except _CACHE_LOAD_EXCEPTIONS:
             self._cache = {}
             self._normalized = {}
 

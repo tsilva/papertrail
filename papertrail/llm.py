@@ -6,13 +6,29 @@ import json
 import re
 import unicodedata
 from datetime import datetime
-from typing import Any
+from typing import TypedDict
+
+import openai
 
 from papertrail.logging_utils import get_logger
 from papertrail.models import DocumentMetadataRaw
 from papertrail.qr.models import QRExtractedMetadata
 
 logger = get_logger("llm")
+
+
+class QRPreExtractedFields(TypedDict, total=False):
+    issue_date: str
+    document_type: str
+    total_amount: float
+    total_amount_currency: str
+    issuer_tax_number: str
+    locale: str
+
+
+class MultiQRInfo(TypedDict):
+    count: int
+    issuers: list[str]
 
 _LEGAL_SUFFIXES = {
     "inc",
@@ -114,7 +130,7 @@ def _parse_issuing_party_response(content: str) -> str | None:
     for candidate in candidates:
         try:
             result = json.loads(candidate)
-        except Exception:
+        except (TypeError, json.JSONDecodeError):
             continue
         if isinstance(result, dict):
             value = result.get("issuing_party")
@@ -157,10 +173,10 @@ def build_extraction_tools(exclude_fields: set[str] | None = None) -> list[dict]
     ]
 
 
-def get_qr_exclusions(qr_metadata: QRExtractedMetadata) -> tuple[set[str], dict[str, Any]]:
+def get_qr_exclusions(qr_metadata: QRExtractedMetadata) -> tuple[set[str], QRPreExtractedFields]:
     """Return schema fields that QR extraction already supplied."""
     exclude = set()
-    pre_extracted: dict[str, Any] = {}
+    pre_extracted: QRPreExtractedFields = {}
 
     mappings = [
         ("issue_date", qr_metadata.issue_date),
@@ -182,8 +198,8 @@ def get_qr_exclusions(qr_metadata: QRExtractedMetadata) -> tuple[set[str], dict[
 def get_system_prompt_classify(
     known_document_types: list[str],
     known_issuing_parties: list[str],
-    pre_extracted: dict[str, Any] | None = None,
-    multi_qr_info: dict[str, Any] | None = None,
+    pre_extracted: QRPreExtractedFields | None = None,
+    multi_qr_info: MultiQRInfo | None = None,
 ) -> str:
     """Build the single-call document classification prompt."""
     prompt = (
@@ -259,7 +275,7 @@ def get_system_prompt_classify(
 
 def normalize_issuing_party(
     raw_name: str,
-    client,
+    client: openai.OpenAI | None,
     model_id: str | None,
     known_issuing_parties: list[str],
 ) -> str:
@@ -294,6 +310,3 @@ def normalize_issuing_party(
         logger.error(f"NIF normalization failed: {exc}")
 
     return _heuristic_normalize_issuing_party(raw_name, known_issuing_parties)
-
-
-get_system_prompt_raw_extraction = get_system_prompt_classify

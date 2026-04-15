@@ -324,7 +324,7 @@ def load_export_folder(folder_path):
                     try:
                         with open(rp, "r", encoding="utf-8") as f:
                             recon = json.load(f)
-                    except Exception:
+                    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
                         pass
             entry["reconciliation"] = recon
             bank_statements.append(entry)

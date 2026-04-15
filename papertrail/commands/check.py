@@ -55,17 +55,14 @@ def validate_metadata(runtime: Runtime, repository: DocumentRepository, output_p
         require_companion=False,
         validate=True,
     ):
-        try:
-            content_hash = metadata.hash_content
-            if not content_hash:
-                errors.append((metadata_path, "Missing 'hash_content' in metadata."))
-                continue
-            if not pdf_path.exists():
-                errors.append((metadata_path, f"Missing PDF for metadata: {pdf_path.name}"))
-                continue
-            pdf_info.append((metadata_path, pdf_path, content_hash, metadata))
-        except Exception as exc:
-            errors.append((metadata_path, str(exc)))
+        content_hash = metadata.hash_content
+        if not content_hash:
+            errors.append((metadata_path, "Missing 'hash_content' in metadata."))
+            continue
+        if not pdf_path.exists():
+            errors.append((metadata_path, f"Missing PDF for metadata: {pdf_path.name}"))
+            continue
+        pdf_info.append((metadata_path, pdf_path, content_hash, metadata))
 
     if not pdf_info:
         if errors:
@@ -220,7 +217,7 @@ def _header(title: str) -> None:
 
 def _is_sidecar(path: Path) -> bool:
     name = path.name
-    return name.endswith(".reconciliation.json") or name.endswith(".embeddings.json")
+    return name.endswith(".reconciliation.json")
 
 
 def _load_all_metadata(repository: DocumentRepository, processed_path: Path) -> list[tuple[Path, dict]]:

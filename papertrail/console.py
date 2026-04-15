@@ -1,8 +1,9 @@
 """Rich-based console utilities for papertrail CLI output."""
 
+from collections.abc import Iterable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
-from typing import Any, Generator
+from typing import Generator, TypeVar
 
 from rich.console import Console
 from rich.progress import (
@@ -16,6 +17,8 @@ from rich.progress import (
 )
 from rich.rule import Rule
 from papertrail.logging_utils import suppress_console_logging
+
+T = TypeVar("T")
 
 
 @dataclass
@@ -81,14 +84,12 @@ class PapertrailConsole:
     ) -> None:
         self.console.print()
 
-        # Warnings section
         if warnings:
             self.console.print("[yellow bold]\u26a0 Warnings:[/]")
             for w in warnings:
                 self.console.print(f"  [yellow]![/yellow] {w}")
             self.console.print()
 
-        # Summary section
         if summary:
             self.console.print("[bold]Summary:[/]")
             max_label = max(len(k) for k in summary)
@@ -96,7 +97,6 @@ class PapertrailConsole:
                 self.console.print(f"  {label + ':':<{max_label + 1}}  {value}")
             self.console.print()
 
-        # Output section
         if output_paths:
             self.console.print("[bold]Output:[/]")
             max_label = max(len(label) for label, _ in output_paths)
@@ -145,7 +145,7 @@ class PapertrailConsole:
         """Step with spinner that shows result symbol on completion."""
         ctx = StepContext()
 
-        with self.console.status(f"[cyan]{message}[/cyan]", spinner="dots") as status:
+        with self.console.status(f"[cyan]{message}[/cyan]", spinner="dots"):
             with suppress_console_logging():
                 try:
                     yield ctx
@@ -169,7 +169,6 @@ class PapertrailConsole:
             msg_style = "[red]"
             detail_style = "[red]"
         else:
-            # No result set, default to success
             symbol = "[green]\u2713[/green]"
             msg_style = "[green]"
             detail_style = "[dim]"
@@ -231,10 +230,10 @@ class PapertrailConsole:
 
     def track(
         self,
-        items,
+        items: Iterable[T],
         description: str = "Processing",
         transient: bool = True,
-    ) -> Generator[Any, None, None]:
+    ) -> Iterator[T]:
         """Iterate over items with automatic progress bar."""
         items = list(items)
         with self.progress(description, total=len(items), transient=transient) as progress:
@@ -242,18 +241,3 @@ class PapertrailConsole:
             for item in items:
                 yield item
                 progress.update(task_id, advance=1)
-
-_console: PapertrailConsole | None = None
-
-
-def set_console(console: PapertrailConsole | None) -> None:
-    """Install a process-global console for compatibility helpers."""
-    global _console
-    _console = console
-
-
-def get_console() -> PapertrailConsole:
-    global _console
-    if _console is None:
-        _console = PapertrailConsole()
-    return _console

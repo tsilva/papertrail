@@ -1,10 +1,10 @@
 """PDF rendering, splitting, and image conversion utilities."""
 
+import base64
 import hashlib
 import io
 import os
 import re
-import base64
 import time
 from pathlib import Path
 
@@ -14,9 +14,6 @@ from PIL import Image, ImageEnhance
 from papertrail.logging_utils import get_logger
 
 logger = get_logger('pdf')
-
-
-# ── Rendering ────────────────────────────────────────────────────
 
 def render_pdf_to_images(
     pdf_path: Path,
@@ -57,9 +54,6 @@ def get_page_count(pdf_path: Path) -> int:
     with fitz.open(str(pdf_path)) as doc:
         return len(doc)
 
-
-# ── File discovery ───────────────────────────────────────────────
-
 IMAGE_EXTENSIONS = ('.png', '.jpg', '.jpeg', '.tiff', '.tif', '.bmp', '.webp')
 
 
@@ -88,17 +82,9 @@ def _walk_folders(folder_paths, ext_set):
                     yield fp
 
 
-def find_pdf_files(folder_paths) -> list[Path]:
-    """Return all PDF files within one or multiple folders."""
-    return list(_walk_folders(folder_paths, {'.pdf'}))
-
-
 def find_document_files(folder_paths, extensions=('.pdf', '.xlsx') + IMAGE_EXTENSIONS) -> list[Path]:
     """Return all document files with given extensions within one or multiple folders."""
     return list(_walk_folders(folder_paths, {e.lower() for e in extensions}))
-
-
-# ── Bundle splitting ─────────────────────────────────────────────
 
 _PAGINATION_RE = re.compile(r'P[aá]g\.?\s*(\d+)\s*/\s*(\d+)')
 
@@ -145,33 +131,6 @@ def split_pdf_bundle(pdf_path: Path, output_dir: Path) -> list[Path]:
     logger.debug(f"[PDF-SPLIT] {pdf_path.name} -> {len(output_paths)} pages")
     return output_paths
 
-
-def split_pdf_bundles(
-    pdf_paths: list[Path], output_dir: Path, console,
-) -> tuple[list[Path], list[Path], int]:
-    """Split splittable PDF bundles, pass through the rest."""
-    output_dir.mkdir(parents=True, exist_ok=True)
-    non_splittable = []
-    split_pages = []
-    bundles_split = 0
-
-    for pdf_path in console.track(pdf_paths, "Detecting bundles"):
-        if is_splittable_bundle(pdf_path):
-            try:
-                pages = split_pdf_bundle(pdf_path, output_dir)
-                split_pages.extend(pages)
-                bundles_split += 1
-            except Exception as e:
-                logger.warning(f"[PDF-SPLIT] Failed to split {pdf_path.name}: {e}")
-                non_splittable.append(pdf_path)
-        else:
-            non_splittable.append(pdf_path)
-
-    return non_splittable, split_pages, bundles_split
-
-
-# ── Image conversion ─────────────────────────────────────────────
-
 def convert_image_to_pdf(image_path: Path, output_dir: Path) -> Path:
     """Convert a single image file to PDF."""
     path_hash = hashlib.sha256(str(image_path).encode()).hexdigest()[:8]
@@ -192,16 +151,3 @@ def convert_image_to_pdf(image_path: Path, output_dir: Path) -> Path:
 
     logger.debug(f"[IMG-CONVERT] {image_path.name} -> {output_path.name}")
     return output_path
-
-
-def convert_images_to_pdfs(image_paths: list[Path], output_dir: Path, console) -> list[Path]:
-    """Convert multiple image files to PDFs. Returns list of converted PDF paths."""
-    output_dir.mkdir(parents=True, exist_ok=True)
-    converted = []
-    for image_path in console.track(image_paths, "Converting images"):
-        try:
-            pdf_path = convert_image_to_pdf(image_path, output_dir)
-            converted.append(pdf_path)
-        except Exception as e:
-            logger.warning(f"[IMG-CONVERT] Failed to convert {image_path.name}: {e}")
-    return converted

@@ -1,40 +1,51 @@
 """Bank statement format detection and classification dispatcher."""
 
+import warnings
 from datetime import datetime
 from pathlib import Path
-from typing import Optional
 
 import openpyxl
 
-from papertrail.bank_statement.models import BankFormat, BankStatementData
-from papertrail.bank_statement import millennium_bcp, bpi
-from papertrail.hashing import hash_file_fast
+from . import bpi, millennium_bcp
+from papertrail.bank_statement.models import (
+    BankFormat,
+    BankStatementParser,
+    BankTransactionRecord,
+)
 from papertrail.logging_utils import get_logger
 from papertrail.models import DocumentMetadata
 
 logger = get_logger("bank_statement")
 
-# Registry of parsers: each must have can_parse(ws) and parse(xlsx_path)
 _PARSERS = [millennium_bcp, bpi]
 
 
-def detect_bank_format(xlsx_path: Path) -> Optional[BankFormat]:
-    """Detect bank statement format by trying each parser."""
+def get_parsers() -> tuple[BankStatementParser, ...]:
+    return tuple(_PARSERS)
+
+
+def _detect_parser(xlsx_path: Path) -> BankStatementParser | None:
     try:
-        wb = openpyxl.load_workbook(xlsx_path, data_only=True)
-        ws = wb.active
-    except Exception as e:
-        logger.debug(f"Could not open {xlsx_path.name}: {e}")
+        workbook = openpyxl.load_workbook(xlsx_path, data_only=True)
+        worksheet = workbook.active
+    except Exception as exc:
+        logger.debug(f"Could not open {xlsx_path.name}: {exc}")
         return None
 
     try:
         for parser in _PARSERS:
-            if parser.can_parse(ws):
-                return parser.FORMAT
+            if parser.can_parse(worksheet):
+                return parser
     finally:
-        wb.close()
+        workbook.close()
 
     return None
+
+
+def detect_bank_format(xlsx_path: Path) -> BankFormat | None:
+    """Detect bank statement format by trying each parser."""
+    parser = _detect_parser(xlsx_path)
+    return parser.FORMAT if parser is not None else None
 
 
 def is_bank_statement(xlsx_path: Path) -> bool:
@@ -42,17 +53,28 @@ def is_bank_statement(xlsx_path: Path) -> bool:
     return detect_bank_format(xlsx_path) is not None
 
 
-def classify_bank_statement(xlsx_path: Path, file_hash: str) -> Optional[DocumentMetadata]:
+def load_transactions(xlsx_path: Path) -> list[BankTransactionRecord]:
+    warnings.filterwarnings("ignore", message="Workbook contains no default style")
+    parser = _detect_parser(xlsx_path)
+    if parser is None:
+        logger.warning(f"No parser recognized format of {xlsx_path.name}")
+        return []
+
+    transactions = parser.load_transactions(xlsx_path)
+    return transactions or []
+
+
+def classify_bank_statement(xlsx_path: Path, file_hash: str) -> DocumentMetadata | None:
     """Deterministic classification of a bank statement XLSX.
 
     Returns DocumentMetadata with confidence=1.0 (no LLM needed), or None if
     the file is not a recognized bank statement format.
     """
-    for parser in _PARSERS:
-        data = parser.parse(xlsx_path)
-        if data is not None:
-            break
-    else:
+    parser = _detect_parser(xlsx_path)
+    if parser is None:
+        return None
+    data = parser.parse(xlsx_path)
+    if data is None:
         return None
 
     now = datetime.now().strftime("%Y-%m-%d")

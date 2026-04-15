@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import re
 from datetime import datetime
-from typing import Optional
+from typing import NotRequired, Optional, TypedDict
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -21,6 +21,54 @@ def clean_enum_string(value: str, enum_prefix: Optional[str] = None) -> str:
     elif re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*\.[A-Za-z0-9_-]+", value):
         return value.split(".", 1)[-1]
     return value
+
+
+def _normalize_unknown_string(value: object, *, strip_enum_prefix: bool = False) -> object:
+    if value is None:
+        return "$UNKNOWN$"
+    if isinstance(value, str):
+        cleaned = clean_enum_string(value).strip() if strip_enum_prefix else value.strip()
+        return cleaned or "$UNKNOWN$"
+    return value
+
+
+def _normalize_raw_string(value: object, *, preserve_none: bool) -> object:
+    if value is None:
+        return None if preserve_none else "$UNKNOWN$"
+    if isinstance(value, str):
+        cleaned = value.strip()
+        return cleaned or "$UNKNOWN$"
+    return value
+
+
+class QRCodePayload(TypedDict, total=False):
+    qr_type: str
+    raw_content: str
+    page_number: int
+    confidence: float
+
+
+class BankStatementPayload(TypedDict):
+    bank_format: str
+    account_number: str
+    currency: str
+    period_start: str
+    period_end: str
+    transaction_count: int
+
+
+class SubDocumentPayload(TypedDict, total=False):
+    date_issued: str | None
+    document_type: str | None
+    total_amount: float | None
+    total_amount_currency: str | None
+    issuer_tax_number: str | None
+    issuing_party: str | None
+    issuing_party_raw: str | None
+    document_number: str | None
+    atcud: str | None
+    locale: str | None
+    qrcode: NotRequired[QRCodePayload | None]
 
 
 class DocumentMetadataRaw(BaseModel):
@@ -41,23 +89,13 @@ class DocumentMetadataRaw(BaseModel):
 
     @field_validator("document_type", "issuing_party", mode="before")
     @classmethod
-    def _normalize_blank_required_strings(cls, value):
-        if value is None:
-            return "$UNKNOWN$"
-        if isinstance(value, str):
-            cleaned = clean_enum_string(value).strip()
-            return cleaned or "$UNKNOWN$"
-        return value
+    def _normalize_blank_required_strings(_cls, value):
+        return _normalize_unknown_string(value, strip_enum_prefix=True)
 
     @field_validator("document_type_raw", "issuing_party_raw", mode="before")
     @classmethod
-    def _normalize_blank_raw_strings(cls, value):
-        if value is None:
-            return "$UNKNOWN$"
-        if isinstance(value, str):
-            cleaned = value.strip()
-            return cleaned or "$UNKNOWN$"
-        return value
+    def _normalize_blank_raw_strings(_cls, value):
+        return _normalize_raw_string(value, preserve_none=False)
 
 
 class SubDocumentMetadata(BaseModel):
@@ -73,7 +111,7 @@ class SubDocumentMetadata(BaseModel):
     document_number: Optional[str] = None
     atcud: Optional[str] = None
     locale: Optional[str] = None
-    qrcode: Optional[dict] = None
+    qrcode: QRCodePayload | None = None
 
 
 class DocumentMetadata(BaseModel):
@@ -98,14 +136,14 @@ class DocumentMetadata(BaseModel):
     file_size_kb: Optional[int] = Field(default=None)
     issuer_tax_number: Optional[str] = Field(default=None)
     locale: Optional[str] = Field(default=None)
-    qrcode: Optional[dict] = Field(default=None)
-    bank_statement: Optional[dict] = Field(default=None)
+    qrcode: QRCodePayload | None = Field(default=None)
+    bank_statement: BankStatementPayload | None = Field(default=None)
     source_extension: Optional[str] = Field(default=None)
-    sub_documents: Optional[list[dict]] = Field(default=None)
+    sub_documents: Optional[list[SubDocumentPayload]] = Field(default=None)
 
     @field_validator("date_issued", mode="before")
     @classmethod
-    def validate_issue_date(cls, value):
+    def validate_issue_date(_cls, value):
         if value is None or (isinstance(value, str) and value.strip() == ""):
             return "$UNKNOWN$"
         try:
@@ -119,27 +157,17 @@ class DocumentMetadata(BaseModel):
 
     @field_validator("document_type", "issuing_party", mode="before")
     @classmethod
-    def normalize_required_strings(cls, value):
-        if value is None:
-            return "$UNKNOWN$"
-        if isinstance(value, str):
-            cleaned = clean_enum_string(value).strip()
-            return cleaned or "$UNKNOWN$"
-        return value
+    def normalize_required_strings(_cls, value):
+        return _normalize_unknown_string(value, strip_enum_prefix=True)
 
     @field_validator("document_type_raw", "issuing_party_raw", mode="before")
     @classmethod
-    def normalize_raw_strings(cls, value):
-        if value is None:
-            return value
-        if isinstance(value, str):
-            cleaned = value.strip()
-            return cleaned or "$UNKNOWN$"
-        return value
+    def normalize_raw_strings(_cls, value):
+        return _normalize_raw_string(value, preserve_none=True)
 
     @field_validator("total_amount", mode="before")
     @classmethod
-    def clean_and_validate_amount(cls, value):
+    def clean_and_validate_amount(_cls, value):
         if value is None:
             return None
         if isinstance(value, (int, float)):
@@ -151,7 +179,7 @@ class DocumentMetadata(BaseModel):
 
     @field_validator("total_amount_currency", mode="before")
     @classmethod
-    def normalize_currency(cls, value):
+    def normalize_currency(_cls, value):
         if value is None:
             return None
         value = value.strip().upper()

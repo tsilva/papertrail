@@ -8,7 +8,7 @@ import time
 import unicodedata
 from datetime import datetime
 from pathlib import Path
-from typing import Callable, Optional, TypeVar
+from typing import Optional
 
 import fitz  # PyMuPDF
 
@@ -16,6 +16,7 @@ from papertrail.logging_utils import get_logger
 from papertrail.utils import load_yaml, save_yaml
 
 logger = get_logger('hashing')
+_CACHE_LOAD_EXCEPTIONS = (OSError, UnicodeDecodeError, ValueError)
 
 
 class HashCache:
@@ -35,7 +36,7 @@ class HashCache:
             data = load_yaml(self.path)
             self._cache = data.get("cache", {})
             self._text_cache = data.get("text_cache", {})
-        except Exception:
+        except _CACHE_LOAD_EXCEPTIONS:
             self._cache = {}
             self._text_cache = {}
 
@@ -157,9 +158,6 @@ def hash_file_text(path: Path) -> Optional[str]:
 
 # --- Deduplication utilities ---
 
-T = TypeVar("T")
-
-
 def group_duplicates(file_records: list[dict]) -> list[dict]:
     """Group file records into duplicate sets using three-tier hash hierarchy.
 
@@ -187,36 +185,6 @@ def group_duplicates(file_records: list[dict]) -> list[dict]:
             entries.sort(key=lambda e: e.get("size_kb") or 0)
             groups.append({"group_hash": hash_val, "group_hash_type": "hash_text", "entries": entries})
     return groups
-
-
-def dedup_batch(
-    items: list[T],
-    hash_fn: Callable[[T], str | None],
-    seen: set[str] | None = None,
-    label: str = "",
-) -> tuple[list[T], int]:
-    """Filter a list keeping only the first occurrence per hash value.
-
-    Items where ``hash_fn`` returns ``None`` pass through.
-    """
-    if seen is None:
-        seen = set()
-    result: list[T] = []
-    removed = 0
-    for item in items:
-        h = hash_fn(item)
-        if h is None:
-            result.append(item)
-        elif h in seen:
-            removed += 1
-        else:
-            seen.add(h)
-            result.append(item)
-    return result, removed
-
-
-# --- Directory dedup scanning ---
-
 PLAN_FILENAME = "_dupes_plan.json"
 
 
@@ -235,7 +203,7 @@ def scan_directory(directory: Path) -> dict:
     for json_path in json_files:
         if "/logs/" in str(json_path) or json_path.name.startswith("_"):
             continue
-        if json_path.name.endswith((".reconciliation.json", ".embeddings.json")):
+        if json_path.name.endswith(".reconciliation.json"):
             continue
         if any(part.startswith("_dupes") for part in json_path.parts):
             continue
@@ -243,7 +211,7 @@ def scan_directory(directory: Path) -> dict:
         try:
             with open(json_path, "r", encoding="utf-8") as f:
                 data = json.load(f)
-        except Exception:
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError):
             continue
 
         scanned += 1

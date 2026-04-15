@@ -8,6 +8,8 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Iterator
 
+from pydantic import ValidationError
+
 from papertrail.models import DocumentMetadata, clean_enum_string
 from papertrail.naming import file_name_from_metadata
 from papertrail.runtime import Runtime
@@ -24,6 +26,10 @@ except ImportError:
     def _load_json_fast(path: Path) -> dict:
         with open(path, "r", encoding="utf-8") as handle:
             return json.load(handle)
+
+
+_JSON_LOAD_EXCEPTIONS = (OSError, UnicodeDecodeError, ValueError)
+_SIDECAR_EXCEPTIONS = _JSON_LOAD_EXCEPTIONS + (ValidationError,)
 
 
 class CanonicalRegistry:
@@ -51,7 +57,7 @@ class CanonicalRegistry:
         for json_path in self.repository.sidecar_paths(root):
             try:
                 data = _load_json_fast(json_path)
-            except Exception:
+            except _JSON_LOAD_EXCEPTIONS:
                 continue
             document_type = data.get("document_type")
             if isinstance(document_type, str) and document_type.strip() and document_type != "$UNKNOWN$":
@@ -178,7 +184,7 @@ class DocumentRepository:
         for json_path in iterator:
             try:
                 yield json_path, self.load_metadata(json_path, validate=validate)
-            except Exception:
+            except _SIDECAR_EXCEPTIONS:
                 continue
 
     def load_sidecars_parallel(
@@ -196,7 +202,7 @@ class DocumentRepository:
         def _load_one(json_path: Path) -> tuple[Path, dict] | None:
             try:
                 return json_path, _load_json_fast(json_path)
-            except Exception:
+            except _JSON_LOAD_EXCEPTIONS:
                 return None
 
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
@@ -211,7 +217,7 @@ class DocumentRepository:
         for json_path, data in iterator:
             try:
                 results.append((json_path, DocumentMetadata.model_validate(data)))
-            except Exception:
+            except ValidationError:
                 continue
         return results
 
@@ -333,7 +339,7 @@ class DocumentRepository:
             data = None
             try:
                 data = self.load_metadata(json_path)
-            except Exception:
+            except _SIDECAR_EXCEPTIONS:
                 pass
 
             files_to_move = [json_path]
@@ -342,7 +348,7 @@ class DocumentRepository:
                 files_to_move.append(companion)
 
             stem = json_path.stem
-            for extra_suffix in (".embeddings.json", ".reconciliation.json"):
+            for extra_suffix in (".reconciliation.json",):
                 extra = json_path.parent / f"{stem}{extra_suffix}"
                 if extra.exists():
                     files_to_move.append(extra)

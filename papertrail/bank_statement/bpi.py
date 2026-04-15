@@ -1,20 +1,18 @@
-"""BPI (Banco BPI) bank statement parser.
-
-Parses XLSX exports from BPI Net Empresas (business banking portal).
-Sheet name: "Download de MOVIMENTOS"
-Row 7: account & currency (e.g., "TEST-ACCOUNT-BETA-2 (EUR)")
-Row 18: column headers
-Row 19+: transaction data
-"""
+"""BPI bank statement parser."""
 
 import re
-from datetime import datetime
 from pathlib import Path
-from typing import Optional
 
 import openpyxl
 
-from papertrail.bank_statement.models import BankFormat, BankStatementData
+from papertrail.bank_statement.models import (
+    BankFormat,
+    BankStatementData,
+    BankTransactionRecord,
+    parse_bank_amount,
+    parse_bank_date,
+    parse_bank_date_cell,
+)
 from papertrail.logging_utils import get_logger
 from papertrail.utils import strip_diacritics
 
@@ -26,6 +24,7 @@ _HEADER_ROW = 18
 _DATA_START_ROW = 19
 
 _EXPECTED_HEADERS = {"data mov.", "descricao do movimento", "valor em eur"}
+_DATE_FORMATS = ("%d-%m-%Y", "%d/%m/%Y")
 
 
 def can_parse(ws) -> bool:
@@ -38,20 +37,11 @@ def can_parse(ws) -> bool:
     return _EXPECTED_HEADERS.issubset(headers)
 
 
-def _parse_date_str(value: str) -> Optional[str]:
-    """Parse DD-MM-YYYY to YYYY-MM-DD."""
-    if not value or not value.strip():
-        return None
-    s = value.strip()
-    for fmt in ("%d-%m-%Y", "%d/%m/%Y"):
-        try:
-            return datetime.strptime(s, fmt).strftime("%Y-%m-%d")
-        except ValueError:
-            continue
-    return None
+def _parse_date_str(value: str) -> str | None:
+    return parse_bank_date(value, _DATE_FORMATS)
 
 
-def parse(xlsx_path: Path) -> Optional[BankStatementData]:
+def parse(xlsx_path: Path) -> BankStatementData | None:
     """Parse a BPI bank statement XLSX."""
     wb = openpyxl.load_workbook(xlsx_path, data_only=True)
     ws = wb.active
@@ -60,7 +50,6 @@ def parse(xlsx_path: Path) -> Optional[BankStatementData]:
         wb.close()
         return None
 
-    # Row 7, column 3: account & currency (e.g., "TEST-ACCOUNT-BETA-2 (EUR)")
     account_raw = str(ws.cell(row=7, column=3).value or "").strip()
     m = re.match(r"([\d\-.]+)\s*\((\w+)\)", account_raw)
     if m:
@@ -70,11 +59,10 @@ def parse(xlsx_path: Path) -> Optional[BankStatementData]:
         account_number = account_raw
         currency = "EUR"
 
-    # Scan transaction rows (19+) for dates and count
     dates = []
     transaction_count = 0
     for row in ws.iter_rows(min_row=_DATA_START_ROW, max_col=4):
-        cell_val = row[0].value  # Column A: "Data Mov."
+        cell_val = row[0].value
         if cell_val is None:
             continue
         date_str = str(cell_val).strip()
@@ -110,35 +98,11 @@ def parse(xlsx_path: Path) -> Optional[BankStatementData]:
     )
 
 
-def _parse_date_cell(value) -> Optional[str]:
-    """Parse a date cell value (datetime object or string) to YYYY-MM-DD."""
-    if value is None:
-        return None
-    if isinstance(value, datetime):
-        return value.strftime("%Y-%m-%d")
-    return _parse_date_str(str(value))
+def _parse_date_cell(value) -> str | None:
+    return parse_bank_date_cell(value, _DATE_FORMATS)
 
 
-def _parse_amount(value) -> Optional[float]:
-    """Parse an amount cell value, handling European comma decimal format."""
-    if value is None:
-        return None
-    try:
-        return float(value)
-    except (ValueError, TypeError):
-        pass
-    try:
-        return float(str(value).replace(",", "."))
-    except (ValueError, TypeError):
-        return None
-
-
-def load_transactions(xlsx_path: Path) -> Optional[list[dict]]:
-    """Load transactions from a BPI bank statement.
-
-    Returns list of transaction dicts, or None if not a recognized format.
-    BPI has no "treated" or "notes" columns — all transactions are included.
-    """
+def load_transactions(xlsx_path: Path) -> list[BankTransactionRecord] | None:
     wb = openpyxl.load_workbook(xlsx_path, data_only=True)
     ws = wb.active
 
@@ -148,10 +112,10 @@ def load_transactions(xlsx_path: Path) -> Optional[list[dict]]:
 
     transactions = []
     for row in ws.iter_rows(min_row=_DATA_START_ROW, max_col=4):
-        if row[0].value is None:  # Data Mov. column A
+        if row[0].value is None:
             continue
 
-        amount = _parse_amount(row[3].value)
+        amount = parse_bank_amount(row[3].value)
         if amount is None:
             continue
 

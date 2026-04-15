@@ -10,7 +10,7 @@ from pathlib import Path
 
 import fitz  # PyMuPDF
 
-from papertrail.config import load_profile
+from papertrail.config import ConfigError, load_profile
 from papertrail.repository import DocumentRepository
 from papertrail.runtime import runtime_from_profile
 
@@ -19,7 +19,7 @@ from papertrail.runtime import runtime_from_profile
 def _load_profile(profile_name: str):
     try:
         return load_profile(profile_name)
-    except Exception:
+    except ConfigError:
         return None
 
 
@@ -163,10 +163,7 @@ def render_document_preview(doc_path: str | Path, page_num: int = 0) -> tuple[st
 
 def launch_tool(initial_tab: str) -> None:
     module_name = initial_tab.replace("-", "_")
-    try:
-        module = importlib.import_module(f"tools.{module_name}")
-    except ModuleNotFoundError:
-        module = importlib.import_module(module_name)
+    module = importlib.import_module(f"tools.{module_name}")
 
     css = "\n".join(
         part for part in (FULLSCREEN_CSS, getattr(module, "_CSS", "")) if part
@@ -199,7 +196,6 @@ FULLSCREEN_CSS = """
 """
 
 FULLSCREEN_JS = """
-/* Fullscreen image on click */
 document.addEventListener('click', function(e) {
     var img = e.target.closest('.preview-img');
     if (!img) return;
