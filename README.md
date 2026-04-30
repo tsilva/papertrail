@@ -1,161 +1,65 @@
-# papertrail
+<div align="center">
+  <img src="./logo.png" alt="papertrail" width="220" />
 
-AI-powered document classification and organization for PDFs, images, and bank-statement XLSX files.
+  **🧾 Sort documents into sidecar-backed order 🧾**
+</div>
 
-papertrail preserves a simple public contract:
+papertrail is a Python CLI for classifying, deduplicating, renaming, exporting, and reconciling personal or business documents. It handles PDFs with a vision LLM through OpenRouter, image files converted to PDF, and supported bank-statement XLSX exports with deterministic parsers.
 
-- Typer CLI commands in [`main.py`](/Users/tsilva/repos/tsilva/papertrail/main.py)
-- profile YAML under `~/.config/papertrail/profiles/<name>/profile.yaml`
-- sidecar JSON as the source of truth
-- deterministic file naming from metadata
-- Gradio tools in [`tools/browse.py`](/Users/tsilva/repos/tsilva/papertrail/tools/browse.py), [`tools/dedupe.py`](/Users/tsilva/repos/tsilva/papertrail/tools/dedupe.py), and [`tools/review.py`](/Users/tsilva/repos/tsilva/papertrail/tools/review.py)
+The processed folder contains the document files and authoritative `.json` sidecars. Filenames are derived from sidecar metadata, while `sync`, `check`, and `rename` repair the collection when metadata changes.
 
 ## Install
 
-papertrail requires Python 3.12+.
+papertrail requires Python 3.12+, `uv`, and an OpenRouter API key for LLM classification.
 
 ```bash
 git clone https://github.com/tsilva/papertrail.git
 cd papertrail
-uv pip install -e .
-```
-
-For local development and tests:
-
-```bash
+uv venv --python 3.12
+source .venv/bin/activate
 uv pip install -e '.[dev]'
-.venv/bin/python -m pytest -q
+mkdir -p ~/.config/papertrail/profiles/personal
+cp profile.yaml.example ~/.config/papertrail/profiles/personal/profile.yaml
 ```
 
-## Configure
-
-papertrail uses profile-based configuration. Create a profile at:
-
-```text
-~/.config/papertrail/profiles/<name>/profile.yaml
-```
-
-Example:
-
-```yaml
-profile:
-  name: "personal"
-  description: "Personal configuration"
-  tax_number: "TESTOWNER"
-
-paths:
-  raw:
-    - "/Users/you/Documents/papertrail/raw"
-  processed: "/Users/you/Documents/papertrail/processed"
-  export: "/Users/you/Documents/papertrail/export"
-
-openrouter:
-  model_id: "google/gemini-2.5-flash"
-  api_key: "YOUR_OPENROUTER_KEY"
-
-gmail:
-  enabled: false
-
-nif_api:
-  enabled: true
-```
-
-Full profile documentation lives in [`profiles/README.md`](/Users/tsilva/repos/tsilva/papertrail/profiles/README.md).
-
-## Run
-
-Use either the entrypoint or `python3 main.py`:
+Edit `~/.config/papertrail/profiles/personal/profile.yaml` with your raw, processed, export, and OpenRouter settings, then run:
 
 ```bash
 papertrail --profile personal pipeline
-python3 main.py --profile personal pipeline
 ```
 
-`--profile` is required for every command.
-
-Core commands:
-
-| Command | Purpose |
-|---|---|
-| `pipeline` | Full ingest -> classify -> organize workflow |
-| `extract` | Process new PDFs, images, and XLSX files from raw folders |
-| `sync` | Rebuild or repair metadata from sidecars and companions |
-| `rename` | Rename document files from sidecar JSON |
-| `check` | Backfill missing metadata and audit integrity |
-| `reconcile` | Reconcile bank statements against exported documents |
-| `review` | Launch the review UI for existing reconciliation sidecars |
-| `gmail` | Download Gmail attachments into raw folders |
-| `archive` | Move documents by `hash_file` digest into `_archived/` |
-| `export excel` | Export metadata to an Excel workbook |
-| `export dates` | Export files into `YYYY-MM` folders |
-| `export copy` | Copy files matching a pattern |
-
-Examples:
+## Commands
 
 ```bash
-python3 main.py --profile personal extract
-python3 main.py --profile personal sync --all-unknown
-python3 main.py --profile personal check --verify-hashes
-python3 main.py --profile personal export excel --output /tmp/processed_files.xlsx
-python3 main.py --profile personal export copy --pattern 2026-01 --dest /tmp/january
-python3 main.py --profile personal reconcile
-papertrail --profile personal review
+papertrail --profile personal pipeline                         # ingest, classify, export, reconcile
+papertrail --profile personal extract                          # process new raw PDFs, images, and XLSX files
+papertrail --profile personal sync --all-unknown               # reprocess unknown metadata
+papertrail --profile personal check --verify-hashes            # audit metadata and hashes
+papertrail --profile personal rename                           # rename files from sidecar JSON
+papertrail --profile personal reconcile                        # reconcile exported documents to bank rows
+papertrail --profile personal review                           # open reconciliation review UI
+papertrail --profile personal gmail --months 2                 # download Gmail attachments
+papertrail --profile personal export excel --output /tmp/docs.xlsx
+papertrail --profile personal export dates --base-dir /tmp/export
+papertrail --profile personal export copy --pattern 2026-01 --dest /tmp/january
+.venv/bin/python -m pytest -q                                  # run tests
 ```
-
-## Supported Inputs
-
-- PDF documents classified with a vision LLM
-- PNG, JPG, JPEG, TIFF, BMP, and WebP images converted to PDF on ingest
-- XLSX bank statements classified deterministically
-- Gmail attachments
-- mbox attachments
-- compressed archives discovered in raw folders via `unarch`
-
-## Invariants
-
-These are intentionally preserved:
-
-1. Raw extracted values are stored in `*_raw` fields.
-2. Deduplication uses `hash_content`; filenames use `hash_file`.
-3. `$UNKNOWN$` is the only fallback sentinel.
-4. QR metadata overrides LLM metadata.
-5. Sidecar JSON is authoritative; `rename` fixes filenames from metadata.
-
-## Outputs
-
-Document filenames follow:
-
-```text
-YYYY-MM-DD - document-type - issuing-party - [title] - [amount currency] - hash_file.ext
-```
-
-Examples:
-
-```text
-2025-01-02 - invoice - anthropic - claude api - 120 eur - a1b2c3d4.pdf
-2026-01-01 - bank-statement - millennium-bcp - TEST-ACCOUNT-ALPHA - a1b2c3d4.xlsx
-```
-
-Reconciliation writes a sidecar next to each bank statement:
-
-```text
-2026-01-01 - bank-statement - millennium-bcp - TEST-ACCOUNT-ALPHA - a1b2c3d4.reconciliation.json
-```
-
-## Gradio Tools
-
-Run the local review tools directly:
-
-```bash
-python3 tools/browse.py
-python3 tools/dedupe.py
-python3 tools/review.py
-```
-
-`papertrail review` only opens the Review tab against the existing `.reconciliation.json` sidecars in the active export folder. To generate or refresh reconciliation output, use `papertrail reconcile`.
 
 ## Notes
 
-- QR extraction requires `pyzbar` and the system `zbar` library.
-- Gmail requires credentials under `~/.config/papertrail/credentials/`.
-- Logs are written under `{processed}/logs/`.
+- Profiles live under `~/.config/papertrail/profiles/<name>/profile.yaml`.
+- Caches live under `~/.config/papertrail/cache/`; Gmail credentials live under `~/.config/papertrail/credentials/`.
+- Logs are written to `{processed}/logs/` for extraction, sync, pipeline, and classification failures.
+- QR extraction requires the `pyzbar` package and the system `zbar` library.
+- Duplicate detection uses `hash_content`; filenames use `hash_file`, so visually identical PDFs can still keep distinct byte-based names.
+- `$UNKNOWN$` is the fallback sentinel for unrecognized metadata.
+- Sidecar JSON is the source of truth. If a filename and sidecar disagree, `rename` fixes the filename.
+- Local Gradio tools can be run directly with `python tools/browse.py`, `python tools/dedupe.py`, and `python tools/review.py`.
+
+## Architecture
+
+![papertrail architecture diagram](./architecture.png)
+
+## License
+
+[MIT](LICENSE)
