@@ -26,9 +26,26 @@ jobs:
         with:
           cache: true
       - name: Install system dependencies
-        run: sudo apt-get update && sudo apt-get install -y libzbar0
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libglib2.0-0 libgl1 libzbar0
       - name: Run tests
-        run: uv run --extra dev pytest
+        shell: bash
+        run: |
+          set +e
+          uv run --extra dev python -m pytest --tb=short 2>&1 | tee pytest.log
+          status=${PIPESTATUS[0]}
+          if [ "${status}" -ne 0 ]; then
+            {
+              echo "### Pytest failure"
+              echo '```text'
+              tail -n 120 pytest.log
+              echo '```'
+            } >> "${GITHUB_STEP_SUMMARY}"
+            message="$(tail -n 40 pytest.log | perl -0pe 's/%/%25/g; s/\r/%0D/g; s/\n/%0A/g')"
+            echo "::error title=Pytest failed::${message}"
+            exit "${status}"
+          fi
 
   publish:
     needs: [test]
