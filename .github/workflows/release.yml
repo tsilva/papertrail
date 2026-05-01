@@ -25,6 +25,8 @@ jobs:
         uses: astral-sh/setup-uv@v4
         with:
           cache: true
+      - name: Install system dependencies
+        run: sudo apt-get update && sudo apt-get install -y libzbar0
       - name: Run tests
         run: uv run --extra dev pytest
 
