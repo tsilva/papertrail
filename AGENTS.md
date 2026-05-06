@@ -370,7 +370,7 @@ python main.py extract /path/to/processed  # Auto-uses default profile if availa
 
 ### Export Prefix Rules with Profile Variables
 
-Export match rules support `${profile.*}` variable syntax to reference profile-level configuration. This enables distinguishing vendor invoices (VND — you issued them) from company invoices (CMP — you received them) by comparing `issuer_tax_number` against the profile owner's tax number. Rules are **first-match-wins**. Match patterns support trailing wildcards (`bank-*`), numeric comparison operators (`>1`, `>=10`, `<5`, `<=100`, `!=0`), and `${profile.*}` variable substitution.
+Export match rules support `${profile.*}` variable syntax to reference profile-level configuration. This enables distinguishing vendor invoices (VND — you issued them) from company invoices (CMP — you received them) by comparing `issuer_tax_number` against the profile owner's tax number. Rules are **first-match-wins**. Match patterns support trailing wildcards (`bank-*`), numeric comparison operators (`>1`, `>=10`, `<5`, `<=100`, `!=0`), `${profile.*}` variable substitution, nested fields (`qrcode.qr_type`), and the derived boolean `has_qrcode` (true when the document or any sub-document has QR metadata).
 
 ```yaml
 profile:
@@ -390,6 +390,11 @@ export:
           issuing_party: "utility-provider"
           page_count: ">1"
         prefix: "EXC_"      # Multi-page Utility Provider invoices
+      - match:
+          document_type: "invoice*"
+          issuing_party: "shared-toll"
+          has_qrcode: false
+        prefix: "EXC_"      # Shared Toll invoice-like summaries without QR
       - match:
           document_type: "invoice"
         prefix: "CMP_"      # Someone else issued it

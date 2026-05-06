@@ -19,8 +19,22 @@ class RuleEngine:
         self.profile = profile
         self.profile_context = profile_context or {}
 
+    def metadata_has_qrcode(self, metadata: dict) -> bool:
+        """Return true when a document or any sub-document has QR metadata."""
+        if metadata.get("qrcode"):
+            return True
+        sub_documents = metadata.get("sub_documents")
+        if not isinstance(sub_documents, list):
+            return False
+        return any(
+            isinstance(sub_doc, dict) and bool(sub_doc.get("qrcode"))
+            for sub_doc in sub_documents
+        )
+
     def get_nested_value(self, metadata: dict, key: str):
         """Get a nested value using dot notation."""
+        if key == "has_qrcode":
+            return self.metadata_has_qrcode(metadata)
         current = metadata
         for part in key.split("."):
             if not isinstance(current, dict) or part not in current:
@@ -37,12 +51,22 @@ class RuleEngine:
         key = pattern[len("${profile."):-1]
         return self.profile_context.get(key, pattern)
 
-    def match_value(self, actual, pattern: str) -> bool:
+    def match_value(self, actual, pattern: object) -> bool:
         """Match a value against a wildcard or numeric pattern."""
         if actual is None:
             return False
 
-        pattern = str(self.resolve_profile_value(pattern))
+        resolved_pattern = self.resolve_profile_value(pattern)
+        if isinstance(actual, bool) or isinstance(resolved_pattern, bool):
+            if isinstance(resolved_pattern, bool):
+                expected_bool = resolved_pattern
+            elif isinstance(resolved_pattern, str) and resolved_pattern.lower() in {"true", "false"}:
+                expected_bool = resolved_pattern.lower() == "true"
+            else:
+                return False
+            return bool(actual) is expected_bool
+
+        pattern = str(resolved_pattern)
         for operator in (">=", "<=", "!=", ">", "<"):
             if pattern.startswith(operator):
                 try:

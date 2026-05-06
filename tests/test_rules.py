@@ -10,6 +10,8 @@ class RuleEngineTests(unittest.TestCase):
         self.assertTrue(engine.match_value(12, ">=10"))
         self.assertTrue(engine.match_value(4, "<5"))
         self.assertFalse(engine.match_value(4, ">5"))
+        self.assertTrue(engine.match_value(False, False))
+        self.assertTrue(engine.match_value(True, "true"))
 
     def test_match_value_supports_wildcards_and_profile_variables(self):
         engine = RuleEngine(profile_context={"tax_number": "TESTOWNER"})
@@ -37,6 +39,72 @@ class RuleEngineTests(unittest.TestCase):
         engine = RuleEngine(profile_context={"tax_number": "TESTOWNER"})
         metadata = {"document_type": "invoice", "issuer_tax_number": "TESTOWNER"}
         self.assertEqual(engine.evaluate_export_prefix(metadata, file_mappings=file_mappings), "VND_")
+
+    def test_has_qrcode_matches_parent_and_sub_documents(self):
+        engine = RuleEngine()
+        self.assertFalse(
+            engine.get_nested_value({"qrcode": None, "sub_documents": None}, "has_qrcode")
+        )
+        self.assertTrue(
+            engine.get_nested_value(
+                {"qrcode": {"qr_type": "portuguese_invoice"}}, "has_qrcode"
+            )
+        )
+        self.assertTrue(
+            engine.get_nested_value(
+                {
+                    "qrcode": None,
+                    "sub_documents": [{"qrcode": {"qr_type": "portuguese_invoice"}}],
+                },
+                "has_qrcode",
+            )
+        )
+
+    def test_export_prefix_can_distinguish_via_verde_without_qr(self):
+        file_mappings = SimpleNamespace(
+            rules=[
+                SimpleNamespace(
+                    match={
+                        "document_type": "invoice*",
+                        "issuing_party": "shared-toll",
+                        "has_qrcode": False,
+                    },
+                    prefix="EXC_",
+                ),
+                SimpleNamespace(match={"document_type": "invoice*"}, prefix="CMP_"),
+            ],
+            default_prefix="DIV_",
+        )
+        engine = RuleEngine()
+        base = {"document_type": "invoice", "issuing_party": "shared-toll"}
+        self.assertEqual(
+            engine.evaluate_export_prefix(
+                {**base, "qrcode": None, "sub_documents": None},
+                file_mappings=file_mappings,
+            ),
+            "EXC_",
+        )
+        self.assertEqual(
+            engine.evaluate_export_prefix(
+                {**base, "qrcode": {"qr_type": "portuguese_invoice"}},
+                file_mappings=file_mappings,
+            ),
+            "CMP_",
+        )
+
+    def test_export_prefix_excludes_investment_key_information_documents(self):
+        file_mappings = SimpleNamespace(
+            rules=[
+                SimpleNamespace(
+                    match={"document_type": "investment-key-information-document"},
+                    prefix="EXC_",
+                ),
+            ],
+            default_prefix="DIV_",
+        )
+        engine = RuleEngine()
+        metadata = {"document_type": "investment-key-information-document"}
+        self.assertEqual(engine.evaluate_export_prefix(metadata, file_mappings=file_mappings), "EXC_")
 
     def test_classify_transaction_uses_first_matching_rule(self):
         rules = [

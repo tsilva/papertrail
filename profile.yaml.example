@@ -65,6 +65,16 @@ export:
           issuer_tax_number: "${profile.tax_number}"
         prefix: "VND_"
       # Company: I received this invoice (someone else is the issuer)
+      # Documents with no QR can be separated from QR-backed invoices with has_qrcode.
+      - match:
+          document_type: "invoice*"
+          issuing_party: "shared-toll"
+          has_qrcode: false
+        prefix: "EXC_"
+      # Excluded investment disclosure documents
+      - match:
+          document_type: "investment-key-information-document"
+        prefix: "EXC_"
       - match:
           document_type: "invoice"
         prefix: "CMP_"
