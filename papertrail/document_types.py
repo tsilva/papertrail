@@ -8,6 +8,14 @@ from papertrail.models import clean_enum_string
 from papertrail.utils import strip_diacritics
 
 _BANK_NOTE_RAW_TYPES = {"movimento", "notadelancamento"}
+_INVESTMENT_ACQUISITION_SUMMARY_TERMS = {
+    "mapa",
+    "resumo",
+    "datas",
+    "valores",
+    "aquisicao",
+    "mobiliarios",
+}
 _LOAN_SIMULATION_RAW_TYPES = {"simulacao", "simulation"}
 _LOAN_SIMULATION_CONTEXT_TERMS = {"credito", "credit", "loan", "emprestimo", "financiamento"}
 
@@ -20,6 +28,8 @@ def normalize_document_type(
     """Apply deterministic document-type overrides before registry canonicalization."""
     if is_bank_note_raw_type(raw_value):
         return "bank-note"
+    if is_investment_acquisition_summary(raw_value, document_title):
+        return "investment-acquisition-summary"
     if is_loan_simulation(raw_value, document_title):
         return "loan-simulation"
     if value is None:
@@ -31,6 +41,14 @@ def is_bank_note_raw_type(raw_value: str | None) -> bool:
     if raw_value is None:
         return False
     return _compact_token(raw_value) in _BANK_NOTE_RAW_TYPES
+
+
+def is_investment_acquisition_summary(
+    raw_value: str | None,
+    document_title: str | None = None,
+) -> bool:
+    context = _word_tokens(f"{raw_value or ''} {document_title or ''}")
+    return _INVESTMENT_ACQUISITION_SUMMARY_TERMS.issubset(context)
 
 
 def is_loan_simulation(raw_value: str | None, document_title: str | None = None) -> bool:

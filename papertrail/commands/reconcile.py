@@ -34,7 +34,6 @@ _BANK_GENERATED_DOC_TYPES = {
 _STATEMENT_BANK_SCOPED_DOC_TYPES = {
     "bank-card-transaction",
     "bank-note",
-    "bank-transfer",
 }
 _STATEMENT_BANK_ISSUER_ALIASES = {
     "bancobpi": "bpi",
@@ -52,7 +51,7 @@ _PERIOD_TOKEN_RE = re.compile(
 _DATE_DMY_RE = re.compile(r"\b(\d{2})[/-](\d{2})[/-](20\d{2})\b")
 _DATE_DM_RE = re.compile(r"\b(\d{2})[/-](\d{2})\b")
 _BPI_TRANSFER_LINE_RE = re.compile(
-    r"\b(?:TRF\s+CR\s+SEPA\+\s+|TRANSFER[ÊE]NCIA\s+RECEBIDA\s+)(\d+)\b",
+    r"\b(?:TRF\s+CR\s+SEPA\+\s+|TRF\s+SEPA\+\s+INST\s+|TRANSFER[ÊE]NCIA\s+RECEBIDA\s+)(\d+)\b",
     re.IGNORECASE,
 )
 
@@ -588,7 +587,7 @@ def _parse_partial_movement_date(value: str, issue_date: Optional[date]) -> Opti
 def _extract_bpi_transfer_line_items(pdf_path: Path, data: dict) -> list[CandidateLineItem]:
     doc_type = (data.get("document_type") or "").lower()
     issuing_party = _normalize_for_match(data.get("issuing_party") or "")
-    if doc_type != "bank-transfer" or issuing_party != "bpi":
+    if doc_type not in {"bank-note", "bank-transfer"} or issuing_party != "bpi":
         return []
 
     try:
@@ -1307,6 +1306,11 @@ def _extract_period_tokens(text: str) -> set[str]:
 def _line_item_matches_transaction_context(txn: Transaction, line_item: CandidateLineItem) -> bool:
     if line_item.reference:
         if not re.search(rf"(?<!\d){re.escape(line_item.reference)}(?!\d)", txn.description):
+            return False
+
+    if line_item.category.startswith("bank-transfer") and line_item.date_issued:
+        txn_date = txn.date_posting or txn.date_value
+        if txn_date and not _same_calendar_month(txn_date, line_item.date_issued):
             return False
 
     txn_periods = _extract_period_tokens(txn.description)
