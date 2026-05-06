@@ -1,5 +1,5 @@
 <div align="center">
-  <img src="./logo.png" alt="papertrail" width="220" />
+  <img src="./logo.png" alt="papertrail" width="512" />
 
   **🧾 Sort documents into sidecar-backed order 🧾**
 </div>
