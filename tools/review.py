@@ -133,8 +133,16 @@ _CSS = """
 }
 .gradio-container > .main { flex: 1 !important; min-height: 0 !important; display: flex !important; flex-direction: column !important; }
 .gradio-container > .main > .wrap { flex: 1 !important; min-height: 0 !important; display: flex !important; flex-direction: column !important; }
-#content_row { flex: 1 !important; min-height: 0 !important; }
-#bank_html { flex: 1 !important; min-height: 0 !important; overflow-y: auto !important; }
+#content_row {
+    flex: 1 !important; min-height: 0 !important;
+    overflow: hidden !important;
+    max-width: 100% !important;
+}
+#bank_html {
+    flex: 1 !important; min-height: 0 !important;
+    overflow: auto !important;
+    max-width: 100% !important;
+}
 .file-link {
     color: #58a6ff; text-decoration: underline; cursor: pointer;
     background: none; border: none; font: inherit; padding: 0;
@@ -144,13 +152,25 @@ _CSS = """
     border: 1px solid var(--border-color-primary, #444);
     border-radius: 8px; overflow: hidden;
     margin-bottom: 16px;
+    max-width: 100%;
 }
 .bank-info {
     padding: 6px 16px; font-size: 13px;
     color: var(--body-text-color-subdued, #aaa);
 }
 .bank-info strong { color: var(--body-text-color, #ddd); }
-.txn-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.txn-table-wrap {
+    margin: 0 16px 12px;
+    max-width: 100%;
+    overflow-x: auto;
+}
+.txn-table {
+    width: 100%;
+    max-width: 100%;
+    table-layout: fixed;
+    border-collapse: collapse;
+    font-size: 13px;
+}
 .txn-table th {
     background: var(--table-even-background-fill, #333); padding: 6px 8px;
     text-align: left; position: sticky; top: 0; z-index: 1;
@@ -160,9 +180,35 @@ _CSS = """
 }
 .txn-table td {
     padding: 5px 8px; border-bottom: 1px solid var(--border-color-primary, #333);
+    min-width: 0;
     white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
 }
-.txn-table td:last-child { white-space: normal; word-break: break-all; }
+.txn-table .col-row { width: 44px; }
+.txn-table .col-date { width: 80px; }
+.txn-table .col-description { width: 260px; }
+.txn-table .col-amount { width: 92px; }
+.txn-table .col-rule { width: 180px; }
+.txn-table .col-status { width: 150px; }
+.txn-table .col-confidence { width: 64px; }
+.txn-table .col-files { width: auto; }
+.txn-table .col-party { width: 180px; }
+.txn-table .col-type { width: 120px; }
+.txn-table .wrap-cell {
+    white-space: normal;
+    overflow-wrap: anywhere;
+    word-break: normal;
+}
+.txn-table .file-cell p { margin: 0; }
+.txn-table .file-link {
+    display: inline-block;
+    max-width: 100%;
+    white-space: normal;
+    overflow-wrap: anywhere;
+    word-break: normal;
+    text-align: left;
+}
 #selected_file_bridge {
     position: fixed !important; left: -9999px !important;
     width: 1px !important; height: 1px !important;
@@ -444,13 +490,17 @@ def _render_unmatched_files_html(unmatched_files, file_index):
         f'</div>'
     )
 
-    parts.append('<div style="margin:0 16px 12px;">')
-    parts.append("<table class='txn-table'><thead><tr>")
-    for h, a in [
-        ("Date", "left"), ("Issuing Party", "left"), ("Type", "left"),
-        ("Amount", "right"), ("File", "left"),
+    parts.append('<div class="txn-table-wrap">')
+    parts.append("<table class='txn-table'><colgroup>")
+    for klass in ["col-date", "col-party", "col-type", "col-amount", "col-files"]:
+        parts.append(f'<col class="{klass}">')
+    parts.append("</colgroup><thead><tr>")
+    for h, a, klass in [
+        ("Date", "left", "date"), ("Issuing Party", "left", "party"),
+        ("Type", "left", "type"), ("Amount", "right", "amount"),
+        ("File", "left", "files"),
     ]:
-        parts.append(f'<th style="text-align:{a};">{h}</th>')
+        parts.append(f'<th class="col-{klass}" style="text-align:{a};">{h}</th>')
     parts.append("</tr></thead><tbody>")
 
     for uf in unmatched_files:
@@ -472,7 +522,7 @@ def _render_unmatched_files_html(unmatched_files, file_index):
         parts.append(f'<tr style="background:{bg};">')
         parts.append(f"<td>{date}</td><td>{party}</td><td>{doc_type}</td>")
         parts.append(f'<td style="text-align:right;font-family:monospace;">{amt_str}</td>')
-        parts.append(f"<td>{file_cell}</td>")
+        parts.append(f'<td class="wrap-cell file-cell">{file_cell}</td>')
         parts.append("</tr>")
 
     parts.append("</tbody></table></div>")
@@ -497,20 +547,28 @@ def _render_txn_table(recon):
             r["_st"] = "unclassified"
     rows.sort(key=lambda r: r.get("row", 0))
 
-    lines = ['<div style="margin:0 16px 12px;">']
-    lines.append("<table class='txn-table'><thead><tr>")
-    for h, a in [
-        ("Row", "left"), ("Date", "left"), ("Description", "left"),
-        ("Amount", "right"), ("Rule", "left"), ("Status", "left"), ("Conf.", "center"), ("Files", "left"),
+    lines = ['<div class="txn-table-wrap">']
+    lines.append("<table class='txn-table'><colgroup>")
+    for klass in [
+        "col-row", "col-date", "col-description", "col-amount",
+        "col-rule", "col-status", "col-confidence", "col-files",
     ]:
-        lines.append(f'<th style="text-align:{a};">{h}</th>')
+        lines.append(f'<col class="{klass}">')
+    lines.append("</colgroup><thead><tr>")
+    for h, a, klass in [
+        ("Row", "left", "row"), ("Date", "left", "date"),
+        ("Description", "left", "description"), ("Amount", "right", "amount"),
+        ("Rule", "left", "rule"), ("Status", "left", "status"),
+        ("Conf.", "center", "confidence"), ("Files", "left", "files"),
+    ]:
+        lines.append(f'<th class="col-{klass}" style="text-align:{a};">{h}</th>')
     lines.append("</tr></thead><tbody>")
 
     for r in rows:
         bg = _COLORS.get(r["_st"], "transparent")
         if r["_st"] == "incomplete":
             errs = r.get("errors", [])
-            lab = "; ".join(errs) if errs else _LABELS["incomplete"]
+            lab = f'Incomplete ({len(errs)})' if errs else _LABELS["incomplete"]
         else:
             lab = _LABELS.get(r["_st"], "")
         conf = r.get("confidence", 0)
@@ -535,7 +593,7 @@ def _render_txn_table(recon):
             for f in file_list:
                 sf = f.replace("'", "\\'")
                 fs += (
-                    f'<p style="margin:0;"><button class="file-link" onclick="selectReviewFile(\'{sf}\');'
+                    f'<p><button class="file-link" onclick="selectReviewFile(\'{sf}\');'
                     f'return false;">{html_lib.escape(f)}</button></p>'
                 )
         else:
@@ -543,14 +601,15 @@ def _render_txn_table(recon):
 
         lines.append(f'<tr style="background:{bg};" title="{tip}">')
         lines.append(f"<td>{r.get('row', '')}</td><td>{date}</td>")
-        lines.append(
-            f'<td style="max-width:250px;overflow:hidden;text-overflow:ellipsis;'
-            f'white-space:nowrap;">{desc}</td>'
-        )
+        lines.append(f"<td>{desc}</td>")
         lines.append(
             f'<td style="text-align:right;font-family:monospace;">{amt}</td>'
         )
-        lines.append(f"<td>{rule}</td><td>{lab}</td><td style='text-align:center;'>{cs}</td><td>{fs}</td>")
+        lines.append(
+            f"<td>{rule}</td><td>{lab}</td>"
+            f"<td style='text-align:center;'>{cs}</td>"
+            f'<td class="wrap-cell file-cell">{fs}</td>'
+        )
         lines.append("</tr>")
 
     lines.append("</tbody></table></div>")

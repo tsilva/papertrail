@@ -603,6 +603,189 @@ class CommandTests(unittest.TestCase):
         self.assertEqual(data["summary"]["incomplete"], 0)
         self.assertEqual(len(data["matches"][0]["files"]), 2)
 
+    def test_reconcile_does_not_reuse_exact_match_for_duplicate_amount_transactions(self):
+        self.runtime.profile.reconciliation.rules = [
+            {
+                "name": "bank-transfer-internal",
+                "match_description": ["TRF P/ Example Company - BPI"],
+                "required_types": {"bank-note": 1},
+                "shared_types": {},
+                "companions": [],
+                "expected_page_count": {},
+            },
+        ]
+
+        statement_path = self.export / "statement.xlsx"
+        create_millennium_statement(
+            statement_path,
+            period_start="01/04/2026",
+            period_end="30/04/2026",
+            transactions=[
+                {
+                    "date_posting": "23/04/2026",
+                    "date_value": "23/04/2026",
+                    "description": "TRF P/ Example Company - BPI",
+                    "amount": -5000.00,
+                    "currency": "EUR",
+                    "notes": "",
+                    "treated": "Nao",
+                },
+                {
+                    "date_posting": "23/04/2026",
+                    "date_value": "23/04/2026",
+                    "description": "TRF P/ Example Company - BPI",
+                    "amount": -5000.00,
+                    "currency": "EUR",
+                    "notes": "",
+                    "treated": "Nao",
+                },
+            ],
+        )
+
+        from papertrail.bank_statement import classify_bank_statement
+
+        statement_hash = hash_file_fast(statement_path)
+        statement_metadata = classify_bank_statement(statement_path, statement_hash)
+        self.repository.save_document(statement_path, statement_metadata)
+
+        bank_note_path = self.export / "bank-note.pdf"
+        create_pdf(bank_note_path, ["Bank note"])
+        self.repository.save_document(
+            bank_note_path,
+            self._metadata(
+                "bank5000",
+                "bank5000",
+                date_created="2026-04-23",
+                date_issued="2026-04-23",
+                date_updated="2026-04-23",
+                document_type="bank-note",
+                document_type_raw="Bank Note",
+                issuing_party="MillenniumBCP",
+                issuing_party_raw="MillenniumBCP",
+                document_title="Transferencia pontual a debito SEPA+",
+                total_amount=5000.00,
+            ),
+        )
+
+        reconcile(self.runtime, self.export, dry_run=False)
+
+        sidecar_path = statement_path.with_suffix(".reconciliation.json")
+        data = json.loads(sidecar_path.read_text(encoding="utf-8"))
+        self.assertEqual(data["summary"]["reconciled"], 1)
+        self.assertEqual(data["summary"]["incomplete"], 0)
+        self.assertEqual(data["summary"]["unmatched"], 1)
+        self.assertEqual(len(data["matches"]), 1)
+        self.assertEqual(data["matches"][0]["files"], ["bank-note.pdf"])
+        self.assertEqual(
+            sum(match["files"].count("bank-note.pdf") for match in data["matches"]),
+            1,
+        )
+
+    def test_reconcile_links_same_day_no_amount_contract_document(self):
+        self.runtime.profile.reconciliation.rules = [
+            {
+                "name": "loan-millennium-disbursement",
+                "match_description": ["CONCESS CRED EMPR"],
+                "required_types": {"bank-note|bank-transfer|contract-signup": [1, None]},
+                "shared_types": {},
+                "companions": [],
+                "expected_page_count": {"bank-note|bank-transfer": 1},
+            },
+        ]
+
+        statement_path = self.export / "statement.xlsx"
+        create_millennium_statement(
+            statement_path,
+            period_start="01/04/2026",
+            period_end="30/04/2026",
+            transactions=[
+                {
+                    "date_posting": "23/04/2026",
+                    "date_value": "23/04/2026",
+                    "description": "CONCESS CRED EMPR MN  NR.       LOANREF001",
+                    "amount": 25000.00,
+                    "currency": "EUR",
+                    "notes": "",
+                    "treated": "Nao",
+                },
+            ],
+        )
+
+        from papertrail.bank_statement import classify_bank_statement
+
+        statement_hash = hash_file_fast(statement_path)
+        statement_metadata = classify_bank_statement(statement_path, statement_hash)
+        self.repository.save_document(statement_path, statement_metadata)
+
+        bank_transfer_path = self.export / "bank-transfer.pdf"
+        contract_path = self.export / "contract-signup.pdf"
+        signature_report_path = self.export / "signature-report.pdf"
+        create_pdf(bank_transfer_path, ["Concess credito empr MN nr. LOANREF001"])
+        create_pdf(contract_path, ["Contrato de Credito Digital Finance Desk"])
+        create_pdf(signature_report_path, ["Relatorio final de recolha de assinaturas"])
+
+        self.repository.save_document(
+            bank_transfer_path,
+            self._metadata(
+                "bank2500",
+                "bank2500",
+                date_created="2026-04-23",
+                date_issued="2026-04-23",
+                date_updated="2026-04-23",
+                document_type="bank-transfer",
+                document_type_raw="Transferencia",
+                issuing_party="BPI",
+                issuing_party_raw="BPI",
+                document_title="Concess credito empr MN nr. LOANREF001",
+                total_amount=25000.00,
+            ),
+        )
+        self.repository.save_document(
+            contract_path,
+            self._metadata(
+                "contract",
+                "contract",
+                date_created="2026-04-23",
+                date_issued="2026-04-23",
+                date_updated="2026-04-23",
+                document_type="contract-signup",
+                document_type_raw="Contrato de Credito Digital Finance Desk",
+                issuing_party="millenniumbcp",
+                issuing_party_raw="Banco Comercial Portugues, S.A.",
+                document_title="Credito Digital Finance Desk",
+                total_amount=25000.00,
+            ),
+        )
+        self.repository.save_document(
+            signature_report_path,
+            self._metadata(
+                "sigrep01",
+                "sigrep01",
+                date_created="2026-04-23",
+                date_issued="2026-04-23",
+                date_updated="2026-04-23",
+                document_type="contract-signup",
+                document_type_raw="Contrato de Credito Digital Finance Desk",
+                issuing_party="millenniumbcp",
+                issuing_party_raw="Banco Comercial Portugues, S.A.",
+                document_title="Relatorio final de recolha de assinaturas",
+                total_amount=None,
+                total_amount_currency=None,
+            ),
+        )
+
+        reconcile(self.runtime, self.export, dry_run=False)
+
+        sidecar_path = statement_path.with_suffix(".reconciliation.json")
+        data = json.loads(sidecar_path.read_text(encoding="utf-8"))
+        self.assertEqual(data["summary"]["reconciled"], 1)
+        self.assertEqual(data["summary"]["incomplete"], 0)
+        self.assertEqual(
+            set(data["matches"][0]["files"]),
+            {"bank-transfer.pdf", "contract-signup.pdf", "signature-report.pdf"},
+        )
+        self.assertEqual(data["unmatched_files"], [])
+
     def test_reconcile_shared_matching_prefers_nearest_shared_document_per_signature(self):
         self.runtime.profile.reconciliation.rules = [
             {

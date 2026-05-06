@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Optional
+
+import fitz
 
 from papertrail.bank_statement import load_transactions as load_bank_statement_transactions
 from papertrail.document_types import normalize_document_type
@@ -22,11 +25,29 @@ logger = get_logger("reconcile")
 _AMOUNT_TOLERANCE = 0.01
 _DATE_WINDOW_DAYS = 30
 _BANK_GENERATED_DOC_TYPES = {
+    "bank-card-transaction",
     "bank-note",
     "bank-transfer",
     "bank-statement",
     "bank-investment",
 }
+_AMOUNT_LINE_RE = re.compile(r"^-?\d[\d\s.]*,\d{2}$")
+_PERIOD_TOKEN_RE = re.compile(
+    r"\b(JAN|FEV|MAR|ABR|MAI|JUN|JUL|AGO|SET|OUT|NOV|DEZ)\s+(20\d{2})\b"
+)
+
+
+@dataclass(frozen=True)
+class CandidateLineItem:
+    category: str
+    amount: float
+    label: str
+
+
+@dataclass(frozen=True)
+class MatchedLineItem:
+    candidate: "PDFCandidate"
+    line_item: CandidateLineItem
 
 
 @dataclass
@@ -58,6 +79,7 @@ class PDFCandidate:
     sub_doc_index: Optional[int] = None
     is_sub_document: bool = False
     exclude_from_matching: bool = False
+    line_items: list[CandidateLineItem] = field(default_factory=list)
 
     @property
     def candidate_id(self) -> str:
@@ -80,6 +102,7 @@ class MatchResult:
     method: str = ""
     confidence: float = 0.0
     reasoning: str = ""
+    line_items: list[MatchedLineItem] = field(default_factory=list)
 
 
 def _coerce_amount(value) -> Optional[float]:
@@ -102,6 +125,7 @@ def _build_candidate(
     sub_doc_index: Optional[int] = None,
     is_sub_document: bool = False,
     exclude_from_matching: bool = False,
+    line_items: list[CandidateLineItem] | None = None,
 ) -> PDFCandidate:
     return PDFCandidate(
         json_path=json_path,
@@ -119,6 +143,7 @@ def _build_candidate(
         sub_doc_index=sub_doc_index,
         is_sub_document=is_sub_document,
         exclude_from_matching=exclude_from_matching,
+        line_items=line_items or [],
     )
 
 
@@ -128,7 +153,7 @@ def _transaction_category(txn: Transaction, rules: list) -> str:
 
 def _serialize_match(match: MatchResult, *, errors: dict[int, list[str]], rules: list) -> dict:
     txn = match.transaction
-    return {
+    data = {
         "row": txn.row_number,
         "date": txn.date_posting or txn.date_value,
         "description": txn.description,
@@ -141,6 +166,17 @@ def _serialize_match(match: MatchResult, *, errors: dict[int, list[str]], rules:
         "files": [candidate.pdf_filename for candidate in match.pdf_candidates],
         "errors": errors.get(txn.row_number, []),
     }
+    if match.line_items:
+        data["line_items"] = [
+            {
+                "file": item.candidate.pdf_filename,
+                "category": item.line_item.category,
+                "label": item.line_item.label,
+                "amount": item.line_item.amount,
+            }
+            for item in match.line_items
+        ]
+    return data
 
 
 def _serialize_unmatched_transaction(txn: Transaction, rules: list) -> dict:
@@ -321,10 +357,122 @@ def _candidate_matches_patterns(candidate: PDFCandidate, patterns: list[str]) ->
     return any(engine.match_doc_type(doc_type, pattern) for pattern in patterns)
 
 
+def _parse_euro_amount_line(line: str) -> Optional[float]:
+    text = line.strip()
+    if not _AMOUNT_LINE_RE.fullmatch(text):
+        return None
+    try:
+        return float(text.replace(" ", "").replace(".", "").replace(",", "."))
+    except ValueError:
+        return None
+
+
+def _amounts_near(lines: list[str], index: int, *, before: int = 0, after: int = 0) -> list[float]:
+    start = max(0, index - before)
+    end = min(len(lines), index + after + 1)
+    amounts: list[float] = []
+    for line in lines[start:end]:
+        amount = _parse_euro_amount_line(line)
+        if amount is not None:
+            amounts.append(amount)
+    return amounts
+
+
+def _append_line_item(
+    line_items: list[CandidateLineItem],
+    seen: set[tuple[str, float, str]],
+    *,
+    category: str,
+    amount: float,
+    label: str,
+) -> None:
+    rounded = round(amount, 2)
+    key = (category, rounded, label)
+    if rounded <= 0 or key in seen:
+        return
+    seen.add(key)
+    line_items.append(CandidateLineItem(category=category, amount=rounded, label=label))
+
+
+def _extract_bpi_fee_invoice_line_items(pdf_path: Path, data: dict) -> list[CandidateLineItem]:
+    doc_type = (data.get("document_type") or "").lower()
+    issuing_party = _normalize_for_match(data.get("issuing_party") or "")
+    title = _normalize_for_match(data.get("document_title") or "")
+    if doc_type != "invoice" or issuing_party != "bpi":
+        return []
+    if "comissoes" not in title and "titulos" not in title:
+        return []
+
+    try:
+        with fitz.open(pdf_path) as pdf:
+            lines = [line.strip() for page in pdf for line in page.get_text().splitlines() if line.strip()]
+    except Exception as exc:
+        logger.debug(f"[LINE-ITEMS] Failed to read {pdf_path.name}: {exc}")
+        return []
+
+    normalized_lines = [strip_diacritics(line).upper() for line in lines]
+    line_items: list[CandidateLineItem] = []
+    seen: set[tuple[str, float, str]] = set()
+
+    for index, line in enumerate(normalized_lines):
+        if "MANUTENCAO DE CONTA VALOR NEGOCIOS" not in line:
+            continue
+        amounts = _amounts_near(lines, index, after=25)
+        gross = amounts[0] if amounts else None
+        base = amounts[3] if len(amounts) >= 4 else (amounts[1] if len(amounts) >= 2 else None)
+        if base is None:
+            continue
+        _append_line_item(
+            line_items,
+            seen,
+            category="bank-fee-maintenance",
+            amount=base,
+            label=lines[index],
+        )
+        if gross is not None and gross > base:
+            _append_line_item(
+                line_items,
+                seen,
+                category="bank-fee-stamp-duty",
+                amount=gross - base,
+                label=f"Stamp duty for {lines[index]}",
+            )
+
+    for index, line in enumerate(normalized_lines):
+        if "COMISSAO DEPOSITO E REGISTO VALORES MOBILIARIOS" not in line:
+            continue
+        amounts_before = [amount for amount in _amounts_near(lines, index, before=15) if 0 < amount <= 100]
+        if amounts_before:
+            _append_line_item(
+                line_items,
+                seen,
+                category="bank-custody-fee",
+                amount=amounts_before[-1],
+                label=lines[index],
+            )
+
+    if line_items:
+        logger.debug(
+            f"[LINE-ITEMS] {pdf_path.name}: "
+            f"{', '.join(f'{item.category}={item.amount:.2f}' for item in line_items)}"
+        )
+    return line_items
+
+
+def _extract_reconciliation_line_items(pdf_path: Path, data: dict) -> list[CandidateLineItem]:
+    return _extract_bpi_fee_invoice_line_items(pdf_path, data)
+
+
 def _candidate_matches_relevant_amounts(candidate: PDFCandidate, relevant_amounts: set[float]) -> bool:
-    if candidate.total_amount is None:
-        return False
-    return any(abs(candidate.total_amount - amount) <= _AMOUNT_TOLERANCE for amount in relevant_amounts)
+    amounts = []
+    if candidate.total_amount is not None:
+        amounts.append(candidate.total_amount)
+    amounts.extend(item.amount for item in candidate.line_items)
+    return any(
+        abs(candidate_amount - amount) <= _AMOUNT_TOLERANCE
+        for candidate_amount in amounts
+        for amount in relevant_amounts
+    )
 
 
 def _candidate_matches_shared_requirements(
@@ -457,6 +605,7 @@ def _load_pdf_candidates(
             page_count=data.get("page_count"),
             file_extension=doc_path.suffix.lower(),
             exclude_from_matching=excluded,
+            line_items=_extract_reconciliation_line_items(doc_path, data),
         )
         if candidate.candidate_id in seen_candidate_ids:
             continue
@@ -568,6 +717,18 @@ def _is_same_month_shared_candidate(rule, txn_date: Optional[str], candidate: PD
     return _same_calendar_month(txn_date, candidate.date_issued)
 
 
+def _candidate_matches_shared_filters(rule, type_pattern: str, candidate: PDFCandidate) -> bool:
+    filters = getattr(rule, "shared_filters", {}).get(type_pattern, {})
+    if not filters:
+        return True
+
+    engine = RuleEngine()
+    for field_name, expected in filters.items():
+        if not engine.match_value(getattr(candidate, field_name, None), expected):
+            return False
+    return True
+
+
 def _prune_rule_aware_exact_candidates(
     txn: Transaction,
     candidates: list[PDFCandidate],
@@ -649,6 +810,8 @@ def _phase1_deterministic_match(
         amount_matches: dict[tuple[str, str], tuple[PDFCandidate, int, int]] = {}
         txn_date = txn.date_posting or txn.date_value
         for cand in candidates:
+            if cand.candidate_id in used_candidates:
+                continue
             if cand.total_amount is None:
                 continue
             if abs(abs_amount - cand.total_amount) <= _AMOUNT_TOLERANCE:
@@ -705,6 +868,170 @@ def _phase1_deterministic_match(
 
     remaining = [candidate for candidate in candidates if candidate.candidate_id not in used_candidates]
     return matches, unmatched, remaining
+
+
+def _link_line_item_documents(
+    all_matches: list[MatchResult],
+    final_unmatched: list[Transaction],
+    all_candidates: list[PDFCandidate],
+    rules: list,
+) -> tuple[list[MatchResult], list[Transaction], set[str]]:
+    line_item_candidate_ids: set[str] = set()
+    matched_by_row = {match.transaction.row_number: match for match in all_matches}
+    still_unmatched_rows: set[int] = {txn.row_number for txn in final_unmatched}
+    newly_matched: list[MatchResult] = []
+
+    for txn in list(final_unmatched) + [match.transaction for match in all_matches]:
+        category, rule = _classify_transaction(txn, rules)
+        if rule is None:
+            continue
+        txn_date = txn.date_posting or txn.date_value
+        abs_amount = abs(txn.amount)
+
+        best_match: tuple[PDFCandidate, CandidateLineItem, tuple[int, bool, int]] | None = None
+        for candidate in all_candidates:
+            if not candidate.line_items:
+                continue
+            rank = _candidate_date_rank(txn_date, candidate)
+            if rank is None:
+                continue
+            for line_item in candidate.line_items:
+                if line_item.category != category:
+                    continue
+                if abs(line_item.amount - abs_amount) > _AMOUNT_TOLERANCE:
+                    continue
+                if not _line_item_matches_transaction_context(txn, line_item):
+                    continue
+                current = (candidate, line_item, rank)
+                if best_match is None or (rank, candidate.pdf_filename, line_item.label) < (
+                    best_match[2],
+                    best_match[0].pdf_filename,
+                    best_match[1].label,
+                ):
+                    best_match = current
+
+        if best_match is None:
+            continue
+
+        candidate, line_item, rank = best_match
+        line_item_candidate_ids.add(candidate.candidate_id)
+        matched_line_item = MatchedLineItem(candidate=candidate, line_item=line_item)
+        if txn.row_number in matched_by_row:
+            match = matched_by_row[txn.row_number]
+            existing_ids = {cand.candidate_id for cand in match.pdf_candidates}
+            if candidate.candidate_id not in existing_ids:
+                match.pdf_candidates.append(candidate)
+            if matched_line_item not in match.line_items:
+                match.line_items.append(matched_line_item)
+            if match.method == "exact":
+                match.reasoning = f"{match.reasoning}; line item match: {line_item.label} ({line_item.amount:.2f})"
+        elif txn.row_number in still_unmatched_rows:
+            new_match = MatchResult(
+                transaction=txn,
+                pdf_candidates=[candidate],
+                method="line-item",
+                confidence=1.0,
+                reasoning=(
+                    f"Line item match: {line_item.label} "
+                    f"{line_item.amount:.2f} ({rank[0]}d from invoice date)"
+                ),
+                line_items=[matched_line_item],
+            )
+            newly_matched.append(new_match)
+            matched_by_row[txn.row_number] = new_match
+            still_unmatched_rows.discard(txn.row_number)
+            logger.debug(
+                f"[LINE-ITEM-MATCH] Row {txn.row_number}: {txn.description[:50]} -> "
+                f"{candidate.pdf_filename} ({line_item.label}={line_item.amount:.2f})"
+            )
+
+    updated_matches = all_matches + newly_matched
+    updated_unmatched = [txn for txn in final_unmatched if txn.row_number in still_unmatched_rows]
+    return updated_matches, updated_unmatched, line_item_candidate_ids
+
+
+def _link_related_no_amount_documents(
+    all_matches: list[MatchResult],
+    all_candidates: list[PDFCandidate],
+    rules: list,
+) -> set[str]:
+    related_candidate_ids: set[str] = set()
+    claimed_candidate_ids = {
+        candidate.candidate_id
+        for match in all_matches
+        for candidate in match.pdf_candidates
+    }
+    engine = RuleEngine()
+
+    for match in all_matches:
+        _, rule = _classify_transaction(match.transaction, rules)
+        if rule is None:
+            continue
+        allowed_patterns = _rule_allowed_patterns(rule)
+        if not allowed_patterns:
+            continue
+
+        txn_date = match.transaction.date_posting or match.transaction.date_value
+        existing_ids = {candidate.candidate_id for candidate in match.pdf_candidates}
+        related_for_match: list[PDFCandidate] = []
+
+        anchors = [
+            candidate
+            for candidate in match.pdf_candidates
+            if candidate.total_amount is not None
+            and _candidate_matches_patterns(candidate, allowed_patterns)
+        ]
+        for anchor in anchors:
+            anchor_doc_type = engine.candidate_doc_type(anchor)
+            anchor_party = _normalize_for_match(anchor.issuing_party or "")
+            if not anchor_doc_type or not anchor_party or not anchor.date_issued:
+                continue
+
+            for candidate in sorted(all_candidates, key=lambda cand: cand.pdf_filename):
+                if candidate.candidate_id in existing_ids or candidate.candidate_id in claimed_candidate_ids:
+                    continue
+                if candidate.total_amount is not None:
+                    continue
+                if candidate.date_issued != anchor.date_issued:
+                    continue
+                if _candidate_date_rank(txn_date, candidate) is None:
+                    continue
+                candidate_doc_type = engine.candidate_doc_type(candidate)
+                if candidate_doc_type != anchor_doc_type:
+                    continue
+                if _normalize_for_match(candidate.issuing_party or "") != anchor_party:
+                    continue
+                if not _candidate_matches_patterns(candidate, allowed_patterns):
+                    continue
+
+                match.pdf_candidates.append(candidate)
+                existing_ids.add(candidate.candidate_id)
+                claimed_candidate_ids.add(candidate.candidate_id)
+                related_candidate_ids.add(candidate.candidate_id)
+                related_for_match.append(candidate)
+
+        if related_for_match:
+            related_names = ", ".join(candidate.pdf_filename for candidate in related_for_match)
+            match.reasoning = f"{match.reasoning}; related no-amount document(s): {related_names}"
+            logger.debug(
+                f"[RELATED-DOC] Row {match.transaction.row_number}: "
+                f"{', '.join(candidate.pdf_filename for candidate in related_for_match)}"
+            )
+
+    return related_candidate_ids
+
+
+def _extract_period_tokens(text: str) -> set[str]:
+    normalized = re.sub(r"[^A-Z0-9]+", " ", strip_diacritics(text).upper())
+    return {f"{month} {year}" for month, year in _PERIOD_TOKEN_RE.findall(normalized)}
+
+
+def _line_item_matches_transaction_context(txn: Transaction, line_item: CandidateLineItem) -> bool:
+    txn_periods = _extract_period_tokens(txn.description)
+    if not txn_periods:
+        return True
+    line_item_periods = _extract_period_tokens(line_item.label)
+    return not line_item_periods or bool(txn_periods & line_item_periods)
 
 
 def _format_candidate_for_llm(idx: int, cand: PDFCandidate) -> str:
@@ -914,6 +1241,8 @@ def _link_shared_documents(
                 if issuing_party_filter is not None and cand.issuing_party:
                     if _normalize_for_match(cand.issuing_party) != _normalize_for_match(issuing_party_filter):
                         continue
+                if not _candidate_matches_shared_filters(rule, type_pattern, cand):
+                    continue
                 rank = _candidate_date_rank(txn_date, cand)
                 if rank is None:
                     continue
@@ -1129,6 +1458,12 @@ def reconcile_single(
         matchable,
         rules,
     )
+    p1_matches, unmatched_txns, line_item_candidate_ids = _link_line_item_documents(
+        p1_matches,
+        unmatched_txns,
+        matchable,
+        rules,
+    )
     p2_matches = _phase2_llm_match(runtime, unmatched_txns, remaining_cands) if unmatched_txns and remaining_cands else []
     all_matches = p1_matches + p2_matches
 
@@ -1147,6 +1482,11 @@ def reconcile_single(
         matchable,
         rules,
     )
+    related_candidate_ids = _link_related_no_amount_documents(
+        all_matches,
+        matchable,
+        rules,
+    )
     _prune_unexpected_candidates(all_matches, rules)
 
     candidate_match_counts: dict[str, int] = {}
@@ -1160,7 +1500,13 @@ def reconcile_single(
                 for match in all_matches
                 for candidate in match.pdf_candidates
             )
-            if not is_sub_doc and candidate_id not in shared_candidate_ids and candidate_id not in companion_candidate_ids:
+            if (
+                not is_sub_doc
+                and candidate_id not in shared_candidate_ids
+                and candidate_id not in companion_candidate_ids
+                and candidate_id not in line_item_candidate_ids
+                and candidate_id not in related_candidate_ids
+            ):
                 logger.warning(f"[REDUNDANT-MATCH] {candidate_id} matched {count} transactions")
 
     matched_candidate_ids = {

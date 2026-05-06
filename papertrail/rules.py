@@ -7,6 +7,11 @@ from typing import Optional
 from papertrail.utils import strip_diacritics
 
 
+_DOC_TYPE_PATTERN_ALIASES = {
+    "bank-note": {"bank-card-transaction"},
+}
+
+
 class RuleEngine:
     """Unified rule evaluation across export and reconciliation."""
 
@@ -74,7 +79,9 @@ class RuleEngine:
             if alt.endswith("*"):
                 if doc_lower.startswith(alt[:-1]):
                     return True
-            elif doc_lower == alt:
+            elif doc_lower == alt or doc_lower in _DOC_TYPE_PATTERN_ALIASES.get(
+                alt, set()
+            ):
                 return True
         return False
 
@@ -166,9 +173,11 @@ class RuleEngine:
                 candidate_doc_type = self.candidate_doc_type(candidate)
                 if candidate_doc_type and candidate.page_count is not None:
                     for pattern, expected in rule.expected_page_count.items():
-                        if self.match_doc_type(candidate_doc_type, pattern) and candidate.page_count != expected:
+                        expected_counts = expected if isinstance(expected, list) else [expected]
+                        if self.match_doc_type(candidate_doc_type, pattern) and candidate.page_count not in expected_counts:
+                            expected_text = "/".join(str(count) for count in expected_counts)
                             errors.append(
-                                f"{candidate_doc_type} has {candidate.page_count} pages (expected {expected})"
+                                f"{candidate_doc_type} has {candidate.page_count} pages (expected {expected_text})"
                             )
 
         return errors

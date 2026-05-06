@@ -61,6 +61,7 @@ class PathsSettings(SettingsModel):
 
 RuleCardinality = int | list[int | None]
 ExportMatchValue = str | int | float | bool
+ExpectedPageCount = int | list[int]
 
 
 class OpenRouterSettings(SettingsModel):
@@ -94,8 +95,9 @@ class ReconciliationRule(SettingsModel):
     direction: str | None = None
     required_types: dict[str, RuleCardinality] = Field(default_factory=dict)
     shared_types: dict[str, str | None] = Field(default_factory=dict)
+    shared_filters: dict[str, dict[str, ExportMatchValue]] = Field(default_factory=dict)
     companions: list[str] = Field(default_factory=list)
-    expected_page_count: dict[str, int] = Field(default_factory=dict)
+    expected_page_count: dict[str, ExpectedPageCount] = Field(default_factory=dict)
 
 
 class ReconciliationSettings(SettingsModel):

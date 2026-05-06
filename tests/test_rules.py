@@ -22,6 +22,10 @@ class RuleEngineTests(unittest.TestCase):
         self.assertTrue(engine.match_doc_type("bank-note-extra", "bank-*"))
         self.assertFalse(engine.match_doc_type("receipt", "invoice|bank-*"))
 
+    def test_match_doc_type_treats_card_transactions_as_bank_notes(self):
+        engine = RuleEngine()
+        self.assertTrue(engine.match_doc_type("bank-card-transaction", "bank-note"))
+
     def test_evaluate_export_prefix_uses_first_match(self):
         file_mappings = SimpleNamespace(
             rules=[
@@ -42,6 +46,25 @@ class RuleEngineTests(unittest.TestCase):
         txn = SimpleNamespace(description="TRANSFER", amount=5)
         engine = RuleEngine()
         self.assertEqual(engine.classify_transaction(txn, rules)[0], "credit")
+
+    def test_validate_match_accepts_multiple_expected_page_counts(self):
+        rule = SimpleNamespace(
+            name="fee",
+            direction=None,
+            match_description=[],
+            required_types={"invoice": 1},
+            shared_types={},
+            expected_page_count={"invoice": [1, 2]},
+        )
+        txn = SimpleNamespace(description="FEE", amount=-1)
+        candidate = SimpleNamespace(
+            effective_document_type="invoice",
+            document_type="invoice",
+            pdf_filename="invoice.pdf",
+            page_count=2,
+        )
+        match = SimpleNamespace(transaction=txn, pdf_candidates=[candidate])
+        self.assertEqual(RuleEngine().validate_match(match, [rule]), [])
 
 
 if __name__ == "__main__":
