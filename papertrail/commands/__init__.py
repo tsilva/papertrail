@@ -5,6 +5,7 @@ from __future__ import annotations
 import fcntl
 import hashlib
 import io
+import json
 import os
 import re
 import shutil
@@ -33,6 +34,7 @@ from papertrail.mbox import extract_mbox_attachments
 from papertrail.models import DocumentMetadata, clean_enum_string
 from papertrail.naming import sanitize_filename_component
 from papertrail.pdf_merge import merge_all_pdfs
+from papertrail.reconciliation_groundtruth import GROUNDTRUTH_SUFFIX
 from papertrail.repository import DocumentRepository
 from papertrail.rules import RuleEngine
 from papertrail.runtime import Runtime
@@ -67,6 +69,135 @@ def _pipeline_step(console, label: str, action):
             raise
 
 
+def _load_json_dict(path: Path) -> dict:
+    with open(path, "r", encoding="utf-8") as handle:
+        data = json.load(handle)
+    return data if isinstance(data, dict) else {}
+
+
+def _statement_groundtruth_base_name(groundtruth_path: Path) -> str:
+    name = groundtruth_path.name
+    return name[: -len(GROUNDTRUTH_SUFFIX)] if name.endswith(GROUNDTRUTH_SUFFIX) else groundtruth_path.stem
+
+
+def _snapshot_reconciliation_groundtruth(export_date_dir: Path) -> list[dict]:
+    snapshots = []
+    if not export_date_dir.exists():
+        return snapshots
+
+    for groundtruth_path in export_date_dir.rglob(f"*{GROUNDTRUTH_SUFFIX}"):
+        base_name = _statement_groundtruth_base_name(groundtruth_path)
+        metadata_path = groundtruth_path.with_name(f"{base_name}.json")
+        metadata = {}
+        if metadata_path.exists():
+            try:
+                metadata = _load_json_dict(metadata_path)
+            except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+                metadata = {}
+
+        try:
+            payload = _load_json_dict(groundtruth_path)
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+            logger.warning(f"Could not preserve reconciliation approvals from {groundtruth_path.name}")
+            continue
+
+        snapshots.append(
+            {
+                "document_name": f"{base_name}.xlsx",
+                "hash_file": metadata.get("hash_file"),
+                "hash_content": metadata.get("hash_content"),
+                "payload": payload,
+            }
+        )
+    return snapshots
+
+
+def _reconciliation_groundtruth_backup_path(export_dir: Path, export_date: str) -> Path:
+    return export_dir / "_reconciliation_groundtruth" / f"{export_date}.json"
+
+
+def _load_reconciliation_groundtruth_backup(export_dir: Path, export_date: str) -> list[dict]:
+    backup_path = _reconciliation_groundtruth_backup_path(export_dir, export_date)
+    if not backup_path.exists():
+        return []
+    try:
+        data = json.loads(backup_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        logger.warning(f"Could not read reconciliation approval backup {backup_path}")
+        return []
+    return data if isinstance(data, list) else []
+
+
+def _save_reconciliation_groundtruth_backup(
+    export_dir: Path,
+    export_date: str,
+    snapshots: list[dict],
+) -> None:
+    if not snapshots:
+        return
+    backup_path = _reconciliation_groundtruth_backup_path(export_dir, export_date)
+    backup_path.parent.mkdir(parents=True, exist_ok=True)
+    backup_path.write_text(
+        json.dumps(snapshots, indent=2, ensure_ascii=False, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+
+def _restore_reconciliation_groundtruth(
+    snapshots: list[dict],
+    bank_statements: list[Path],
+) -> int:
+    if not snapshots:
+        return 0
+
+    by_hash = {}
+    by_name = {}
+    for snapshot in snapshots:
+        for key in (snapshot.get("hash_file"), snapshot.get("hash_content")):
+            if key:
+                by_hash[str(key)] = snapshot
+        by_name[snapshot.get("document_name")] = snapshot
+
+    restored = 0
+    for statement_path in bank_statements:
+        target_path = statement_path.with_suffix(GROUNDTRUTH_SUFFIX)
+        if target_path.exists():
+            continue
+
+        metadata = {}
+        metadata_path = statement_path.with_suffix(".json")
+        if metadata_path.exists():
+            try:
+                metadata = _load_json_dict(metadata_path)
+            except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+                metadata = {}
+
+        snapshot = None
+        for key in (metadata.get("hash_file"), metadata.get("hash_content")):
+            if key and str(key) in by_hash:
+                snapshot = by_hash[str(key)]
+                break
+        if snapshot is None:
+            snapshot = by_name.get(statement_path.name)
+        if snapshot is None:
+            continue
+
+        payload = dict(snapshot["payload"])
+        payload["source"] = statement_path.name
+        for approval in payload.get("approvals", []):
+            approval.setdefault("source_hint", {})["statement_file"] = statement_path.name
+        for approval in payload.get("unmatched_file_approvals", []):
+            approval.setdefault("source_hint", {})["statement_file"] = statement_path.name
+
+        target_path.write_text(
+            json.dumps(payload, indent=2, ensure_ascii=False, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+        restored += 1
+
+    return restored
+
+
 def _run_export_period(
     runtime: Runtime,
     processed_path: Path,
@@ -80,6 +211,11 @@ def _run_export_period(
 ) -> tuple[Path, list[dict]]:
     console = runtime.console
     export_date_dir = export_dir / export_date
+    groundtruth_snapshots = _snapshot_reconciliation_groundtruth(export_date_dir)
+    if groundtruth_snapshots:
+        _save_reconciliation_groundtruth_backup(export_dir, export_date, groundtruth_snapshots)
+    else:
+        groundtruth_snapshots = _load_reconciliation_groundtruth_backup(export_dir, export_date)
     if export_date_dir.exists():
         shutil.rmtree(export_date_dir)
 
@@ -106,6 +242,11 @@ def _run_export_period(
 
     repository = DocumentRepository(runtime)
     bank_statements = discover_bank_statements(repository, export_date_dir)
+    restored_groundtruth = _restore_reconciliation_groundtruth(groundtruth_snapshots, bank_statements)
+    if restored_groundtruth:
+        logger.debug(
+            f"[RECON-GROUNDTRUTH] Restored {restored_groundtruth} approval sidecar(s) for {export_date}"
+        )
     all_recon_matches = []
     recon_stats_all: list[dict] = []
 

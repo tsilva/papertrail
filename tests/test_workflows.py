@@ -7,10 +7,11 @@ from unittest.mock import patch
 
 import fitz
 
-from papertrail.commands import copy_matching, reconcile, rename, review
+from papertrail.commands import _run_export_period, copy_matching, reconcile, rename, review
 from papertrail.commands.reconcile import discover_statements_requiring_reconciliation
 from papertrail.hashing import hash_file_fast
 from papertrail.models import DocumentMetadata
+from papertrail.reconciliation_groundtruth import GROUNDTRUTH_SUFFIX
 from papertrail.repository import DocumentRepository
 
 from tests.support import create_bpi_statement, create_millennium_statement, create_pdf, make_test_runtime
@@ -108,6 +109,90 @@ class CommandTests(unittest.TestCase):
         self.assertEqual(stats["copied"], 1)
         exported_pdf = next(dest.glob("*.pdf"))
         compress_mock.assert_called_once_with(exported_pdf)
+
+    def test_export_rebuild_preserves_reconciliation_groundtruth_by_statement_hash(self):
+        from papertrail.bank_statement import classify_bank_statement
+        from papertrail.naming import file_name_from_metadata
+
+        source_statement = self.processed / "source-statement.xlsx"
+        create_millennium_statement(
+            source_statement,
+            period_start="01/04/2026",
+            period_end="30/04/2026",
+        )
+        statement_hash = hash_file_fast(source_statement)
+        statement_metadata = classify_bank_statement(source_statement, statement_hash)
+        processed_statement = self.processed / file_name_from_metadata(statement_metadata, statement_hash)
+        source_statement.rename(processed_statement)
+        self.repository.save_document(processed_statement, statement_metadata)
+
+        export_month = self.export / "2026-04"
+        export_month.mkdir()
+        old_statement = export_month / "old-statement-name.xlsx"
+        old_statement.write_bytes(processed_statement.read_bytes())
+        self.repository.save_json(old_statement.with_suffix(".json"), statement_metadata.model_dump())
+        old_groundtruth = old_statement.with_suffix(GROUNDTRUTH_SUFFIX)
+        old_groundtruth.write_text(
+            json.dumps(
+                {
+                    "schema_version": 1,
+                    "source": old_statement.name,
+                    "approvals": [
+                        {
+                            "transaction": {
+                                "date": "2026-04-01",
+                                "description_normalized": "test purchase",
+                                "amount": "-12.34",
+                                "currency": "EUR",
+                                "occurrence": 1,
+                            },
+                            "required_documents": [
+                                {"filename": "receipt.pdf", "hash_file": "doc12345"}
+                            ],
+                            "source_hint": {"statement_file": old_statement.name, "row": 9},
+                        }
+                    ],
+                    "unmatched_file_approvals": [],
+                },
+                indent=2,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+
+        with patch(
+            "papertrail.commands.reconcile_single",
+            return_value={
+                "total": 0,
+                "reconciled": 0,
+                "unmatched": 0,
+                "incomplete": 0,
+                "unmatched_files": 0,
+                "reconciliation_rate": 0.0,
+                "matches": [],
+            },
+        ):
+            _run_export_period(
+                self.runtime,
+                self.processed,
+                self.export,
+                "2026-04",
+                export_file_config=self.runtime.profile.export,
+                profile_context=None,
+                merge_rules=[],
+            )
+
+        exported_statement = next((self.export / "2026-04").glob("*.xlsx"))
+        restored_groundtruth = exported_statement.with_suffix(GROUNDTRUTH_SUFFIX)
+        self.assertTrue(restored_groundtruth.exists())
+        data = json.loads(restored_groundtruth.read_text(encoding="utf-8"))
+        self.assertEqual(data["source"], exported_statement.name)
+        self.assertEqual(data["approvals"][0]["required_documents"][0]["hash_file"], "doc12345")
+        self.assertEqual(
+            data["approvals"][0]["source_hint"]["statement_file"],
+            exported_statement.name,
+        )
+        self.assertTrue((self.export / "_reconciliation_groundtruth" / "2026-04.json").exists())
 
     def test_reconcile_writes_reconciliation_sidecar(self):
         statement_path = self.export / "statement.xlsx"
