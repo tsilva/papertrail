@@ -833,6 +833,250 @@ class CommandTests(unittest.TestCase):
         self.assertEqual(data["summary"]["incomplete"], 0)
         self.assertEqual(data["matches"][0]["files"], ["bpi-bank-note.pdf"])
 
+    def test_reconcile_rejects_unknown_bank_note_for_bpi_statement(self):
+        statement_path = self.export / "bpi-statement.xlsx"
+        create_bpi_statement(
+            statement_path,
+            transactions=[
+                {
+                    "date_posting": "23-04-2026",
+                    "date_value": "23-04-2026",
+                    "description": "TRF SEPA+ INST 68 DE EXAMPLE COMPANY UNIP LDA",
+                    "amount": 5000.00,
+                    "currency": "EUR",
+                },
+            ],
+        )
+
+        from papertrail.bank_statement import classify_bank_statement
+
+        statement_hash = hash_file_fast(statement_path)
+        statement_metadata = classify_bank_statement(statement_path, statement_hash)
+        self.repository.save_document(statement_path, statement_metadata)
+
+        unknown_bank_note = self.export / "unknown-bank-note.pdf"
+        create_pdf(unknown_bank_note, ["Unknown bank transfer"])
+        self.repository.save_document(
+            unknown_bank_note,
+            self._metadata(
+                "unkbank1",
+                "unkbank1",
+                date_created="2026-04-23",
+                date_issued="2026-04-23",
+                date_updated="2026-04-23",
+                document_type="bank-note",
+                document_type_raw="Bank Note",
+                issuing_party="$UNKNOWN$",
+                issuing_party_raw="$UNKNOWN$",
+                document_title="Transferencia recebida",
+                total_amount=5000.00,
+            ),
+        )
+
+        reconcile(self.runtime, self.export, dry_run=False)
+
+        sidecar_path = statement_path.with_suffix(".reconciliation.json")
+        data = json.loads(sidecar_path.read_text(encoding="utf-8"))
+        self.assertEqual(data["summary"]["reconciled"], 0)
+        self.assertEqual(data["summary"]["unmatched"], 1)
+        self.assertEqual(data["matches"], [])
+
+    def test_reconcile_allows_multiple_bank_transfer_supporting_documents(self):
+        self.runtime.profile.reconciliation.rules = [
+            {
+                "name": "bank-transfer-sepa",
+                "match_description": ["TRF SEPA+"],
+                "required_types": {"bank-note|bank-transfer": [1, None]},
+                "shared_types": {},
+                "companions": [],
+                "expected_page_count": {"bank-note": 1},
+            },
+        ]
+
+        statement_path = self.export / "bpi-statement.xlsx"
+        create_bpi_statement(
+            statement_path,
+            transactions=[
+                {
+                    "date_posting": "23-04-2026",
+                    "date_value": "23-04-2026",
+                    "description": "TRF SEPA+ INST 69 DE EXAMPLE COMPANY UNIP LDA",
+                    "amount": 5000.00,
+                    "currency": "EUR",
+                },
+            ],
+        )
+
+        from papertrail.bank_statement import classify_bank_statement
+
+        statement_hash = hash_file_fast(statement_path)
+        statement_metadata = classify_bank_statement(statement_path, statement_hash)
+        self.repository.save_document(statement_path, statement_metadata)
+
+        bank_note_path = self.export / "bpi-bank-note.pdf"
+        bank_transfer_path = self.export / "bpi-bank-transfer.pdf"
+        unrelated_bank_transfer_path = self.export / "unrelated-bpi-bank-transfer.pdf"
+        aggregate_bank_transfer_path = self.export / "aggregate-bpi-bank-transfer.pdf"
+        create_pdf(bank_note_path, ["BPI transfer received"])
+        create_pdf(
+            bank_transfer_path,
+            [
+                "\n".join(
+                    [
+                        "24/04/2026",
+                        "Data de Emissao:",
+                        "TRANSFERENCIAS RECEBIDAS",
+                        "VALOR",
+                        "DATA MOV",
+                        "DATA VAL",
+                        "5 000,00",
+                        "TRANSFERENCIA RECEBIDA 69",
+                        "23/04",
+                        "23/04",
+                        "EUR",
+                    ]
+                )
+            ],
+        )
+        create_pdf(
+            unrelated_bank_transfer_path,
+            [
+                "\n".join(
+                    [
+                        "02/04/2026",
+                        "Data de Emissao:",
+                        "TRANSFERENCIAS EMITIDAS",
+                        "VALOR",
+                        "DATA MOV",
+                        "DATA VAL",
+                        "5 000,00",
+                        "TRF CR SEPA+ 64",
+                        "01/04",
+                        "01/04",
+                        "EUR",
+                    ]
+                )
+            ],
+        )
+        create_pdf(
+            aggregate_bank_transfer_path,
+            [
+                "\n".join(
+                    [
+                        "01/04/2026",
+                        "Data de Emissao:",
+                        "TRANSFERENCIAS EMITIDAS",
+                        "VALOR",
+                        "DATA MOV",
+                        "DATA VAL",
+                        "5 000,00",
+                        "TRF CR SEPA+ 63",
+                        "31/03",
+                        "31/03",
+                        "EUR",
+                    ]
+                ),
+                "\n".join(
+                    [
+                        "24/04/2026",
+                        "Data de Emissao:",
+                        "TRANSFERENCIAS RECEBIDAS",
+                        "VALOR",
+                        "DATA MOV",
+                        "DATA VAL",
+                        "5 000,00",
+                        "TRANSFERENCIA RECEBIDA 69",
+                        "23/04",
+                        "23/04",
+                        "EUR",
+                    ]
+                ),
+            ],
+        )
+
+        self.repository.save_document(
+            bank_note_path,
+            self._metadata(
+                "bpinote1",
+                "bpinote1",
+                date_created="2026-04-24",
+                date_issued="2026-04-24",
+                date_updated="2026-04-24",
+                document_type="bank-note",
+                document_type_raw="Bank Note",
+                issuing_party="bpi",
+                issuing_party_raw="BPI",
+                document_title="Transferencia recebida",
+                total_amount=5000.00,
+                page_count=1,
+            ),
+        )
+        self.repository.save_document(
+            bank_transfer_path,
+            self._metadata(
+                "bpitrf01",
+                "bpitrf01",
+                date_created="2026-04-02",
+                date_issued="2026-04-02",
+                date_updated="2026-04-02",
+                document_type="bank-transfer",
+                document_type_raw="Aviso de Lancamento",
+                issuing_party="bpi",
+                issuing_party_raw="BPI",
+                document_title="TRF CR SEPA+ Example Company",
+                total_amount=5000.00,
+                page_count=2,
+            ),
+        )
+        self.repository.save_document(
+            unrelated_bank_transfer_path,
+            self._metadata(
+                "bpitrf64",
+                "bpitrf64",
+                date_created="2026-04-02",
+                date_issued="2026-04-02",
+                date_updated="2026-04-02",
+                document_type="bank-transfer",
+                document_type_raw="Aviso de Lancamento",
+                issuing_party="bpi",
+                issuing_party_raw="BPI",
+                document_title="Transferencia emitida para Example Company",
+                total_amount=5000.00,
+                page_count=1,
+            ),
+        )
+        self.repository.save_document(
+            aggregate_bank_transfer_path,
+            self._metadata(
+                "bpibndl1",
+                "bpibndl1",
+                date_created="2026-04-24",
+                date_issued="2026-04-24",
+                date_updated="2026-04-24",
+                document_type="bank-transfer",
+                document_type_raw="Aviso de Lancamento",
+                issuing_party="bpi",
+                issuing_party_raw="BPI",
+                document_title="TRF CR SEPA+ Example Company",
+                total_amount=5000.00,
+                page_count=2,
+            ),
+        )
+
+        reconcile(self.runtime, self.export, dry_run=False)
+
+        sidecar_path = statement_path.with_suffix(".reconciliation.json")
+        data = json.loads(sidecar_path.read_text(encoding="utf-8"))
+        self.assertEqual(data["summary"]["reconciled"], 1)
+        self.assertEqual(data["summary"]["incomplete"], 0)
+        self.assertEqual(
+            data["matches"][0]["files"],
+            ["bpi-bank-note.pdf", "bpi-bank-transfer.pdf"],
+        )
+        unmatched_files = {entry["file"] for entry in data["unmatched_files"]}
+        self.assertIn("unrelated-bpi-bank-transfer.pdf", unmatched_files)
+        self.assertIn("aggregate-bpi-bank-transfer.pdf", unmatched_files)
+
     def test_reconcile_links_same_day_no_amount_contract_document(self):
         self.runtime.profile.reconciliation.rules = [
             {
@@ -1462,6 +1706,111 @@ class CommandTests(unittest.TestCase):
             "march-receipt.pdf",
             {entry["file"] for entry in april_data["unmatched_files"]},
         )
+
+    def test_reconcile_does_not_report_unmatched_supplemental_month_candidates(self):
+        mar_dir = self.export / "2026-03"
+        apr_dir = self.export / "2026-04"
+        mar_dir.mkdir()
+        apr_dir.mkdir()
+
+        from papertrail.bank_statement import classify_bank_statement
+
+        april_statement = apr_dir / "statement.xlsx"
+        create_millennium_statement(
+            april_statement,
+            period_start="01/04/2026",
+            period_end="30/04/2026",
+            transactions=[
+                {
+                    "date_posting": "10/04/2026",
+                    "date_value": "10/04/2026",
+                    "description": "STORE PAYMENT",
+                    "amount": -20.00,
+                    "currency": "EUR",
+                    "notes": "",
+                    "treated": "Nao",
+                }
+            ],
+        )
+        statement_hash = hash_file_fast(april_statement)
+        statement_metadata = classify_bank_statement(april_statement, statement_hash)
+        self.repository.save_document(april_statement, statement_metadata)
+
+        april_bank_note = apr_dir / "april-bank-note.pdf"
+        april_invoice = apr_dir / "april-invoice.pdf"
+        april_extra = apr_dir / "april-extra.pdf"
+        march_invoice = mar_dir / "march-old-invoice.pdf"
+        create_pdf(april_bank_note, ["April bank note"])
+        create_pdf(april_invoice, ["April invoice"])
+        create_pdf(april_extra, ["April extra"])
+        create_pdf(march_invoice, ["March invoice"])
+
+        self.repository.save_document(
+            april_bank_note,
+            self._metadata(
+                "aprbank2",
+                "aprbank2",
+                date_created="2026-04-10",
+                date_issued="2026-04-10",
+                date_updated="2026-04-10",
+                document_type="bank-note",
+                document_type_raw="Bank Note",
+                total_amount=20.00,
+            ),
+        )
+        self.repository.save_document(
+            april_invoice,
+            self._metadata(
+                "aprinv20",
+                "aprinv20",
+                date_created="2026-04-10",
+                date_issued="2026-04-10",
+                date_updated="2026-04-10",
+                document_type="invoice",
+                document_type_raw="Invoice",
+                issuing_party="Store",
+                issuing_party_raw="Store",
+                total_amount=20.00,
+            ),
+        )
+        self.repository.save_document(
+            april_extra,
+            self._metadata(
+                "aprxtra2",
+                "aprxtra2",
+                date_created="2026-04-10",
+                date_issued="2026-04-10",
+                date_updated="2026-04-10",
+                document_type="receipt",
+                document_type_raw="Receipt",
+                issuing_party="Other Store",
+                issuing_party_raw="Other Store",
+                total_amount=99.00,
+            ),
+        )
+        self.repository.save_document(
+            march_invoice,
+            self._metadata(
+                "marinv20",
+                "marinv20",
+                date_created="2026-03-20",
+                date_issued="2026-03-20",
+                date_updated="2026-03-20",
+                document_type="invoice",
+                document_type_raw="Invoice",
+                issuing_party="Store",
+                issuing_party_raw="Store",
+                total_amount=20.00,
+            ),
+        )
+
+        reconcile(self.runtime, apr_dir, dry_run=False)
+
+        data = json.loads(april_statement.with_suffix(".reconciliation.json").read_text(encoding="utf-8"))
+        self.assertEqual(data["summary"]["reconciled"], 1)
+        unmatched_files = {entry["file"] for entry in data["unmatched_files"]}
+        self.assertIn("april-extra.pdf", unmatched_files)
+        self.assertNotIn("march-old-invoice.pdf", unmatched_files)
 
     def test_reconcile_month_folder_uses_adjacent_month_candidates_selectively(self):
         self.runtime.profile.reconciliation.rules = [

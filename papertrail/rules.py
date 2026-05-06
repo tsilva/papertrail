@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from typing import Optional
 
 from papertrail.utils import strip_diacritics
@@ -85,13 +86,16 @@ class RuleEngine:
         actual_str = str(actual).lower()
         pattern_str = pattern.lower()
         if pattern_str.endswith("*"):
-            return actual_str.startswith(pattern_str[:-1])
+            pattern_prefix = pattern_str[:-1]
+            return actual_str.startswith(pattern_prefix) or _slug_for_match(actual_str).startswith(
+                _slug_for_match(pattern_prefix)
+            )
         if isinstance(actual, (int, float)):
             try:
                 return float(actual) == float(pattern)
             except (TypeError, ValueError):
                 return False
-        return actual_str == pattern_str
+        return actual_str == pattern_str or _slug_for_match(actual_str) == _slug_for_match(pattern_str)
 
     def match_doc_type(self, doc_type: str, pattern: str) -> bool:
         """Check if a document type matches a pipe-separated pattern."""
@@ -233,3 +237,9 @@ class RuleEngine:
                     if target != attachment:
                         pairs.append((target, attachment))
         return pairs
+
+
+def _slug_for_match(value: str) -> str:
+    normalized = strip_diacritics(value).lower()
+    normalized = re.sub(r"[^a-z0-9]+", "-", normalized)
+    return normalized.strip("-")

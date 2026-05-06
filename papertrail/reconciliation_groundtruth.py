@@ -102,12 +102,18 @@ def rows_with_transaction_keys(reconciliation: dict) -> list[dict]:
 
 def load_groundtruth(path: Path) -> dict:
     if not path.exists():
-        return {"schema_version": 1, "source": "", "approvals": []}
+        return {
+            "schema_version": 1,
+            "source": "",
+            "approvals": [],
+            "unmatched_file_approvals": [],
+        }
     with open(path, "r", encoding="utf-8") as handle:
         data = json.load(handle)
     data.setdefault("schema_version", 1)
     data.setdefault("source", "")
     data.setdefault("approvals", [])
+    data.setdefault("unmatched_file_approvals", [])
     return data
 
 
@@ -124,6 +130,21 @@ def approval_map(groundtruth: dict | None) -> dict[str, dict]:
         if key:
             approvals[transaction_key_id(key)] = approval
     return approvals
+
+
+def unmatched_file_approvals(groundtruth: dict | None) -> list[dict]:
+    if not groundtruth:
+        return []
+    return list(groundtruth.get("unmatched_file_approvals", []))
+
+
+def _unmatched_file_sort_key(item: dict) -> tuple[str, str, str]:
+    document = item.get("document", {})
+    return (
+        document.get("filename", ""),
+        document.get("hash_file", "") or "",
+        document.get("hash_content", "") or "",
+    )
 
 
 def upsert_approval(
@@ -180,6 +201,58 @@ def remove_approval(groundtruth_path: Path, *, row: dict) -> bool:
         if transaction_key_id(approval.get("transaction", {})) != key_id
     ]
     changed = len(data["approvals"]) != before
+    if changed:
+        data["updated"] = datetime.now().isoformat(timespec="seconds")
+        save_groundtruth(groundtruth_path, data)
+    return changed
+
+
+def upsert_unmatched_file_approval(
+    groundtruth_path: Path,
+    *,
+    source: str,
+    document: dict,
+) -> dict:
+    data = load_groundtruth(groundtruth_path)
+    data["schema_version"] = 1
+    data["source"] = source
+    data["updated"] = datetime.now().isoformat(timespec="seconds")
+
+    approval = {
+        "confirmed_at": datetime.now().isoformat(timespec="seconds"),
+        "document": document,
+        "status": "expected_unreconciled",
+        "source_hint": {
+            "statement_file": source,
+        },
+    }
+
+    approvals = [
+        item
+        for item in data.get("unmatched_file_approvals", [])
+        if not document_matches_approval(document, item.get("document", {}))
+    ]
+    approvals.append(approval)
+    data["unmatched_file_approvals"] = sorted(
+        approvals,
+        key=_unmatched_file_sort_key,
+    )
+    save_groundtruth(groundtruth_path, data)
+    return approval
+
+
+def remove_unmatched_file_approval(groundtruth_path: Path, *, document: dict) -> bool:
+    if not groundtruth_path.exists():
+        return False
+
+    data = load_groundtruth(groundtruth_path)
+    before = len(data.get("unmatched_file_approvals", []))
+    data["unmatched_file_approvals"] = [
+        approval
+        for approval in data.get("unmatched_file_approvals", [])
+        if not document_matches_approval(document, approval.get("document", {}))
+    ]
+    changed = len(data["unmatched_file_approvals"]) != before
     if changed:
         data["updated"] = datetime.now().isoformat(timespec="seconds")
         save_groundtruth(groundtruth_path, data)

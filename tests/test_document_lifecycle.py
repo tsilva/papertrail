@@ -233,6 +233,31 @@ class DocumentLifecycleTests(unittest.TestCase):
         self.assertEqual(metadata.document_type, "bank-note")
         self.assertEqual(metadata.document_type_raw, "Movimento")
 
+    def test_credit_product_simulation_is_normalized_to_loan_simulation(self):
+        pdf_path = self.raw / "simulation.pdf"
+        create_pdf(pdf_path, ["Simulação Crédito Digital Finance Desk"])
+        raw_metadata = DocumentMetadataRaw(
+            issue_date="2026-04-23",
+            document_type="finance-income",
+            document_type_raw="Simulação",
+            document_title="Crédito Digital Finance Desk",
+            issuing_party="millenniumbcp",
+            issuing_party_raw="Banco Comercial Portugues, S.A.",
+            total_amount=25706.58,
+            total_amount_currency="EUR",
+            confidence=0.93,
+            reasoning="credit product simulation",
+            issuer_tax_number=None,
+            locale="pt-PT",
+        )
+
+        with patch("papertrail.engine._phase0_qr_extract", return_value=(None, None, [])):
+            with patch("papertrail.engine._phase1_llm_extract", return_value=raw_metadata):
+                metadata = self.engine.classify_pdf_document(pdf_path, "creditsim")
+
+        self.assertEqual(metadata.document_type, "loan-simulation")
+        self.assertEqual(metadata.document_type_raw, "Simulação")
+
     def test_bank_note_does_not_promote_known_counterparty_title_to_issuer(self):
         self.engine.repository.save_json(
             self.processed / "known-shared-toll.json",

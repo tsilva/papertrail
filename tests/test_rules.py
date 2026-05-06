@@ -92,6 +92,33 @@ class RuleEngineTests(unittest.TestCase):
             "CMP_",
         )
 
+    def test_export_prefix_matches_slug_pattern_against_display_value(self):
+        file_mappings = SimpleNamespace(
+            rules=[
+                SimpleNamespace(
+                    match={
+                        "document_type": "invoice*",
+                        "issuing_party": "shared-toll",
+                        "has_qrcode": False,
+                    },
+                    prefix="EXC_",
+                ),
+                SimpleNamespace(match={"document_type": "invoice*"}, prefix="CMP_"),
+            ],
+            default_prefix="DIV_",
+        )
+        metadata = {
+            "document_type": "invoice",
+            "issuing_party": "Shared Toll",
+            "qrcode": None,
+            "sub_documents": None,
+        }
+
+        self.assertEqual(
+            RuleEngine().evaluate_export_prefix(metadata, file_mappings=file_mappings),
+            "EXC_",
+        )
+
     def test_export_prefix_excludes_investment_key_information_documents(self):
         file_mappings = SimpleNamespace(
             rules=[

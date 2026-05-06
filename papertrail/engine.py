@@ -516,7 +516,11 @@ class DocumentEngine:
             merged = {
                 "issue_date": raw_metadata.issue_date,
                 "document_type": self.repository.registry.canonicalize_document_type(
-                    normalize_document_type(raw_metadata.document_type, raw_metadata.document_type_raw)
+                    normalize_document_type(
+                        raw_metadata.document_type,
+                        raw_metadata.document_type_raw,
+                        raw_metadata.document_title,
+                    )
                 ),
                 "total_amount": raw_metadata.total_amount,
                 "total_amount_currency": raw_metadata.total_amount_currency,
