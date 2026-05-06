@@ -6,6 +6,8 @@ from pathlib import Path
 
 import gradio as gr
 
+from papertrail.reconciliation_groundtruth import is_reconciliation_sidecar
+
 if __package__:
     from .shared import (
         FULLSCREEN_CSS,
@@ -147,7 +149,7 @@ def _load_entries(processed_dir):
 
     entries = []
     for json_path, metadata in iter_sidecars(root):
-        if json_path.name.endswith(".reconciliation.json"):
+        if is_reconciliation_sidecar(json_path):
             continue
 
         # Build search text from key fields

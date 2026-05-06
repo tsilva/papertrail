@@ -31,6 +31,18 @@ _BANK_GENERATED_DOC_TYPES = {
     "bank-statement",
     "bank-investment",
 }
+_STATEMENT_BANK_SCOPED_DOC_TYPES = {
+    "bank-card-transaction",
+    "bank-note",
+}
+_KNOWN_STATEMENT_BANK_ISSUERS = {
+    "bancobpi",
+    "bancocomercialportugues",
+    "bcp",
+    "bpi",
+    "millennium",
+    "millenniumbcp",
+}
 _AMOUNT_LINE_RE = re.compile(r"^-?\d[\d\s.]*,\d{2}$")
 _PERIOD_TOKEN_RE = re.compile(
     r"\b(JAN|FEV|MAR|ABR|MAI|JUN|JUL|AGO|SET|OUT|NOV|DEZ)\s+(20\d{2})\b"
@@ -219,6 +231,21 @@ def _parse_date(value) -> Optional[str]:
 
 def _load_transactions(excel_path: Path) -> list[Transaction]:
     return [Transaction(**data) for data in load_bank_statement_transactions(excel_path)]
+
+
+def _load_statement_issuing_party(repository: DocumentRepository, excel_path: Path) -> Optional[str]:
+    json_path = excel_path.with_suffix(".json")
+    if not json_path.exists():
+        return None
+    try:
+        data = repository.load_metadata(json_path)
+    except Exception as exc:
+        logger.debug(f"[STATEMENT-BANK] Could not read {json_path.name}: {exc}")
+        return None
+    issuing_party = data.get("issuing_party")
+    if not issuing_party or issuing_party == "$UNKNOWN$":
+        return None
+    return str(issuing_party)
 
 
 def discover_bank_statements(repository: DocumentRepository, export_path: Path) -> list[Path]:
@@ -705,6 +732,25 @@ def _same_calendar_month(date_str1: Optional[str], date_str2: Optional[str]) -> 
 def _is_bank_generated_candidate(candidate: PDFCandidate) -> bool:
     doc_type = candidate.effective_document_type or candidate.document_type
     return bool(doc_type and doc_type.lower() in _BANK_GENERATED_DOC_TYPES)
+
+
+def _is_statement_bank_scoped_candidate(candidate: PDFCandidate) -> bool:
+    doc_type = candidate.effective_document_type or candidate.document_type
+    return bool(doc_type and doc_type.lower() in _STATEMENT_BANK_SCOPED_DOC_TYPES)
+
+
+def _is_candidate_compatible_with_statement_bank(
+    candidate: PDFCandidate,
+    statement_issuing_party: Optional[str],
+) -> bool:
+    if not statement_issuing_party or not _is_statement_bank_scoped_candidate(candidate):
+        return True
+    if not candidate.issuing_party or candidate.issuing_party == "$UNKNOWN$":
+        return True
+    candidate_bank = _normalize_for_match(candidate.issuing_party)
+    if candidate_bank not in _KNOWN_STATEMENT_BANK_ISSUERS:
+        return True
+    return candidate_bank == _normalize_for_match(statement_issuing_party)
 
 
 def _rule_allowed_patterns(rule) -> list[str]:
@@ -1444,6 +1490,7 @@ def reconcile_single(
     profile = runtime.profile
     rules = profile.reconciliation.rules
     exclude_prefixes = profile.reconciliation.exclude_prefixes
+    statement_issuing_party = _load_statement_issuing_party(repository, excel_path)
     candidates = _load_reconciliation_candidates(
         repository,
         export_path,
@@ -1451,7 +1498,12 @@ def reconcile_single(
         exclude_prefixes=exclude_prefixes,
         rules=rules,
     )
-    matchable = [candidate for candidate in candidates if not candidate.exclude_from_matching]
+    matchable = [
+        candidate
+        for candidate in candidates
+        if not candidate.exclude_from_matching
+        and _is_candidate_compatible_with_statement_bank(candidate, statement_issuing_party)
+    ]
 
     p1_matches, unmatched_txns, remaining_cands = _phase1_deterministic_match(
         transactions,

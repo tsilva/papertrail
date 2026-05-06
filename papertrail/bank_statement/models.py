@@ -87,11 +87,28 @@ def parse_bank_date_cell(value: object, formats: tuple[str, ...]) -> str | None:
 def parse_bank_amount(value: object) -> float | None:
     if value is None:
         return None
-    try:
+    if isinstance(value, (int, float)):
         return float(value)
+
+    text = str(value).strip()
+    if not text:
+        return None
+
+    try:
+        return float(text)
     except (TypeError, ValueError):
         pass
+
+    normalized = text.replace(" ", "").replace("\u00a0", "")
+    if "." in normalized and "," in normalized:
+        if normalized.rfind(",") > normalized.rfind("."):
+            normalized = normalized.replace(".", "").replace(",", ".")
+        else:
+            normalized = normalized.replace(",", "")
+    elif "," in normalized:
+        normalized = normalized.replace(",", ".")
+
     try:
-        return float(str(value).replace(",", "."))
+        return float(normalized)
     except (TypeError, ValueError):
         return None

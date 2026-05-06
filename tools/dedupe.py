@@ -9,6 +9,7 @@ from pathlib import Path
 import gradio as gr
 
 from papertrail.hashing import PLAN_FILENAME, scan_directory
+from papertrail.reconciliation_groundtruth import GROUNDTRUTH_SUFFIX
 if __package__:
     from .shared import (
         FULLSCREEN_CSS,
@@ -396,7 +397,7 @@ def on_confirm():
                 pass
 
             stem = json_path.stem
-            for extra_suffix in (".reconciliation.json",):
+            for extra_suffix in (".reconciliation.json", GROUNDTRUTH_SUFFIX):
                 extra = json_path.parent / (stem + extra_suffix)
                 if extra.exists():
                     files_to_move.append(extra)

@@ -233,6 +233,59 @@ class DocumentLifecycleTests(unittest.TestCase):
         self.assertEqual(metadata.document_type, "bank-note")
         self.assertEqual(metadata.document_type_raw, "Movimento")
 
+    def test_bank_note_does_not_promote_known_counterparty_title_to_issuer(self):
+        self.engine.repository.save_json(
+            self.processed / "known-shared-toll.json",
+            self._metadata(issuing_party="shared-toll", issuing_party_raw="Shared Toll").model_dump(),
+        )
+        pdf_path = self.raw / "movement.pdf"
+        create_pdf(pdf_path, ["Shared Toll movement"])
+        raw_metadata = DocumentMetadataRaw(
+            issue_date="2026-04-22",
+            document_type="bank-note",
+            document_type_raw="Movimento",
+            document_title="Shared Toll",
+            issuing_party="$UNKNOWN$",
+            issuing_party_raw="$UNKNOWN$",
+            total_amount=None,
+            total_amount_currency=None,
+            confidence=0.7,
+            reasoning="counterparty placed in title",
+            issuer_tax_number=None,
+            locale="pt-PT",
+        )
+
+        with patch("papertrail.engine._phase0_qr_extract", return_value=(None, None, [])):
+            with patch("papertrail.engine._phase1_llm_extract", return_value=raw_metadata):
+                metadata = self.engine.classify_pdf_document(pdf_path, "contentmov2")
+
+        self.assertEqual(metadata.issuing_party, "$UNKNOWN$")
+        self.assertEqual(metadata.document_title, "Shared Toll")
+
+    def test_bank_note_does_not_recover_unknown_issuer_from_generic_title(self):
+        pdf_path = self.raw / "movement.pdf"
+        create_pdf(pdf_path, ["Transferencia pontual a debito"])
+        raw_metadata = DocumentMetadataRaw(
+            issue_date="2026-04-22",
+            document_type="bank-note",
+            document_type_raw="Movimento",
+            document_title="Transferencia pontual a debito",
+            issuing_party="$UNKNOWN$",
+            issuing_party_raw="$UNKNOWN$",
+            total_amount=None,
+            total_amount_currency=None,
+            confidence=0.7,
+            reasoning="generic transaction title",
+            issuer_tax_number=None,
+            locale="pt-PT",
+        )
+
+        with patch("papertrail.engine._phase0_qr_extract", return_value=(None, None, [])):
+            with patch("papertrail.engine._phase1_llm_extract", return_value=raw_metadata):
+                metadata = self.engine.classify_pdf_document(pdf_path, "contentmov3")
+
+        self.assertEqual(metadata.issuing_party, "$UNKNOWN$")
+
 
 if __name__ == "__main__":
     unittest.main()

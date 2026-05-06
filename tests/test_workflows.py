@@ -13,7 +13,7 @@ from papertrail.hashing import hash_file_fast
 from papertrail.models import DocumentMetadata
 from papertrail.repository import DocumentRepository
 
-from tests.support import create_millennium_statement, create_pdf, make_test_runtime
+from tests.support import create_bpi_statement, create_millennium_statement, create_pdf, make_test_runtime
 
 
 class CommandTests(unittest.TestCase):
@@ -681,6 +681,73 @@ class CommandTests(unittest.TestCase):
             1,
         )
 
+    def test_reconcile_filters_bank_notes_from_other_statement_bank(self):
+        statement_path = self.export / "bpi-statement.xlsx"
+        create_bpi_statement(
+            statement_path,
+            transactions=[
+                {
+                    "date_posting": "23-04-2026",
+                    "date_value": "23-04-2026",
+                    "description": "TRF SEPA+ INST 68 DE EXAMPLE COMPANY UNIP LDA",
+                    "amount": 5000.00,
+                    "currency": "EUR",
+                },
+            ],
+        )
+
+        from papertrail.bank_statement import classify_bank_statement
+
+        statement_hash = hash_file_fast(statement_path)
+        statement_metadata = classify_bank_statement(statement_path, statement_hash)
+        self.repository.save_document(statement_path, statement_metadata)
+
+        bpi_bank_note = self.export / "bpi-bank-note.pdf"
+        millennium_bank_note = self.export / "millennium-bank-note.pdf"
+        create_pdf(bpi_bank_note, ["BPI transfer received"])
+        create_pdf(millennium_bank_note, ["Millennium transfer debit"])
+
+        self.repository.save_document(
+            bpi_bank_note,
+            self._metadata(
+                "bpibank1",
+                "bpibank1",
+                date_created="2026-04-23",
+                date_issued="2026-04-23",
+                date_updated="2026-04-23",
+                document_type="bank-note",
+                document_type_raw="Bank Note",
+                issuing_party="bpi",
+                issuing_party_raw="BPI",
+                document_title="Transferencia recebida",
+                total_amount=5000.00,
+            ),
+        )
+        self.repository.save_document(
+            millennium_bank_note,
+            self._metadata(
+                "millbank",
+                "millbank",
+                date_created="2026-04-23",
+                date_issued="2026-04-23",
+                date_updated="2026-04-23",
+                document_type="bank-note",
+                document_type_raw="Bank Note",
+                issuing_party="millenniumbcp",
+                issuing_party_raw="Banco Comercial Portugues, S.A.",
+                document_title="Transferencia pontual a debito",
+                total_amount=5000.00,
+            ),
+        )
+
+        reconcile(self.runtime, self.export, dry_run=False)
+
+        sidecar_path = statement_path.with_suffix(".reconciliation.json")
+        data = json.loads(sidecar_path.read_text(encoding="utf-8"))
+        self.assertEqual(data["summary"]["reconciled"], 1)
+        self.assertEqual(data["summary"]["incomplete"], 0)
+        self.assertEqual(data["matches"][0]["files"], ["bpi-bank-note.pdf"])
+
     def test_reconcile_links_same_day_no_amount_contract_document(self):
         self.runtime.profile.reconciliation.rules = [
             {
@@ -1107,6 +1174,89 @@ class CommandTests(unittest.TestCase):
             set(data["matches"][0]["files"]),
             {"march-stamp-duty.pdf", "march-invoice-receipt.pdf"},
         )
+
+    def test_reconcile_bank_fee_companion_invoice_without_bank_note_is_incomplete(self):
+        self.runtime.profile.reconciliation.rules = [
+            {
+                "name": "bank-fee-package",
+                "match_description": ["PACOTE M EMPRESA"],
+                "required_types": {"invoice-receipt": [1, None], "bank-note": 1},
+                "shared_types": {},
+                "companions": ["bank-fee-stamp-duty"],
+                "expected_page_count": {},
+            },
+            {
+                "name": "bank-fee-stamp-duty",
+                "match_description": ["IMPOSTO SELO"],
+                "required_types": {"invoice-receipt": 1, "bank-note": 1},
+                "shared_types": {},
+                "companions": [],
+                "expected_page_count": {},
+            },
+        ]
+
+        statement_path = self.export / "statement.xlsx"
+        create_millennium_statement(
+            statement_path,
+            period_start="01/04/2026",
+            period_end="30/04/2026",
+            transactions=[
+                {
+                    "date_posting": "06/04/2026",
+                    "date_value": "06/04/2026",
+                    "description": "IMPOSTO SELO ART 17.3.4",
+                    "amount": -0.60,
+                    "currency": "EUR",
+                    "notes": "",
+                    "treated": "Nao",
+                },
+                {
+                    "date_posting": "06/04/2026",
+                    "date_value": "06/04/2026",
+                    "description": "COM.MAN.CONTA PACOTE M EMPRESA 032026",
+                    "amount": -15.00,
+                    "currency": "EUR",
+                    "notes": "",
+                    "treated": "Nao",
+                },
+            ],
+        )
+
+        from papertrail.bank_statement import classify_bank_statement
+
+        statement_hash = hash_file_fast(statement_path)
+        statement_metadata = classify_bank_statement(statement_path, statement_hash)
+        self.repository.save_document(statement_path, statement_metadata)
+
+        invoice_receipt = self.export / "package-fee-invoice-receipt.pdf"
+        create_pdf(invoice_receipt, ["Package fee invoice receipt"])
+        self.repository.save_document(
+            invoice_receipt,
+            self._metadata(
+                "pkgfee00",
+                "pkgfee00",
+                date_created="2026-04-06",
+                date_issued="2026-04-06",
+                date_updated="2026-04-06",
+                document_type="invoice-receipt",
+                document_type_raw="Fatura-Recibo",
+                issuing_party="MillenniumBCP",
+                issuing_party_raw="Banco Comercial Portugues, S.A.",
+                document_title="Man. Cta Pacote M Empresa",
+                total_amount=15.60,
+            ),
+        )
+
+        reconcile(self.runtime, self.export, dry_run=False)
+
+        sidecar_path = statement_path.with_suffix(".reconciliation.json")
+        data = json.loads(sidecar_path.read_text(encoding="utf-8"))
+        self.assertEqual(data["summary"]["reconciled"], 0)
+        self.assertEqual(data["summary"]["incomplete"], 2)
+        self.assertEqual(len(data["matches"]), 2)
+        for match in data["matches"]:
+            self.assertEqual(match["files"], ["package-fee-invoice-receipt.pdf"])
+            self.assertIn("missing bank-note", match["errors"][0])
 
     def test_reconcile_month_folder_uses_adjacent_month_candidates_selectively(self):
         self.runtime.profile.reconciliation.rules = [

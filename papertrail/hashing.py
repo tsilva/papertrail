@@ -13,6 +13,7 @@ from typing import Optional
 import fitz  # PyMuPDF
 
 from papertrail.logging_utils import get_logger
+from papertrail.reconciliation_groundtruth import is_reconciliation_sidecar
 from papertrail.utils import load_yaml, save_yaml
 
 logger = get_logger('hashing')
@@ -203,7 +204,7 @@ def scan_directory(directory: Path) -> dict:
     for json_path in json_files:
         if "/logs/" in str(json_path) or json_path.name.startswith("_"):
             continue
-        if json_path.name.endswith(".reconciliation.json"):
+        if is_reconciliation_sidecar(json_path):
             continue
         if any(part.startswith("_dupes") for part in json_path.parts):
             continue

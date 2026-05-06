@@ -12,6 +12,7 @@ from pydantic import ValidationError
 
 from papertrail.models import DocumentMetadata, clean_enum_string
 from papertrail.naming import file_name_from_metadata
+from papertrail.reconciliation_groundtruth import GROUNDTRUTH_SUFFIX, is_reconciliation_sidecar
 from papertrail.runtime import Runtime
 
 try:
@@ -153,7 +154,7 @@ class DocumentRepository:
             path
             for path in root.rglob("*.json")
             if not self.is_internal_path(path.relative_to(root))
-            and not path.name.endswith(".reconciliation.json")
+            and not is_reconciliation_sidecar(path)
         ]
 
     def load_metadata(self, json_path: Path, validate: bool = False) -> DocumentMetadata | dict:
@@ -348,7 +349,7 @@ class DocumentRepository:
                 files_to_move.append(companion)
 
             stem = json_path.stem
-            for extra_suffix in (".reconciliation.json",):
+            for extra_suffix in (".reconciliation.json", GROUNDTRUTH_SUFFIX):
                 extra = json_path.parent / f"{stem}{extra_suffix}"
                 if extra.exists():
                     files_to_move.append(extra)

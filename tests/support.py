@@ -145,3 +145,37 @@ def create_millennium_statement(
 
     wb.save(xlsx_path)
     wb.close()
+
+
+def create_bpi_statement(
+    xlsx_path: Path,
+    account: str = "TEST-ACCOUNT-BETA",
+    currency: str = "EUR",
+    transactions: list[dict] | None = None,
+) -> None:
+    transactions = transactions or [
+        {
+            "date_posting": "01-01-2026",
+            "date_value": "01-01-2026",
+            "description": "TEST TRANSFER",
+            "amount": 12.34,
+            "currency": currency,
+        }
+    ]
+
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.cell(row=7, column=3, value=f"{account} ({currency})")
+    ws.cell(row=18, column=1, value="Data Mov.")
+    ws.cell(row=18, column=2, value="Data Valor")
+    ws.cell(row=18, column=3, value="Descricao do Movimento")
+    ws.cell(row=18, column=4, value="Valor em EUR")
+
+    for index, txn in enumerate(transactions, start=19):
+        ws.cell(row=index, column=1, value=txn["date_posting"])
+        ws.cell(row=index, column=2, value=txn["date_value"])
+        ws.cell(row=index, column=3, value=txn["description"])
+        ws.cell(row=index, column=4, value=txn["amount"])
+
+    wb.save(xlsx_path)
+    wb.close()

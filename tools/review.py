@@ -7,6 +7,17 @@ from pathlib import Path
 
 import gradio as gr
 
+from papertrail.reconciliation_groundtruth import (
+    approval_map,
+    document_sets_match,
+    groundtruth_path_for_document,
+    is_reconciliation_sidecar,
+    load_groundtruth,
+    remove_approval,
+    rows_with_transaction_keys,
+    upsert_approval,
+)
+
 if __package__:
     from .shared import (
         FULLSCREEN_CSS,
@@ -53,6 +64,24 @@ window.selectReviewFile = function(filename) {
         else return;
     }
     var newVal = filename + '|' + Date.now();
+    var proto = input.tagName === 'TEXTAREA'
+        ? HTMLTextAreaElement.prototype
+        : HTMLInputElement.prototype;
+    var setter = Object.getOwnPropertyDescriptor(proto, 'value').set;
+    setter.call(input, newVal);
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    input.dispatchEvent(new Event('change', { bubbles: true }));
+};
+
+window.setReviewApproval = function(payload) {
+    var el = document.getElementById('approval_bridge');
+    if (!el) return;
+    var input = el.querySelector('textarea') || el.querySelector('input');
+    if (!input) {
+        if (el.tagName === 'TEXTAREA' || el.tagName === 'INPUT') input = el;
+        else return;
+    }
+    var newVal = JSON.stringify(payload) + '|' + Date.now();
     var proto = input.tagName === 'TEXTAREA'
         ? HTMLTextAreaElement.prototype
         : HTMLInputElement.prototype;
@@ -148,6 +177,24 @@ _CSS = """
     background: none; border: none; font: inherit; padding: 0;
 }
 .file-link:hover { color: #79c0ff; }
+.approval-btn {
+    border: 1px solid var(--border-color-primary, #555);
+    border-radius: 6px;
+    background: var(--button-secondary-background-fill, #2b2b2b);
+    color: var(--body-text-color, #ddd);
+    cursor: pointer;
+    font: inherit;
+    padding: 2px 8px;
+}
+.approval-btn:hover { border-color: #58a6ff; }
+.approval-btn.approved {
+    border-color: rgba(40, 167, 69, 0.8);
+    color: #7ee787;
+}
+.approval-btn.changed {
+    border-color: rgba(255, 193, 7, 0.8);
+    color: #ffd166;
+}
 .bank-section {
     border: 1px solid var(--border-color-primary, #444);
     border-radius: 8px; overflow: hidden;
@@ -191,6 +238,7 @@ _CSS = """
 .txn-table .col-amount { width: 92px; }
 .txn-table .col-rule { width: 180px; }
 .txn-table .col-status { width: 150px; }
+.txn-table .col-approval { width: 110px; }
 .txn-table .col-confidence { width: 64px; }
 .txn-table .col-files { width: auto; }
 .txn-table .col-party { width: 180px; }
@@ -210,6 +258,10 @@ _CSS = """
     text-align: left;
 }
 #selected_file_bridge {
+    position: fixed !important; left: -9999px !important;
+    width: 1px !important; height: 1px !important;
+}
+#approval_bridge {
     position: fixed !important; left: -9999px !important;
     width: 1px !important; height: 1px !important;
 }
@@ -321,7 +373,7 @@ def _build_cross_folder_index(folder, file_index, referenced_files):
 
     cross_file_index = {}
     for json_path, metadata in iter_sidecars(export_base):
-        if json_path.name.endswith(".reconciliation.json"):
+        if is_reconciliation_sidecar(json_path):
             continue
 
         doc_path = find_companion(json_path, metadata)
@@ -343,6 +395,54 @@ def _build_cross_folder_index(folder, file_index, referenced_files):
     return cross_file_index
 
 
+def _document_identity(filename, data):
+    entry = data.get("file_index", {}).get(filename)
+    if not entry:
+        entry = data.get("cross_file_index", {}).get(filename)
+    metadata = entry.get("metadata", {}) if entry else {}
+    return {
+        "filename": filename,
+        "hash_file": metadata.get("hash_file"),
+        "hash_content": metadata.get("hash_content"),
+    }
+
+
+def _current_documents(file_list, data):
+    return [_document_identity(filename, data) for filename in file_list if filename]
+
+
+def _approval_status(row, approvals, data):
+    approval = approvals.get(row.get("_transaction_key_id"))
+    if not approval:
+        return "", None
+
+    current_documents = _current_documents(row.get("files", []), data)
+    approved_documents = approval.get("required_documents", [])
+    if not current_documents:
+        return "missing", approval
+    if document_sets_match(current_documents, approved_documents):
+        return "approved", approval
+    return "changed", approval
+
+
+def _find_bank_statement(data, statement_file):
+    for bank_statement in data.get("bank_statements", []):
+        doc_path = bank_statement.get("doc_path")
+        if doc_path and Path(doc_path).name == statement_file:
+            return bank_statement
+    return None
+
+
+def _find_reconciliation_row(bank_statement, row_number):
+    recon = bank_statement.get("reconciliation") if bank_statement else None
+    if not recon:
+        return None
+    for row in rows_with_transaction_keys(recon):
+        if row.get("row") == row_number:
+            return row
+    return None
+
+
 def load_export_folder(folder_path):
     folder = Path(folder_path.strip().strip("'\""))
     if not folder.is_dir():
@@ -351,7 +451,7 @@ def load_export_folder(folder_path):
     bank_statements, file_index = [], {}
 
     for json_path, metadata in iter_sidecars(folder):
-        if json_path.name.endswith(".reconciliation.json"):
+        if is_reconciliation_sidecar(json_path):
             continue
         doc_path = find_companion(json_path, metadata)
         entry = {
@@ -372,6 +472,14 @@ def load_export_folder(folder_path):
                             recon = json.load(f)
                     except (OSError, UnicodeDecodeError, json.JSONDecodeError):
                         pass
+                gp = groundtruth_path_for_document(doc_path)
+                if gp.exists():
+                    try:
+                        entry["groundtruth"] = load_groundtruth(gp)
+                        entry["groundtruth_path"] = str(gp)
+                    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+                        entry["groundtruth"] = None
+                        entry["groundtruth_path"] = str(gp)
             entry["reconciliation"] = recon
             bank_statements.append(entry)
 
@@ -409,6 +517,12 @@ def load_export_folder(folder_path):
         status += f", **{len(cross_file_index)}** cross-folder files indexed"
     if unmatched_files:
         status += f", **{len(unmatched_files)}** unmatched files"
+    n_approvals = sum(
+        len((b.get("groundtruth") or {}).get("approvals", []))
+        for b in bank_statements
+    )
+    if n_approvals:
+        status += f", **{n_approvals}** approved pairings"
 
     return {
         "bank_statements": bank_statements,
@@ -429,7 +543,7 @@ def _match_status(m):
     return "exact"
 
 
-def render_single_bank_html(bs):
+def render_single_bank_html(bs, data=None):
     if not bs:
         return placeholder_html("Select a bank statement.")
 
@@ -459,7 +573,7 @@ def render_single_bank_html(bs):
             f'{reconciled}/{s.get("total", 0)} reconciled '
             f'({rate:.1f}%){inc}</div>'
         )
-        parts.append(_render_txn_table(recon))
+        parts.append(_render_txn_table(recon, bs, data or {}))
     else:
         parts.append(
             '<div class="bank-info" style="color:var(--body-text-color-subdued,#666);">'
@@ -470,10 +584,10 @@ def render_single_bank_html(bs):
     return "\n".join(parts)
 
 
-def render_all_banks_html(bs_list, unmatched_files=None, file_index=None):
+def render_all_banks_html(bs_list, unmatched_files=None, file_index=None, data=None):
     if not bs_list:
         return placeholder_html("No bank statements found in this folder.")
-    parts = [render_single_bank_html(bs) for bs in bs_list]
+    parts = [render_single_bank_html(bs, data=data) for bs in bs_list]
     if unmatched_files:
         parts.append(_render_unmatched_files_html(unmatched_files, file_index or {}))
     return "\n".join(parts)
@@ -530,28 +644,79 @@ def _render_unmatched_files_html(unmatched_files, file_index):
     return "\n".join(parts)
 
 
-def _render_txn_table(recon):
-    matches = recon.get("matches", [])
-    unmatched = recon.get("unmatched", [])
+def _approval_button(statement_file, row_number, action, label, klass="", title=""):
+    payload = json.dumps(
+        {"statement_file": statement_file, "row": row_number, "action": action},
+        ensure_ascii=False,
+    )
+    safe_payload = html_lib.escape(payload, quote=True)
+    safe_label = html_lib.escape(label)
+    safe_title = html_lib.escape(title, quote=True)
+    classes = f"approval-btn {klass}".strip()
+    return (
+        f"<button class='{classes}' title='{safe_title}' "
+        f"onclick='setReviewApproval({safe_payload});return false;'>{safe_label}</button>"
+    )
 
-    rows = []
-    for m in matches:
-        rows.append({**m, "_st": _match_status(m)})
-    for u in unmatched:
-        rows.append({
-            **u, "_st": "unmatched", "files": [], "confidence": 0,
-            "method": "", "reasoning": "", "warnings": [],
-        })
+
+def _approval_cell(row, statement_file):
+    status = row.get("_approval_status", "")
+    row_number = row.get("row")
+    has_files = bool(row.get("files"))
+
+    if status == "approved":
+        return _approval_button(
+            statement_file,
+            row_number,
+            "remove",
+            "Approved",
+            "approved",
+            "Click to remove this manual approval.",
+        )
+    if status == "changed" and has_files:
+        return _approval_button(
+            statement_file,
+            row_number,
+            "approve",
+            "Changed",
+            "changed",
+            "Current files differ from the saved approval. Click to approve the current pairing.",
+        )
+    if status == "missing":
+        return '<span style="color:#ff7b72;">Missing</span>'
+    if has_files:
+        return _approval_button(
+            statement_file,
+            row_number,
+            "approve",
+            "Approve",
+            "",
+            "Save this transaction/document pairing as ground truth.",
+        )
+    return '<span style="color:var(--body-text-color-subdued,#555);">-</span>'
+
+
+def _render_txn_table(recon, bank_statement=None, data=None):
+    rows = rows_with_transaction_keys(recon)
+    for row in rows:
+        row["_st"] = "unmatched" if not row.get("files") else _match_status(row)
+
+    statement_file = ""
+    if bank_statement and bank_statement.get("doc_path"):
+        statement_file = Path(bank_statement["doc_path"]).name
+
+    approvals = approval_map((bank_statement or {}).get("groundtruth"))
+    data = data or {}
     for r in rows:
         if r.get("transaction_category") == "unclassified":
             r["_st"] = "unclassified"
-    rows.sort(key=lambda r: r.get("row", 0))
+        r["_approval_status"], _approval = _approval_status(r, approvals, data)
 
     lines = ['<div class="txn-table-wrap">']
     lines.append("<table class='txn-table'><colgroup>")
     for klass in [
         "col-row", "col-date", "col-description", "col-amount",
-        "col-rule", "col-status", "col-confidence", "col-files",
+        "col-rule", "col-status", "col-approval", "col-confidence", "col-files",
     ]:
         lines.append(f'<col class="{klass}">')
     lines.append("</colgroup><thead><tr>")
@@ -559,7 +724,8 @@ def _render_txn_table(recon):
         ("Row", "left", "row"), ("Date", "left", "date"),
         ("Description", "left", "description"), ("Amount", "right", "amount"),
         ("Rule", "left", "rule"), ("Status", "left", "status"),
-        ("Conf.", "center", "confidence"), ("Files", "left", "files"),
+        ("Approval", "left", "approval"), ("Conf.", "center", "confidence"),
+        ("Files", "left", "files"),
     ]:
         lines.append(f'<th class="col-{klass}" style="text-align:{a};">{h}</th>')
     lines.append("</tr></thead><tbody>")
@@ -578,6 +744,7 @@ def _render_txn_table(recon):
         date = r.get("date", "") or ""
 
         rule = html_lib.escape(r.get("transaction_category", "") or "")
+        approval = _approval_cell(r, statement_file)
 
         tip_parts = []
         if r.get("reasoning"):
@@ -607,6 +774,7 @@ def _render_txn_table(recon):
         )
         lines.append(
             f"<td>{rule}</td><td>{lab}</td>"
+            f"<td>{approval}</td>"
             f"<td style='text-align:center;'>{cs}</td>"
             f'<td class="wrap-cell file-cell">{fs}</td>'
         )
@@ -671,6 +839,9 @@ def build_ui():
         selected_file_bridge = gr.Textbox(
             elem_id="selected_file_bridge", label="", container=False,
         )
+        approval_bridge = gr.Textbox(
+            elem_id="approval_bridge", label="", container=False,
+        )
 
         with gr.Row(equal_height=False, elem_id="content_row"):
             with gr.Column(scale=1, min_width=400):
@@ -710,6 +881,7 @@ def build_ui():
                 bs_list,
                 unmatched_files=data.get("unmatched_files"),
                 file_index=data.get("file_index"),
+                data=data,
             )
 
             return (status, bank_content)
@@ -729,6 +901,63 @@ def build_ui():
         selected_file_bridge.change(
             on_bridge_input, [selected_file_bridge],
             [bank_preview, bank_json, b_page, bank_page, bank_file],
+        )
+
+        def on_approval_input(raw_value, folder_name, base_dir):
+            if not raw_value:
+                return gr.update(), gr.update()
+
+            try:
+                payload = json.loads(bridge_value(raw_value))
+            except (TypeError, json.JSONDecodeError):
+                return "**Error:** invalid approval payload.", gr.update()
+
+            data = _CACHE.get("data") or {}
+            if not data and folder_name and base_dir:
+                data, _status = load_export_folder(str(Path(base_dir) / folder_name))
+
+            statement_file = payload.get("statement_file")
+            row_number = payload.get("row")
+            bank_statement = _find_bank_statement(data, statement_file)
+            row = _find_reconciliation_row(bank_statement, row_number)
+            doc_path = Path(bank_statement["doc_path"]) if bank_statement and bank_statement.get("doc_path") else None
+            if not bank_statement or row is None or doc_path is None:
+                return "**Error:** could not find the selected reconciliation row.", gr.update()
+
+            groundtruth_path = groundtruth_path_for_document(doc_path)
+            action = payload.get("action")
+            if action == "remove":
+                remove_approval(groundtruth_path, row=row)
+            elif action == "approve":
+                documents = _current_documents(row.get("files", []), data)
+                if not documents:
+                    return "**Error:** unmatched rows cannot be approved.", gr.update()
+                upsert_approval(
+                    groundtruth_path,
+                    source=statement_file,
+                    row=row,
+                    documents=documents,
+                )
+            else:
+                return "**Error:** unknown approval action.", gr.update()
+
+            folder_path = data.get("folder_path")
+            if not folder_path and folder_name and base_dir:
+                folder_path = str(Path(base_dir) / folder_name)
+            data, status = load_export_folder(folder_path)
+            _CACHE["data"] = data
+            bank_content = render_all_banks_html(
+                data.get("bank_statements", []),
+                unmatched_files=data.get("unmatched_files"),
+                file_index=data.get("file_index"),
+                data=data,
+            )
+            return status, bank_content
+
+        approval_bridge.change(
+            on_approval_input,
+            [approval_bridge, folder_dd, export_base_state],
+            [status_bar, bank_html],
         )
 
         def on_bank_prev(pg, fn):
