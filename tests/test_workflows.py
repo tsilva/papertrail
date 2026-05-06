@@ -1258,6 +1258,126 @@ class CommandTests(unittest.TestCase):
             self.assertEqual(match["files"], ["package-fee-invoice-receipt.pdf"])
             self.assertIn("missing bank-note", match["errors"][0])
 
+    def test_reconcile_excludes_documents_reconciled_in_prior_month(self):
+        mar_dir = self.export / "2026-03"
+        apr_dir = self.export / "2026-04"
+        mar_dir.mkdir()
+        apr_dir.mkdir()
+
+        from papertrail.bank_statement import classify_bank_statement
+
+        march_statement = mar_dir / "statement.xlsx"
+        create_millennium_statement(
+            march_statement,
+            period_start="01/03/2026",
+            period_end="31/03/2026",
+            transactions=[
+                {
+                    "date_posting": "31/03/2026",
+                    "date_value": "31/03/2026",
+                    "description": "STORE PAYMENT",
+                    "amount": -12.34,
+                    "currency": "EUR",
+                    "notes": "",
+                    "treated": "Nao",
+                }
+            ],
+        )
+        march_statement_hash = hash_file_fast(march_statement)
+        march_statement_metadata = classify_bank_statement(march_statement, march_statement_hash)
+        self.repository.save_document(march_statement, march_statement_metadata)
+
+        march_bank_note = mar_dir / "march-bank-note.pdf"
+        march_receipt = mar_dir / "march-receipt.pdf"
+        create_pdf(march_bank_note, ["March bank note"])
+        create_pdf(march_receipt, ["March receipt"])
+        self.repository.save_document(
+            march_bank_note,
+            self._metadata(
+                "marbank0",
+                "marbank0",
+                date_created="2026-03-31",
+                date_issued="2026-03-31",
+                date_updated="2026-03-31",
+                document_type="bank-note",
+                document_type_raw="Bank Note",
+                total_amount=12.34,
+            ),
+        )
+        self.repository.save_document(
+            march_receipt,
+            self._metadata(
+                "marrecv0",
+                "marrecv0",
+                date_created="2026-03-31",
+                date_issued="2026-03-31",
+                date_updated="2026-03-31",
+                document_type="receipt",
+                document_type_raw="Receipt",
+                total_amount=12.34,
+            ),
+        )
+
+        reconcile(self.runtime, mar_dir, dry_run=False)
+        march_data = json.loads(
+            march_statement.with_suffix(".reconciliation.json").read_text(encoding="utf-8")
+        )
+        self.assertEqual(march_data["summary"]["reconciled"], 1)
+        self.assertEqual(
+            set(march_data["matches"][0]["files"]),
+            {"march-bank-note.pdf", "march-receipt.pdf"},
+        )
+
+        april_statement = apr_dir / "statement.xlsx"
+        create_millennium_statement(
+            april_statement,
+            period_start="01/04/2026",
+            period_end="30/04/2026",
+            transactions=[
+                {
+                    "date_posting": "01/04/2026",
+                    "date_value": "01/04/2026",
+                    "description": "STORE PAYMENT",
+                    "amount": -12.34,
+                    "currency": "EUR",
+                    "notes": "",
+                    "treated": "Nao",
+                }
+            ],
+        )
+        april_statement_hash = hash_file_fast(april_statement)
+        april_statement_metadata = classify_bank_statement(april_statement, april_statement_hash)
+        self.repository.save_document(april_statement, april_statement_metadata)
+
+        april_bank_note = apr_dir / "april-bank-note.pdf"
+        create_pdf(april_bank_note, ["April bank note"])
+        self.repository.save_document(
+            april_bank_note,
+            self._metadata(
+                "aprbank0",
+                "aprbank0",
+                date_created="2026-04-01",
+                date_issued="2026-04-01",
+                date_updated="2026-04-01",
+                document_type="bank-note",
+                document_type_raw="Bank Note",
+                total_amount=12.34,
+            ),
+        )
+
+        reconcile(self.runtime, apr_dir, dry_run=False)
+
+        april_data = json.loads(
+            april_statement.with_suffix(".reconciliation.json").read_text(encoding="utf-8")
+        )
+        self.assertEqual(april_data["summary"]["reconciled"], 0)
+        self.assertEqual(april_data["summary"]["incomplete"], 1)
+        self.assertEqual(april_data["matches"][0]["files"], ["april-bank-note.pdf"])
+        self.assertNotIn(
+            "march-receipt.pdf",
+            {entry["file"] for entry in april_data["unmatched_files"]},
+        )
+
     def test_reconcile_month_folder_uses_adjacent_month_candidates_selectively(self):
         self.runtime.profile.reconciliation.rules = [
             {

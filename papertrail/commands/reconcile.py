@@ -286,6 +286,54 @@ def _reconciliation_search_paths(export_path: Path) -> list[Path]:
     return paths
 
 
+def _export_month_key(export_path: Path) -> Optional[tuple[int, int]]:
+    parts = export_path.name.split("-")
+    if len(parts) != 2:
+        return None
+    try:
+        year = int(parts[0])
+        month = int(parts[1])
+    except ValueError:
+        return None
+    if not (1 <= month <= 12):
+        return None
+    return year, month
+
+
+def _prior_reconciliation_paths(export_path: Path) -> list[Path]:
+    current_key = _export_month_key(export_path)
+    if current_key is None:
+        return []
+    return [
+        search_path
+        for search_path in _reconciliation_search_paths(export_path)
+        if (path_key := _export_month_key(search_path)) is not None
+        and path_key < current_key
+    ]
+
+
+def _load_reconciled_filenames(search_paths: list[Path]) -> set[str]:
+    reconciled: set[str] = set()
+    for search_path in search_paths:
+        for reconciliation_path in search_path.rglob("*.reconciliation.json"):
+            try:
+                relative_path = reconciliation_path.relative_to(search_path)
+                if DocumentRepository.is_internal_path(relative_path):
+                    continue
+                data = json.loads(reconciliation_path.read_text(encoding="utf-8"))
+            except (OSError, UnicodeDecodeError, ValueError):
+                continue
+
+            for match in data.get("matches", []):
+                if match.get("errors"):
+                    continue
+                files = match.get("files") or []
+                if isinstance(files, str):
+                    files = [files]
+                reconciled.update(str(filename) for filename in files if filename)
+    return reconciled
+
+
 def _date_from_iso(value: Optional[str]) -> Optional[date]:
     if not value:
         return None
@@ -650,8 +698,21 @@ def _load_reconciliation_candidates(
     rules: list | None = None,
 ) -> list[PDFCandidate]:
     search_paths = _reconciliation_search_paths(export_path)
+    prior_reconciled_filenames = _load_reconciled_filenames(
+        _prior_reconciliation_paths(export_path)
+    )
+
     if len(search_paths) == 1:
-        return _load_pdf_candidates(repository, export_path, exclude_prefixes=exclude_prefixes)
+        path_candidates = _load_pdf_candidates(
+            repository,
+            export_path,
+            exclude_prefixes=exclude_prefixes,
+        )
+        return [
+            candidate
+            for candidate in path_candidates
+            if candidate.pdf_filename not in prior_reconciled_filenames
+        ]
 
     rules = rules or []
     min_txn_date, max_txn_date = _transaction_date_bounds(transactions)
@@ -665,8 +726,16 @@ def _load_reconciliation_candidates(
     primary_path = export_path.resolve()
     for search_path in search_paths:
         is_primary_path = search_path.resolve() == primary_path
-        for candidate in _load_pdf_candidates(repository, search_path, exclude_prefixes=exclude_prefixes):
+        path_candidates = _load_pdf_candidates(
+            repository,
+            search_path,
+            exclude_prefixes=exclude_prefixes,
+        )
+        for candidate in path_candidates:
             if candidate.candidate_id in seen_candidate_ids:
+                continue
+            if candidate.pdf_filename in prior_reconciled_filenames:
+                logger.debug(f"[PRIOR-RECONCILED] Skipping {candidate.pdf_filename}")
                 continue
             if not is_primary_path and not _is_relevant_supplemental_candidate(
                 candidate,
