@@ -397,24 +397,6 @@ class CommandTests(unittest.TestCase):
         self.assertIn("unmatched_files", data)
 
     def test_reconcile_merges_tax_attachments_and_is_idempotent(self):
-        self.runtime.profile.reconciliation.rules = [
-            {
-                "name": "tax-social-security",
-                "match_description": ["PTU-TAXA SOCIAL UNICA"],
-                "required_types": {"bank-note": 1, "payroll-social": 1},
-                "shared_types": {},
-                "companions": [],
-                "expected_page_count": {},
-            },
-            {
-                "name": "tax-irs",
-                "match_description": ["PAG.DUC"],
-                "required_types": {"bank-note": 1, "tax-irs": 1},
-                "shared_types": {},
-                "companions": [],
-                "expected_page_count": {},
-            },
-        ]
         self.runtime.profile.export.merge_rules = [
             {"target_type": "payroll-social", "attach_type": "bank-note"},
             {"target_type": "tax-irs", "attach_type": "bank-note"},
@@ -843,17 +825,6 @@ class CommandTests(unittest.TestCase):
         self.assertEqual(len(data["matches"][0]["files"]), 2)
 
     def test_reconcile_does_not_reuse_exact_match_for_duplicate_amount_transactions(self):
-        self.runtime.profile.reconciliation.rules = [
-            {
-                "name": "bank-transfer-internal",
-                "match_description": ["TRF P/ Example Company - BPI"],
-                "required_types": {"bank-note": 1},
-                "shared_types": {},
-                "companions": [],
-                "expected_page_count": {},
-            },
-        ]
-
         statement_path = self.export / "statement.xlsx"
         create_millennium_statement(
             statement_path,
@@ -988,17 +959,6 @@ class CommandTests(unittest.TestCase):
         self.assertEqual(data["matches"][0]["files"], ["bpi-bank-note.pdf"])
 
     def test_reconcile_requires_bnc_pair_for_cmp_on_non_bpi_statement(self):
-        self.runtime.profile.reconciliation.rules = [
-            {
-                "name": "stamp-duty",
-                "match_description": ["IMP ABERT CRED EMPRES"],
-                "required_types": {"invoice-receipt": 1},
-                "shared_types": {},
-                "companions": [],
-                "expected_page_count": {},
-            },
-        ]
-
         statement_path = self.export / "millennium-statement.xlsx"
         create_millennium_statement(
             statement_path,
@@ -1050,21 +1010,13 @@ class CommandTests(unittest.TestCase):
         self.assertEqual(data["summary"]["incomplete"], 1)
         self.assertEqual(
             data["matches"][0]["errors"],
-            ["missing BNC document for CMP/DIV support file"],
+            [
+                "missing bank-anchor (expected 1, found 0)",
+                "missing BNC document for CMP/DIV support file",
+            ],
         )
 
     def test_reconcile_pairs_cmp_support_file_with_matching_bnc_bank_note(self):
-        self.runtime.profile.reconciliation.rules = [
-            {
-                "name": "loan-millennium-fees",
-                "match_description": ["IMP ABERT CRED EMPRES"],
-                "required_types": {"bank-note|invoice-receipt": 1},
-                "shared_types": {},
-                "companions": [],
-                "expected_page_count": {},
-            },
-        ]
-
         statement_path = self.export / "millennium-statement.xlsx"
         create_millennium_statement(
             statement_path,
@@ -1152,18 +1104,7 @@ class CommandTests(unittest.TestCase):
             sorted([bank_note.name, invoice_receipt.name]),
         )
 
-    def test_reconcile_allows_cmp_without_bnc_for_bpi_statement(self):
-        self.runtime.profile.reconciliation.rules = [
-            {
-                "name": "stamp-duty",
-                "match_description": ["IMP ABERT CRED EMPRES"],
-                "required_types": {"invoice-receipt": 1},
-                "shared_types": {},
-                "companions": [],
-                "expected_page_count": {},
-            },
-        ]
-
+    def test_reconcile_requires_bank_anchor_for_bpi_loan_fee_statement(self):
         statement_path = self.export / "bpi-statement.xlsx"
         create_bpi_statement(
             statement_path,
@@ -1207,9 +1148,12 @@ class CommandTests(unittest.TestCase):
 
         sidecar_path = statement_path.with_suffix(".reconciliation.json")
         data = json.loads(sidecar_path.read_text(encoding="utf-8"))
-        self.assertEqual(data["summary"]["reconciled"], 1)
-        self.assertEqual(data["summary"]["incomplete"], 0)
-        self.assertEqual(data["matches"][0]["errors"], [])
+        self.assertEqual(data["summary"]["reconciled"], 0)
+        self.assertEqual(data["summary"]["incomplete"], 1)
+        self.assertEqual(
+            data["matches"][0]["errors"],
+            ["missing bank-anchor (expected 1, found 0)"],
+        )
 
     def test_reconcile_rejects_unknown_bank_note_for_bpi_statement(self):
         statement_path = self.export / "bpi-statement.xlsx"
@@ -1260,17 +1204,6 @@ class CommandTests(unittest.TestCase):
         self.assertEqual(data["matches"], [])
 
     def test_reconcile_allows_multiple_bank_transfer_supporting_documents(self):
-        self.runtime.profile.reconciliation.rules = [
-            {
-                "name": "bank-transfer-sepa",
-                "match_description": ["TRF SEPA+"],
-                "required_types": {"bank-note|bank-transfer": [1, None]},
-                "shared_types": {},
-                "companions": [],
-                "expected_page_count": {"bank-note": 1},
-            },
-        ]
-
         statement_path = self.export / "bpi-statement.xlsx"
         create_bpi_statement(
             statement_path,
@@ -1456,18 +1389,6 @@ class CommandTests(unittest.TestCase):
         self.assertIn("aggregate-bpi-bank-transfer.pdf", unmatched_files)
 
     def test_reconcile_keeps_same_signature_bank_notes_when_rule_allows_multiple(self):
-        self.runtime.profile.reconciliation.rules = [
-            {
-                "name": "bank-transfer-self-credit",
-                "match_description": ["TRF. P/O EXAMPLE COMPANY, UNIPESSOAL, LDA"],
-                "direction": "credit",
-                "required_types": {"bank-note": [1, None]},
-                "shared_types": {},
-                "companions": [],
-                "expected_page_count": {"bank-note": 1},
-            },
-        ]
-
         statement_path = self.export / "millennium-statement.xlsx"
         create_millennium_statement(
             statement_path,
@@ -1543,17 +1464,6 @@ class CommandTests(unittest.TestCase):
         )
 
     def test_reconcile_rejects_bpi_bank_note_for_prior_month_transfer(self):
-        self.runtime.profile.reconciliation.rules = [
-            {
-                "name": "bank-transfer-sepa",
-                "match_description": ["TRF SEPA+"],
-                "required_types": {"bank-note|bank-transfer": [1, None]},
-                "shared_types": {},
-                "companions": [],
-                "expected_page_count": {},
-            },
-        ]
-
         statement_path = self.export / "bpi-statement.xlsx"
         create_bpi_statement(
             statement_path,
@@ -1662,18 +1572,6 @@ class CommandTests(unittest.TestCase):
         self.assertIn("prior-month-bpi-bank-note.pdf", unmatched_files)
 
     def test_reconcile_rejects_bpi_acquisition_summary_for_stock_sale(self):
-        self.runtime.profile.reconciliation.rules = [
-            {
-                "name": "stock-sale-bpi",
-                "match_description": ["TRANSFERENCIA A CREDITO LIS"],
-                "direction": "credit",
-                "shared_types": {"bank-investment": "bpi"},
-                "required_types": {"bank-investment": [1, None]},
-                "companions": [],
-                "expected_page_count": {"bank-investment": [1, 2]},
-            },
-        ]
-
         statement_path = self.export / "bpi-statement.xlsx"
         create_bpi_statement(
             statement_path,
@@ -1739,18 +1637,6 @@ class CommandTests(unittest.TestCase):
         )
 
     def test_reconcile_matches_bpi_stock_sale_from_usd_invoice_line_item(self):
-        self.runtime.profile.reconciliation.rules = [
-            {
-                "name": "stock-sale-bpi",
-                "match_description": ["TRANSFERENCIA A CREDITO LIS"],
-                "direction": "credit",
-                "shared_types": {},
-                "required_types": {"bank-note|bank-stock-buy|bank-stock-sell": [1, None]},
-                "companions": [],
-                "expected_page_count": {"bank-note|bank-stock-buy|bank-stock-sell": [1, 2]},
-            },
-        ]
-
         statement_path = self.export / "bpi-statement.xlsx"
         create_bpi_statement(
             statement_path,
@@ -1828,17 +1714,6 @@ class CommandTests(unittest.TestCase):
         self.assertEqual(data["matches"][0]["line_items"][0]["currency"], "USD")
 
     def test_reconcile_links_same_day_no_amount_contract_document(self):
-        self.runtime.profile.reconciliation.rules = [
-            {
-                "name": "loan-millennium-disbursement",
-                "match_description": ["CONCESS CRED EMPR"],
-                "required_types": {"bank-note|bank-transfer|contract-signup": [1, None]},
-                "shared_types": {},
-                "companions": [],
-                "expected_page_count": {"bank-note|bank-transfer": 1},
-            },
-        ]
-
         statement_path = self.export / "statement.xlsx"
         create_millennium_statement(
             statement_path,
@@ -1933,17 +1808,6 @@ class CommandTests(unittest.TestCase):
         self.assertEqual(data["unmatched_files"], [])
 
     def test_reconcile_shared_matching_prefers_nearest_shared_document_per_signature(self):
-        self.runtime.profile.reconciliation.rules = [
-            {
-                "name": "vendor-sharedtoll",
-                "match_description": ["SHAREDTOLL"],
-                "required_types": {"bank-note": 1, "receipt|invoice-receipt": [1, None]},
-                "shared_types": {"invoice-receipt": "Shared Toll"},
-                "companions": [],
-                "expected_page_count": {},
-            },
-        ]
-
         jan_dir = self.export / "2026-01"
         feb_dir = self.export / "2026-02"
         jan_dir.mkdir()
@@ -2041,17 +1905,6 @@ class CommandTests(unittest.TestCase):
         )
 
     def test_reconcile_does_not_use_adjacent_month_shared_doc_for_via_verde(self):
-        self.runtime.profile.reconciliation.rules = [
-            {
-                "name": "vendor-sharedtoll",
-                "match_description": ["SHAREDTOLL"],
-                "required_types": {"bank-note": 1, "receipt|invoice-receipt": [1, None]},
-                "shared_types": {"invoice-receipt": "Shared Toll"},
-                "companions": [],
-                "expected_page_count": {},
-            },
-        ]
-
         feb_dir = self.export / "2026-02"
         mar_dir = self.export / "2026-03"
         feb_dir.mkdir()
@@ -2123,23 +1976,12 @@ class CommandTests(unittest.TestCase):
 
         sidecar_path = statement_path.with_suffix(".reconciliation.json")
         data = json.loads(sidecar_path.read_text(encoding="utf-8"))
-        self.assertEqual(data["summary"]["reconciled"], 0)
-        self.assertEqual(data["summary"]["incomplete"], 1)
+        self.assertEqual(data["summary"]["reconciled"], 1)
+        self.assertEqual(data["summary"]["incomplete"], 0)
         self.assertEqual(data["matches"][0]["files"], ["shared-toll-bank-note.pdf"])
-        self.assertIn("missing receipt/invoice-receipt", data["matches"][0]["errors"][0])
+        self.assertEqual(data["matches"][0]["errors"], [])
 
     def test_reconcile_prunes_cross_month_bank_generated_candidates_when_same_month_exists(self):
-        self.runtime.profile.reconciliation.rules = [
-            {
-                "name": "bank-fee-stamp-duty",
-                "match_description": ["IMPOSTO DO SELO"],
-                "required_types": {"invoice-receipt": 1, "bank-note": [0, 1]},
-                "shared_types": {},
-                "companions": [],
-                "expected_page_count": {},
-            },
-        ]
-
         feb_dir = self.export / "2026-02"
         mar_dir = self.export / "2026-03"
         feb_dir.mkdir()
@@ -2255,25 +2097,6 @@ class CommandTests(unittest.TestCase):
         )
 
     def test_reconcile_bank_fee_companion_invoice_without_bank_note_is_incomplete(self):
-        self.runtime.profile.reconciliation.rules = [
-            {
-                "name": "bank-fee-package",
-                "match_description": ["PACOTE M EMPRESA"],
-                "required_types": {"invoice-receipt": [1, None], "bank-note": 1},
-                "shared_types": {},
-                "companions": ["bank-fee-stamp-duty"],
-                "expected_page_count": {},
-            },
-            {
-                "name": "bank-fee-stamp-duty",
-                "match_description": ["IMPOSTO SELO"],
-                "required_types": {"invoice-receipt": 1, "bank-note": 1},
-                "shared_types": {},
-                "companions": [],
-                "expected_page_count": {},
-            },
-        ]
-
         statement_path = self.export / "statement.xlsx"
         create_millennium_statement(
             statement_path,
@@ -2331,11 +2154,8 @@ class CommandTests(unittest.TestCase):
         sidecar_path = statement_path.with_suffix(".reconciliation.json")
         data = json.loads(sidecar_path.read_text(encoding="utf-8"))
         self.assertEqual(data["summary"]["reconciled"], 0)
-        self.assertEqual(data["summary"]["incomplete"], 2)
-        self.assertEqual(len(data["matches"]), 2)
-        for match in data["matches"]:
-            self.assertEqual(match["files"], ["package-fee-invoice-receipt.pdf"])
-            self.assertIn("missing bank-note", match["errors"][0])
+        self.assertEqual(data["summary"]["unmatched"], 2)
+        self.assertEqual(data["matches"], [])
 
     def test_reconcile_excludes_documents_reconciled_in_prior_month(self):
         mar_dir = self.export / "2026-03"
@@ -2563,33 +2383,6 @@ class CommandTests(unittest.TestCase):
         self.assertNotIn("march-old-invoice.pdf", unmatched_files)
 
     def test_reconcile_month_folder_uses_adjacent_month_candidates_selectively(self):
-        self.runtime.profile.reconciliation.rules = [
-            {
-                "name": "benefit-benefits-provider",
-                "match_description": ["ORDEM PAGAMENTO S/ESTRANGEIRO"],
-                "required_types": {"bank-note": 1, "receipt|invoice-receipt": 1},
-                "shared_types": {},
-                "companions": [],
-                "expected_page_count": {},
-            },
-            {
-                "name": "payroll-salary-employee-one",
-                "match_description": ["EMPLOYEE ONE"],
-                "required_types": {"bank-note": 1, "payroll-salary": 1},
-                "shared_types": {"payroll-salary": None},
-                "companions": [],
-                "expected_page_count": {},
-            },
-            {
-                "name": "payroll-salary-employee-two",
-                "match_description": ["EMPLOYEE TWO"],
-                "required_types": {"bank-note": 1, "payroll-salary": 1},
-                "shared_types": {"payroll-salary": None},
-                "companions": [],
-                "expected_page_count": {},
-            },
-        ]
-
         jan_dir = self.export / "2026-01"
         feb_dir = self.export / "2026-02"
         mar_dir = self.export / "2026-03"

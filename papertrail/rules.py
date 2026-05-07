@@ -139,9 +139,7 @@ class RuleEngine:
     def classify_transaction(self, txn, rules=None):
         """Classify a transaction using first-match-wins rules."""
         if rules is None:
-            if self.profile is None:
-                raise RuntimeError("RuleEngine requires a profile or explicit rules")
-            rules = self.profile.reconciliation.rules
+            raise RuntimeError("RuleEngine requires explicit reconciliation rules")
         normalized = strip_diacritics(txn.description).upper()
         for rule in rules:
             if rule.direction is not None:
@@ -167,9 +165,7 @@ class RuleEngine:
     def validate_match(self, match, rules=None) -> list[str]:
         """Validate a single reconciliation match."""
         if rules is None:
-            if self.profile is None:
-                raise RuntimeError("RuleEngine requires a profile or explicit rules")
-            rules = self.profile.reconciliation.rules
+            raise RuntimeError("RuleEngine requires explicit reconciliation rules")
         category, rule = self.classify_transaction(match.transaction, rules)
         if rule is None:
             return ["unclassified transaction"]

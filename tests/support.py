@@ -34,37 +34,7 @@ def make_test_runtime(root: Path) -> Runtime:
             "gmail": {"enabled": False},
             "passwords": {},
             "nif_api": {"enabled": False},
-            "reconciliation": {
-                "exclude_prefixes": [],
-                "rules": [
-                    {
-                        "name": "bank-fee",
-                        "match_description": ["COMISSAO"],
-                        "required_types": {"bank-note": 1},
-                        "shared_types": {},
-                        "companions": [],
-                        "expected_page_count": {},
-                    },
-                    {
-                        "name": "default-credit",
-                        "direction": "credit",
-                        "match_description": [],
-                        "required_types": {"bank-note|invoice-credit": 1},
-                        "shared_types": {},
-                        "companions": [],
-                        "expected_page_count": {},
-                    },
-                    {
-                        "name": "default-debit",
-                        "direction": "debit",
-                        "match_description": [],
-                        "required_types": {"bank-note": 1, "invoice|receipt|invoice-receipt": [1, None]},
-                        "shared_types": {},
-                        "companions": [],
-                        "expected_page_count": {},
-                    },
-                ],
-            },
+            "reconciliation": {"exclude_prefixes": []},
             "export": {
                 "file_mappings": {
                     "enabled": False,

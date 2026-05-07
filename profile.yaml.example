@@ -95,38 +95,7 @@ export:
     - target_type: "at-ss*"        # Social security payment proof
       attach_type: "bank-note"
 
-# Reconciliation validation.
-# mode: legacy_rules uses the explicit YAML rules below.
-# mode: evidence_v1 uses broad computed evidence families from the codebase.
+# Reconciliation uses built-in evidence rules from the codebase. Profile
+# settings only control matching exclusions.
 reconciliation:
-  mode: "evidence_v1"
-  rules:
-    # Legacy fallback rules. These remain available when mode is "legacy_rules".
-    - name: bank-fee
-      match_description: ["COMISSAO", "IMPOSTO SELO", "IMP.SELO", "JUROS", "ANUIDADE", "MANUTENCAO", "DESPESAS", "PORTES"]
-      required_types:
-        bank-note: 1
-
-    - name: default-credit
-      direction: credit
-      required_types:
-        "bank-note|invoice-credit": 1
-
-    - name: default-debit
-      direction: debit
-      required_types:
-        bank-note: 1
-        "invoice|receipt|invoice-receipt|invoice-credit|invoice-debit|invoice-order|receipt-reference|receipt-delivery": [1, null]
-
-  # Rule syntax reference:
-  #   mode: "legacy_rules" or "evidence_v1"
-  #   name (str, required): Rule identifier, becomes transaction_category in output
-  #   match_description (list[str], optional): Keywords matched case-insensitively against
-  #     diacritics-stripped description. Any keyword match = rule matches.
-  #   direction (str, optional): "credit" (amount > 0) or "debit" (amount <= 0)
-  #   companions (list[str], optional): Rule names to group with for sum-based matching.
-  #     When a fee + stamp duty are separate transactions but one combined bank note,
-  #     companions groups them on the same date and matches their summed amount.
-  #   required_types (dict, required): Document type patterns → cardinality constraints
-  #     Key: document type or "|"-separated alternatives (e.g., "invoice|receipt")
-  #     Value: N (exactly N) or [min, max] (range, null = unbounded)
+  exclude_prefixes: ["EXC_"]

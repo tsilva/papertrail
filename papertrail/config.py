@@ -101,9 +101,7 @@ class ReconciliationRule(SettingsModel):
 
 
 class ReconciliationSettings(SettingsModel):
-    mode: str = "legacy_rules"
     exclude_prefixes: list[str] = Field(default_factory=list)
-    rules: list[ReconciliationRule] = Field(default_factory=list)
 
 
 class ExportRule(SettingsModel):
@@ -143,40 +141,6 @@ class ProfileSettings(SettingsModel):
 
 
 Profile = ProfileSettings
-
-
-_DEFAULT_RECON_RULES = [
-    {
-        "name": "bank-fee",
-        "match_description": [
-            "COMISSAO",
-            "IMPOSTO SELO",
-            "IMP.SELO",
-            "JUROS",
-            "ANUIDADE",
-            "MANUTENCAO",
-            "DESPESAS",
-            "PORTES",
-        ],
-        "required_types": {"bank-note": 1},
-    },
-    {
-        "name": "default-credit",
-        "direction": "credit",
-        "required_types": {"bank-note|invoice-credit": 1},
-    },
-    {
-        "name": "default-debit",
-        "direction": "debit",
-        "required_types": {
-            "bank-note": 1,
-            "invoice|receipt|invoice-receipt|invoice-credit|invoice-debit|invoice-order|receipt-reference|receipt-delivery": [
-                1,
-                None,
-            ],
-        },
-    },
-]
 
 
 def _resolve_path(path_str: str | None, profile_path: Path | None) -> str | None:
@@ -232,21 +196,7 @@ def _normalize_profile_data(data: dict[str, object], profile_path: Path | None) 
         paths["raw"] = []
 
     reconciliation = normalized["reconciliation"]
-    reconciliation.setdefault("mode", "legacy_rules")
-    rules = reconciliation.get("rules")
-    if rules is None:
-        reconciliation["rules"] = [dict(rule) for rule in _DEFAULT_RECON_RULES]
-    else:
-        reconciliation["rules"] = [
-            rule for rule in rules if isinstance(rule, dict) and "name" in rule
-        ]
     reconciliation.setdefault("exclude_prefixes", [])
-    for rule in reconciliation["rules"]:
-        rule.setdefault("match_description", [])
-        rule.setdefault("required_types", {})
-        rule.setdefault("shared_types", {})
-        rule.setdefault("companions", [])
-        rule.setdefault("expected_page_count", {})
 
     export = normalized["export"]
     export.setdefault("file_mappings", {})

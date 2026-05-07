@@ -16,7 +16,6 @@ class ReconciliationEvidenceWorkflowTests(unittest.TestCase):
         self.tmpdir = tempfile.TemporaryDirectory()
         self.root = Path(self.tmpdir.name)
         self.runtime = make_test_runtime(self.root)
-        self.runtime.profile.reconciliation.mode = "evidence_v1"
         self.repository = DocumentRepository(self.runtime)
         self.export = self.runtime.paths.export
 

@@ -73,14 +73,14 @@ _SUPPORTING_DOC_TYPE_PATTERNS = [
 ]
 
 
-def _evidence_v1_rules() -> list[ReconciliationRule]:
+def _reconciliation_rules() -> list[ReconciliationRule]:
     """Broad reconciliation rules built on derived evidence families."""
     raw_rules = [
         {
             "name": "investment",
             "match_description": ["TRANSFERENCIA A CREDITO LIS"],
-            "required_types": {"investment-evidence": [1, None]},
-            "expected_page_count": {"investment-evidence": [1, 2]},
+            "required_types": {"bank-stock-sell": [1, None]},
+            "expected_page_count": {"bank-stock-sell": [1, 2]},
         },
         {
             "name": "investment",
@@ -152,8 +152,13 @@ def _evidence_v1_rules() -> list[ReconciliationRule]:
         },
         {
             "name": "bank-only",
+            "match_description": ["TRF SEPA+"],
+            "required_types": {"bank-anchor": [1, None]},
+            "expected_page_count": {},
+        },
+        {
+            "name": "bank-only",
             "match_description": [
-                "TRF SEPA+",
                 "TRF P/ EXAMPLE COMPANY - BPI",
                 "TRANSFERENCIA RECEBIDA",
                 "TRANSFERÊNCIA RECEBIDA",
@@ -176,16 +181,6 @@ def _evidence_v1_rules() -> list[ReconciliationRule]:
         },
     ]
     return [ReconciliationRule.model_validate(rule) for rule in raw_rules]
-
-
-def _reconciliation_mode(profile) -> str:
-    return getattr(getattr(profile, "reconciliation", None), "mode", "legacy_rules") or "legacy_rules"
-
-
-def _rules_for_profile(profile) -> list:
-    if _reconciliation_mode(profile) == "evidence_v1":
-        return _evidence_v1_rules()
-    return profile.reconciliation.rules
 
 
 @dataclass(frozen=True)
@@ -2524,8 +2519,7 @@ def reconcile_single(
         return empty_stats
 
     profile = runtime.profile
-    rules = _rules_for_profile(profile)
-    evidence_mode = _reconciliation_mode(profile) == "evidence_v1"
+    rules = _reconciliation_rules()
     exclude_prefixes = profile.reconciliation.exclude_prefixes
     statement_issuing_party = _load_statement_issuing_party(repository, excel_path)
     candidates = _load_reconciliation_candidates(
@@ -2539,7 +2533,7 @@ def reconcile_single(
         candidate
         for candidate in candidates
         if not candidate.exclude_from_matching
-        and not (evidence_mode and candidate.is_ignored_for_reconciliation)
+        and not candidate.is_ignored_for_reconciliation
         and _is_candidate_compatible_with_statement_bank(candidate, statement_issuing_party)
     ]
 
@@ -2577,11 +2571,7 @@ def reconcile_single(
         matchable,
         rules,
     )
-    evidence_candidate_ids = (
-        _link_evidence_counterparty_documents(all_matches, matchable, rules)
-        if evidence_mode
-        else set()
-    )
+    evidence_candidate_ids = _link_evidence_counterparty_documents(all_matches, matchable, rules)
     related_candidate_ids = _link_related_no_amount_documents(
         all_matches,
         matchable,
