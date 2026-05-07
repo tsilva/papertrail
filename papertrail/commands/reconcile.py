@@ -1717,10 +1717,64 @@ def _classify_transaction(txn: Transaction, rules: list) -> tuple[str, object | 
     return RuleEngine().classify_transaction(txn, rules)
 
 
+def _count_documents_for_pattern(match: MatchResult, engine: RuleEngine, pattern: str) -> int:
+    count = 0
+    for candidate in match.pdf_candidates:
+        candidate_doc_type = engine.candidate_doc_type(candidate)
+        if candidate_doc_type and engine.match_doc_type(candidate_doc_type, pattern):
+            count += 1
+            continue
+        count += sum(
+            1
+            for item in match.line_items
+            if item.candidate is candidate
+            and item.line_item.document_type
+            and engine.match_doc_type(item.line_item.document_type, pattern)
+        )
+    return count
+
+
+def _is_paired_supporting_cardinality_error(
+    match: MatchResult,
+    rule,
+    error: str,
+    engine: RuleEngine,
+) -> bool:
+    error_match = re.fullmatch(
+        r"too many (?P<display>.+) \(expected max (?P<max>\d+), found (?P<found>\d+)\)",
+        error,
+    )
+    if not error_match:
+        return False
+
+    display_pattern = error_match.group("display")
+    max_count = int(error_match.group("max"))
+    found_count = int(error_match.group("found"))
+
+    for pattern in rule.required_types:
+        if pattern.replace("|", "/") != display_pattern:
+            continue
+        paired_support_count = sum(
+            1
+            for candidate in match.pdf_candidates
+            if _is_paired_supporting_candidate(match, candidate)
+            and (candidate_doc_type := engine.candidate_doc_type(candidate))
+            and engine.match_doc_type(candidate_doc_type, pattern)
+        )
+        if paired_support_count == 0:
+            continue
+        actual_count = _count_documents_for_pattern(match, engine, pattern)
+        if actual_count == found_count and actual_count - paired_support_count <= max_count:
+            return True
+
+    return False
+
+
 def _validate_required_documents(matches: list[MatchResult], rules: list) -> dict[int, list[str]]:
     engine = RuleEngine()
     errors: dict[int, list[str]] = {}
     for match in matches:
+        _, rule = _classify_transaction(match.transaction, rules)
         row_errors = engine.validate_match(match, rules)
         paired_support_filenames = {
             candidate.pdf_filename
@@ -1735,6 +1789,12 @@ def _validate_required_documents(matches: list[MatchResult], rules: list) -> dic
                     error.startswith("unexpected ")
                     and any(f"({filename})" in error for filename in paired_support_filenames)
                 )
+            ]
+        if rule is not None:
+            row_errors = [
+                error
+                for error in row_errors
+                if not _is_paired_supporting_cardinality_error(match, rule, error, engine)
             ]
         if row_errors:
             errors[match.transaction.row_number] = row_errors

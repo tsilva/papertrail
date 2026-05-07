@@ -1058,7 +1058,7 @@ class CommandTests(unittest.TestCase):
             {
                 "name": "loan-millennium-fees",
                 "match_description": ["IMP ABERT CRED EMPRES"],
-                "required_types": {"bank-note": 1},
+                "required_types": {"bank-note|invoice-receipt": 1},
                 "shared_types": {},
                 "companions": [],
                 "expected_page_count": {},
