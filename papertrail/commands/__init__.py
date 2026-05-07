@@ -22,6 +22,7 @@ import pandas as pd
 
 from papertrail.config import get_gmail_config_paths, get_passwords_from_profile
 from papertrail.archive_extract import extract_archives
+from papertrail.document_types import normalize_document_type
 from papertrail.engine import DocumentEngine
 from papertrail.gmail import download_gmail_attachments
 from papertrail.logging_utils import (
@@ -478,6 +479,40 @@ def _compress_exported_pdfs(pdf_paths: list[Path]) -> None:
         _compress_pdf_export(pdf_path)
 
 
+def _metadata_for_export(metadata: dict, doc_path: Path) -> dict:
+    export_metadata = dict(metadata)
+    if doc_path.suffix.lower() == ".pdf":
+        effective_type = normalize_document_type(
+            export_metadata.get("document_type"),
+            export_metadata.get("document_type_raw"),
+            export_metadata.get("document_title"),
+        )
+        if effective_type:
+            export_metadata["document_type"] = effective_type
+    return export_metadata
+
+
+def _export_dedup_key(metadata: dict) -> tuple[str, ...] | None:
+    bank_statement = metadata.get("bank_statement")
+    if isinstance(bank_statement, dict):
+        account_number = bank_statement.get("account_number")
+        period_start = bank_statement.get("period_start")
+        period_end = bank_statement.get("period_end")
+        if account_number and period_start and period_end:
+            return (
+                "bank-statement",
+                str(bank_statement.get("bank_format") or ""),
+                str(account_number),
+                str(period_start),
+                str(period_end),
+            )
+
+    content_hash = metadata.get("hash_content")
+    if content_hash:
+        return ("content", str(content_hash))
+    return None
+
+
 def copy_matching(
     runtime: Runtime,
     processed_path: Path,
@@ -499,29 +534,33 @@ def copy_matching(
     engine = RuleEngine(profile_context=profile_context)
 
     stats = {"copied": 0, "skipped": 0, "deduped": 0, "total": 0}
-    seen_content_hashes: set[str] = set()
+    seen_dedup_keys: set[tuple[str, ...]] = set()
 
-    documents = list(repository.iter_documents(processed_path, validate=False, require_companion=True))
+    documents = sorted(
+        repository.iter_documents(processed_path, validate=False, require_companion=True),
+        key=lambda item: str(item[0]),
+    )
     for json_path, doc_path, metadata in runtime.console.track(documents, "Copying files"):
         metadata_dict = metadata.model_dump() if isinstance(metadata, DocumentMetadata) else metadata
+        export_metadata_dict = _metadata_for_export(metadata_dict, doc_path)
         if not matcher(doc_path.name) and not matcher(json_path.name):
             continue
 
         stats["total"] += 1
-        content_hash = metadata_dict.get("hash_content")
-        if content_hash and content_hash in seen_content_hashes:
+        dedup_key = _export_dedup_key(export_metadata_dict)
+        if dedup_key and dedup_key in seen_dedup_keys:
             stats["deduped"] += 1
-            logger.debug(f"[EXPORT-DEDUP] Skipping {doc_path.name} (content hash {content_hash} already exported)")
+            logger.debug(f"[EXPORT-DEDUP] Skipping {doc_path.name} (dedup key {dedup_key} already exported)")
             continue
-        if content_hash:
-            seen_content_hashes.add(content_hash)
+        if dedup_key:
+            seen_dedup_keys.add(dedup_key)
 
         if use_prefixes:
-            prefix = engine.evaluate_export_prefix(metadata_dict, file_mappings=file_mappings)
+            prefix = engine.evaluate_export_prefix(export_metadata_dict, file_mappings=file_mappings)
             if file_mappings.filename_fields:
-                file_hash = metadata_dict.get("hash_file", doc_path.stem.split(" - ")[-1])
+                file_hash = export_metadata_dict.get("hash_file", doc_path.stem.split(" - ")[-1])
                 base_name = _build_filename_from_fields(
-                    metadata_dict,
+                    export_metadata_dict,
                     list(file_mappings.filename_fields),
                     file_hash,
                     profile_context=profile_context,
@@ -542,7 +581,7 @@ def copy_matching(
         shutil.copy2(doc_path, dest_doc)
         if dest_doc.suffix.lower() == ".pdf":
             _compress_pdf_export(dest_doc)
-        metadata_copy = dict(metadata_dict)
+        metadata_copy = dict(export_metadata_dict)
         metadata_copy["source_filename"] = doc_path.name
         repository.save_json(dest_json, metadata_copy)
         stats["copied"] += 1

@@ -91,6 +91,160 @@ class CommandTests(unittest.TestCase):
         self.assertEqual(len(copied_sidecars), 1)
         self.assertTrue(copied_docs[0].startswith(("VND_", "CMP_")))
 
+    def test_copy_matching_uses_effective_document_type_for_pdf_exports(self):
+        self.runtime.profile.export.file_mappings.enabled = True
+        self.runtime.profile.export.file_mappings.default_prefix = "DIV_"
+        self.runtime.profile.export.file_mappings.rules = [
+            {"match": {"document_type": "bank-*"}, "prefix": "BNC_"},
+        ]
+        self.runtime.profile.export.file_mappings.filename_fields = [
+            "date_issued",
+            "document_type",
+            "issuing_party",
+            "document_title",
+        ]
+
+        source_pdf = self.processed / "2026-04-27 - bank-note - bpi.pdf"
+        create_pdf(source_pdf, ["Mapa resumo de datas e valores de aquisicao de valores mobiliarios"])
+        self.repository.save_document(
+            source_pdf,
+            self._metadata(
+                "hash1111",
+                "file1111",
+                date_issued="2026-04-27",
+                document_type="bank-note",
+                document_type_raw="Mapa resumo",
+                issuing_party="bpi",
+                issuing_party_raw="BPI",
+                document_title="Datas e valores de aquisicao de valores mobiliarios",
+            ),
+        )
+
+        dest = self.root / "copied"
+        stats = copy_matching(
+            self.runtime,
+            self.processed,
+            "2026-04",
+            dest,
+            export_config=self.runtime.profile.export,
+            quiet=True,
+        )
+
+        self.assertEqual(stats["copied"], 1)
+        exported_pdf = next(dest.glob("*.pdf"))
+        self.assertTrue(exported_pdf.name.startswith("DIV_"))
+        self.assertIn("investment-acquisition-summary", exported_pdf.name)
+        exported_metadata = json.loads(exported_pdf.with_suffix(".json").read_text(encoding="utf-8"))
+        self.assertEqual(exported_metadata["document_type"], "investment-acquisition-summary")
+
+    def test_copy_matching_exports_loan_disbursement_movement_as_bnc_bank_note(self):
+        self.runtime.profile.export.file_mappings.enabled = True
+        self.runtime.profile.export.file_mappings.default_prefix = "DIV_"
+        self.runtime.profile.export.file_mappings.rules = [
+            {"match": {"document_type": "bank-*"}, "prefix": "BNC_"},
+        ]
+        self.runtime.profile.export.file_mappings.filename_fields = [
+            "date_issued",
+            "document_type",
+            "issuing_party",
+            "document_title",
+        ]
+
+        source_pdf = self.processed / "2026-04-23 - bank-transfer - millenniumbcp.pdf"
+        create_pdf(source_pdf, ["CONCESS CRED EMPR MN NR. LOANREF001"])
+        self.repository.save_document(
+            source_pdf,
+            self._metadata(
+                "hash2222",
+                "file2222",
+                date_issued="2026-04-23",
+                document_type="bank-transfer",
+                document_type_raw="TRF",
+                issuing_party="millenniumbcp",
+                issuing_party_raw="Banco Comercial Portugues, S.A.",
+                document_title="CONCESS CRED EMPR MN NR. LOANREF001",
+                total_amount=25000.0,
+            ),
+        )
+
+        dest = self.root / "copied"
+        stats = copy_matching(
+            self.runtime,
+            self.processed,
+            "2026-04",
+            dest,
+            export_config=self.runtime.profile.export,
+            quiet=True,
+        )
+
+        self.assertEqual(stats["copied"], 1)
+        exported_pdf = next(dest.glob("*.pdf"))
+        self.assertTrue(exported_pdf.name.startswith("BNC_"))
+        self.assertIn("bank-note", exported_pdf.name)
+        exported_metadata = json.loads(exported_pdf.with_suffix(".json").read_text(encoding="utf-8"))
+        self.assertEqual(exported_metadata["document_type"], "bank-note")
+
+    def test_copy_matching_dedupes_bank_statements_by_account_and_period(self):
+        self.runtime.profile.export.file_mappings.enabled = True
+        self.runtime.profile.export.file_mappings.default_prefix = "DIV_"
+        self.runtime.profile.export.file_mappings.rules = [
+            {"match": {"document_type": "bank-*"}, "prefix": "BNC_"},
+        ]
+        self.runtime.profile.export.file_mappings.filename_fields = [
+            "date_issued",
+            "document_type",
+            "issuing_party",
+            "document_title",
+        ]
+
+        bank_statement = {
+            "bank_format": "bpi",
+            "account_number": "TEST-ACCOUNT-BETA-2",
+            "currency": "EUR",
+            "period_start": "2026-04-01",
+            "period_end": "2026-04-27",
+            "transaction_count": 12,
+        }
+        first_xlsx = self.processed / "2026-04-01 - bank-statement - bpi - aaaa1111.xlsx"
+        second_xlsx = self.processed / "2026-04-01 - bank-statement - bpi - zzzz2222.xlsx"
+        first_xlsx.write_bytes(b"first")
+        second_xlsx.write_bytes(b"second")
+
+        for path, hash_value in [(first_xlsx, "aaaa1111"), (second_xlsx, "zzzz2222")]:
+            self.repository.save_document(
+                path,
+                self._metadata(
+                    hash_value,
+                    hash_value,
+                    date_issued="2026-04-01",
+                    document_type="bank-statement",
+                    document_type_raw="bank-statement",
+                    issuing_party="bpi",
+                    issuing_party_raw="BPI",
+                    document_title="TEST-ACCOUNT-BETA-2",
+                    total_amount=None,
+                    total_amount_currency="EUR",
+                    source_extension=".xlsx",
+                    bank_statement=bank_statement,
+                ),
+            )
+
+        dest = self.root / "copied"
+        stats = copy_matching(
+            self.runtime,
+            self.processed,
+            "2026-04",
+            dest,
+            export_config=self.runtime.profile.export,
+            quiet=True,
+        )
+
+        self.assertEqual(stats["copied"], 1)
+        self.assertEqual(stats["deduped"], 1)
+        exported_files = sorted(path.name for path in dest.glob("*.xlsx"))
+        self.assertEqual(len(exported_files), 1)
+        self.assertIn("aaaa1111", exported_files[0])
+
     def test_copy_matching_compresses_exported_pdfs(self):
         source_pdf = self.processed / "2026-01-02 - invoice.pdf"
         create_pdf(source_pdf, ["invoice"])
@@ -833,6 +987,230 @@ class CommandTests(unittest.TestCase):
         self.assertEqual(data["summary"]["incomplete"], 0)
         self.assertEqual(data["matches"][0]["files"], ["bpi-bank-note.pdf"])
 
+    def test_reconcile_requires_bnc_pair_for_cmp_on_non_bpi_statement(self):
+        self.runtime.profile.reconciliation.rules = [
+            {
+                "name": "stamp-duty",
+                "match_description": ["IMP ABERT CRED EMPRES"],
+                "required_types": {"invoice-receipt": 1},
+                "shared_types": {},
+                "companions": [],
+                "expected_page_count": {},
+            },
+        ]
+
+        statement_path = self.export / "millennium-statement.xlsx"
+        create_millennium_statement(
+            statement_path,
+            period_start="01/04/2026",
+            period_end="30/04/2026",
+            transactions=[
+                {
+                    "date_posting": "23/04/2026",
+                    "date_value": "23/04/2026",
+                    "description": "IMP ABERT CRED EMPRES NR. LOANREF001",
+                    "amount": -40.00,
+                    "currency": "EUR",
+                    "notes": "",
+                    "treated": "Nao",
+                },
+            ],
+        )
+
+        from papertrail.bank_statement import classify_bank_statement
+
+        statement_hash = hash_file_fast(statement_path)
+        statement_metadata = classify_bank_statement(statement_path, statement_hash)
+        self.repository.save_document(statement_path, statement_metadata)
+
+        invoice_receipt = self.export / "CMP_2026-04-23 - invoice-receipt.pdf"
+        create_pdf(invoice_receipt, ["Invoice receipt"])
+        self.repository.save_document(
+            invoice_receipt,
+            self._metadata(
+                "cmpdoc01",
+                "cmpdoc01",
+                date_created="2026-04-23",
+                date_issued="2026-04-23",
+                date_updated="2026-04-23",
+                document_type="invoice-receipt",
+                document_type_raw="Fatura-Recibo",
+                issuing_party="millenniumbcp",
+                issuing_party_raw="Banco Comercial Portugues, S.A.",
+                document_title="Imposto do Selo sobre Capital",
+                total_amount=40.00,
+            ),
+        )
+
+        reconcile(self.runtime, self.export, dry_run=False)
+
+        sidecar_path = statement_path.with_suffix(".reconciliation.json")
+        data = json.loads(sidecar_path.read_text(encoding="utf-8"))
+        self.assertEqual(data["summary"]["reconciled"], 0)
+        self.assertEqual(data["summary"]["incomplete"], 1)
+        self.assertEqual(
+            data["matches"][0]["errors"],
+            ["missing BNC document for CMP/DIV support file"],
+        )
+
+    def test_reconcile_pairs_cmp_support_file_with_matching_bnc_bank_note(self):
+        self.runtime.profile.reconciliation.rules = [
+            {
+                "name": "loan-millennium-fees",
+                "match_description": ["IMP ABERT CRED EMPRES"],
+                "required_types": {"bank-note": 1},
+                "shared_types": {},
+                "companions": [],
+                "expected_page_count": {},
+            },
+        ]
+
+        statement_path = self.export / "millennium-statement.xlsx"
+        create_millennium_statement(
+            statement_path,
+            period_start="01/04/2026",
+            period_end="30/04/2026",
+            transactions=[
+                {
+                    "date_posting": "23/04/2026",
+                    "date_value": "23/04/2026",
+                    "description": "IMP ABERT CRED EMPRES NR. LOANREF001",
+                    "amount": -40.00,
+                    "currency": "EUR",
+                    "notes": "",
+                    "treated": "Nao",
+                },
+            ],
+        )
+
+        from papertrail.bank_statement import classify_bank_statement
+
+        statement_hash = hash_file_fast(statement_path)
+        statement_metadata = classify_bank_statement(statement_path, statement_hash)
+        self.repository.save_document(statement_path, statement_metadata)
+
+        bank_note = (
+            self.export
+            / (
+                "BNC_2026-04-23 - bank-note - millennium-bcp - "
+                "imp abert cred empres nr. LOANREF001 - 55fac9e8.pdf"
+            )
+        )
+        invoice_receipt = (
+            self.export
+            / (
+                "CMP_2026-04-23 - invoice-receipt - millenniumbcp - "
+                "imposto do selo sobre capital - 749d9e69.pdf"
+            )
+        )
+        create_pdf(bank_note, ["IMP ABERT CRED EMPRES NR. LOANREF001"])
+        create_pdf(invoice_receipt, ["Imposto do Selo sobre Capital"])
+
+        self.repository.save_document(
+            bank_note,
+            self._metadata(
+                "bnc4000",
+                "bnc4000",
+                date_created="2026-04-23",
+                date_issued="2026-04-23",
+                date_updated="2026-04-23",
+                document_type="bank-note",
+                document_type_raw="Movimento",
+                issuing_party="millennium-bcp",
+                issuing_party_raw="Banco Comercial Portugues, S.A.",
+                document_title="IMP ABERT CRED EMPRES NR. LOANREF001",
+                total_amount=40.00,
+            ),
+        )
+        self.repository.save_document(
+            invoice_receipt,
+            self._metadata(
+                "cmp4000",
+                "cmp4000",
+                date_created="2026-04-23",
+                date_issued="2026-04-23",
+                date_updated="2026-04-23",
+                document_type="invoice-receipt",
+                document_type_raw="Fatura-Recibo",
+                issuing_party="millenniumbcp",
+                issuing_party_raw="Banco Comercial Portugues, S.A.",
+                document_title="Imposto do Selo sobre Capital",
+                total_amount=40.00,
+            ),
+        )
+
+        reconcile(self.runtime, self.export, dry_run=False)
+
+        sidecar_path = statement_path.with_suffix(".reconciliation.json")
+        data = json.loads(sidecar_path.read_text(encoding="utf-8"))
+        self.assertEqual(data["summary"]["reconciled"], 1)
+        self.assertEqual(data["summary"]["incomplete"], 0)
+        self.assertEqual(data["summary"]["unmatched_files"], 0)
+        self.assertEqual(data["matches"][0]["errors"], [])
+        self.assertEqual(
+            sorted(data["matches"][0]["files"]),
+            sorted([bank_note.name, invoice_receipt.name]),
+        )
+
+    def test_reconcile_allows_cmp_without_bnc_for_bpi_statement(self):
+        self.runtime.profile.reconciliation.rules = [
+            {
+                "name": "stamp-duty",
+                "match_description": ["IMP ABERT CRED EMPRES"],
+                "required_types": {"invoice-receipt": 1},
+                "shared_types": {},
+                "companions": [],
+                "expected_page_count": {},
+            },
+        ]
+
+        statement_path = self.export / "bpi-statement.xlsx"
+        create_bpi_statement(
+            statement_path,
+            transactions=[
+                {
+                    "date_posting": "23-04-2026",
+                    "date_value": "23-04-2026",
+                    "description": "IMP ABERT CRED EMPRES NR. LOANREF001",
+                    "amount": -40.00,
+                    "currency": "EUR",
+                },
+            ],
+        )
+
+        from papertrail.bank_statement import classify_bank_statement
+
+        statement_hash = hash_file_fast(statement_path)
+        statement_metadata = classify_bank_statement(statement_path, statement_hash)
+        self.repository.save_document(statement_path, statement_metadata)
+
+        invoice_receipt = self.export / "CMP_2026-04-23 - invoice-receipt.pdf"
+        create_pdf(invoice_receipt, ["Invoice receipt"])
+        self.repository.save_document(
+            invoice_receipt,
+            self._metadata(
+                "cmpdoc02",
+                "cmpdoc02",
+                date_created="2026-04-23",
+                date_issued="2026-04-23",
+                date_updated="2026-04-23",
+                document_type="invoice-receipt",
+                document_type_raw="Fatura-Recibo",
+                issuing_party="millenniumbcp",
+                issuing_party_raw="Banco Comercial Portugues, S.A.",
+                document_title="Imposto do Selo sobre Capital",
+                total_amount=40.00,
+            ),
+        )
+
+        reconcile(self.runtime, self.export, dry_run=False)
+
+        sidecar_path = statement_path.with_suffix(".reconciliation.json")
+        data = json.loads(sidecar_path.read_text(encoding="utf-8"))
+        self.assertEqual(data["summary"]["reconciled"], 1)
+        self.assertEqual(data["summary"]["incomplete"], 0)
+        self.assertEqual(data["matches"][0]["errors"], [])
+
     def test_reconcile_rejects_unknown_bank_note_for_bpi_statement(self):
         statement_path = self.export / "bpi-statement.xlsx"
         create_bpi_statement(
@@ -1077,6 +1455,93 @@ class CommandTests(unittest.TestCase):
         self.assertIn("unrelated-bpi-bank-transfer.pdf", unmatched_files)
         self.assertIn("aggregate-bpi-bank-transfer.pdf", unmatched_files)
 
+    def test_reconcile_keeps_same_signature_bank_notes_when_rule_allows_multiple(self):
+        self.runtime.profile.reconciliation.rules = [
+            {
+                "name": "bank-transfer-self-credit",
+                "match_description": ["TRF. P/O EXAMPLE COMPANY, UNIPESSOAL, LDA"],
+                "direction": "credit",
+                "required_types": {"bank-note": [1, None]},
+                "shared_types": {},
+                "companions": [],
+                "expected_page_count": {"bank-note": 1},
+            },
+        ]
+
+        statement_path = self.export / "millennium-statement.xlsx"
+        create_millennium_statement(
+            statement_path,
+            period_start="01/04/2026",
+            period_end="30/04/2026",
+            transactions=[
+                {
+                    "date_posting": "02/04/2026",
+                    "date_value": "02/04/2026",
+                    "description": "TRF. P/O EXAMPLE COMPANY, UNIPESSOAL, LDA",
+                    "amount": 6100.00,
+                    "currency": "EUR",
+                    "notes": "",
+                    "treated": "Nao",
+                },
+            ],
+        )
+
+        from papertrail.bank_statement import classify_bank_statement
+
+        statement_hash = hash_file_fast(statement_path)
+        statement_metadata = classify_bank_statement(statement_path, statement_hash)
+        self.repository.save_document(statement_path, statement_metadata)
+
+        outgoing_note = (
+            self.export
+            / (
+                "BNC_2026-04-02 - bank-note - millenniumbcp - "
+                "transferencia para puzzle message - 6d1a9c44.pdf"
+            )
+        )
+        incoming_note = (
+            self.export
+            / (
+                "BNC_2026-04-02 - bank-note - millenniumbcp - "
+                "transferencia a credito - 05f9d9b0.pdf"
+            )
+        )
+        create_pdf(outgoing_note, ["Transferencia para Example Company"])
+        create_pdf(incoming_note, ["Transferencia a credito"])
+
+        for path, hash_value, title in [
+            (outgoing_note, "bnc6100a", "Transferencia para Example Company"),
+            (incoming_note, "bnc6100b", "Transferencia a credito"),
+        ]:
+            self.repository.save_document(
+                path,
+                self._metadata(
+                    hash_value,
+                    hash_value,
+                    date_created="2026-04-02",
+                    date_issued="2026-04-02",
+                    date_updated="2026-04-02",
+                    document_type="bank-note",
+                    document_type_raw="Movimento",
+                    issuing_party="millenniumbcp",
+                    issuing_party_raw="Banco Comercial Portugues, S.A.",
+                    document_title=title,
+                    total_amount=6100.00,
+                    page_count=1,
+                ),
+            )
+
+        reconcile(self.runtime, self.export, dry_run=False)
+
+        sidecar_path = statement_path.with_suffix(".reconciliation.json")
+        data = json.loads(sidecar_path.read_text(encoding="utf-8"))
+        self.assertEqual(data["summary"]["reconciled"], 1)
+        self.assertEqual(data["summary"]["incomplete"], 0)
+        self.assertEqual(
+            sorted(data["matches"][0]["files"]),
+            sorted([outgoing_note.name, incoming_note.name]),
+        )
+
     def test_reconcile_rejects_bpi_bank_note_for_prior_month_transfer(self):
         self.runtime.profile.reconciliation.rules = [
             {
@@ -1272,6 +1737,95 @@ class CommandTests(unittest.TestCase):
             data["unmatched_files"][0]["document_type"],
             "investment-acquisition-summary",
         )
+
+    def test_reconcile_matches_bpi_stock_sale_from_usd_invoice_line_item(self):
+        self.runtime.profile.reconciliation.rules = [
+            {
+                "name": "stock-sale-bpi",
+                "match_description": ["TRANSFERENCIA A CREDITO LIS"],
+                "direction": "credit",
+                "shared_types": {},
+                "required_types": {"bank-note|bank-stock-buy|bank-stock-sell": [1, None]},
+                "companions": [],
+                "expected_page_count": {"bank-note|bank-stock-buy|bank-stock-sell": [1, 2]},
+            },
+        ]
+
+        statement_path = self.export / "bpi-statement.xlsx"
+        create_bpi_statement(
+            statement_path,
+            transactions=[
+                {
+                    "date_posting": "01-04-2026",
+                    "date_value": "01-04-2026",
+                    "description": "TRANSFERENCIA A CREDITO LISTESTREFA",
+                    "amount": 10565.32,
+                    "currency": "EUR",
+                },
+            ],
+        )
+
+        from papertrail.bank_statement import classify_bank_statement
+
+        statement_hash = hash_file_fast(statement_path)
+        statement_metadata = classify_bank_statement(statement_path, statement_hash)
+        self.repository.save_document(statement_path, statement_metadata)
+
+        stock_invoice_path = self.export / "bpi-stock-fee-invoice.pdf"
+        create_pdf(
+            stock_invoice_path,
+            [
+                "\n".join(
+                    [
+                        "FACTURA",
+                        "Data de Emissão: 30-04-2026",
+                        "TÍTULOS",
+                        "01/04 01/04",
+                        "DESCRIÇÃO",
+                        "COMISSÃO CORRETAGEM",
+                        "01/04",
+                        "OPERAÇÃO BOLSA",
+                        "12 300,00 USD",
+                        "01/04",
+                        "TOTAL A CRÉDITO",
+                        "12 280,81 USD",
+                        "VENDA DE 100,0000 ACÇÕES STRATEGY INC(XNGS)",
+                        "AO PREÇO DE: 123,000000 USD NA SESSÃO DE BOLSA: "
+                        "31-03-2026 DA NASDAQ - ALL MARKETS",
+                        "Nº ORDEM: V7538895",
+                    ]
+                )
+            ],
+        )
+        self.repository.save_document(
+            stock_invoice_path,
+            self._metadata(
+                "bpistockinvoice",
+                "bpistockinvoice",
+                date_created="2026-04-30",
+                date_issued="2026-04-30",
+                date_updated="2026-04-30",
+                document_type="invoice",
+                document_type_raw="FACTURA",
+                issuing_party="bpi",
+                issuing_party_raw="BPI",
+                document_title="Comissoes de conta e titulos",
+                total_amount=63.08,
+                page_count=2,
+            ),
+        )
+
+        reconcile(self.runtime, self.export, dry_run=False)
+
+        sidecar_path = statement_path.with_suffix(".reconciliation.json")
+        data = json.loads(sidecar_path.read_text(encoding="utf-8"))
+        self.assertEqual(data["summary"]["reconciled"], 1)
+        self.assertEqual(data["summary"]["incomplete"], 0)
+        self.assertEqual(data["summary"]["unmatched"], 0)
+        self.assertEqual(data["matches"][0]["method"], "line-item")
+        self.assertEqual(data["matches"][0]["files"], ["bpi-stock-fee-invoice.pdf"])
+        self.assertEqual(data["matches"][0]["line_items"][0]["document_type"], "bank-stock-sell")
+        self.assertEqual(data["matches"][0]["line_items"][0]["currency"], "USD")
 
     def test_reconcile_links_same_day_no_amount_contract_document(self):
         self.runtime.profile.reconciliation.rules = [

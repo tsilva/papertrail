@@ -14,6 +14,16 @@ class DocumentTypeTests(unittest.TestCase):
             "investment-acquisition-summary",
         )
 
+    def test_millennium_loan_disbursement_movement_is_bank_note(self):
+        self.assertEqual(
+            normalize_document_type(
+                "bank-transfer",
+                "TRF",
+                "CONCESS CRED EMPR MN NR. LOANREF001",
+            ),
+            "bank-note",
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

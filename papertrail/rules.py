@@ -174,12 +174,19 @@ class RuleEngine:
         errors: list[str] = []
         for pattern, cardinality in rule.required_types.items():
             min_count, max_count = self.parse_cardinality(cardinality)
-            count = sum(
-                1
-                for candidate in match.pdf_candidates
-                if self.candidate_doc_type(candidate)
-                and self.match_doc_type(self.candidate_doc_type(candidate), pattern)
-            )
+            count = 0
+            for candidate in match.pdf_candidates:
+                candidate_doc_type = self.candidate_doc_type(candidate)
+                if candidate_doc_type and self.match_doc_type(candidate_doc_type, pattern):
+                    count += 1
+                    continue
+                count += sum(
+                    1
+                    for item in getattr(match, "line_items", [])
+                    if getattr(item, "candidate", None) is candidate
+                    and getattr(item.line_item, "document_type", None)
+                    and self.match_doc_type(item.line_item.document_type, pattern)
+                )
             display_pattern = pattern.replace("|", "/")
             if count < min_count:
                 errors.append(f"missing {display_pattern} (expected {min_count}, found {count})")
@@ -191,21 +198,48 @@ class RuleEngine:
         all_patterns = list(rule.required_types.keys()) + list(rule.shared_types.keys())
         for candidate in match.pdf_candidates:
             candidate_doc_type = self.candidate_doc_type(candidate)
+            line_item_doc_types = [
+                item.line_item.document_type
+                for item in getattr(match, "line_items", [])
+                if getattr(item, "candidate", None) is candidate
+                and getattr(item.line_item, "document_type", None)
+            ]
             if candidate_doc_type is None:
                 errors.append(f"unexpected document with unknown type ({candidate.pdf_filename})")
-            elif not any(self.match_doc_type(candidate_doc_type, pattern) for pattern in all_patterns):
+            elif not (
+                any(self.match_doc_type(candidate_doc_type, pattern) for pattern in all_patterns)
+                or any(
+                    self.match_doc_type(line_item_doc_type, pattern)
+                    for line_item_doc_type in line_item_doc_types
+                    for pattern in all_patterns
+                )
+            ):
                 errors.append(f"unexpected {candidate.document_type} ({candidate.pdf_filename})")
 
         if rule.expected_page_count:
             for candidate in match.pdf_candidates:
                 candidate_doc_type = self.candidate_doc_type(candidate)
-                if candidate_doc_type and candidate.page_count is not None:
+                line_item_doc_types = [
+                    item.line_item.document_type
+                    for item in getattr(match, "line_items", [])
+                    if getattr(item, "candidate", None) is candidate
+                    and getattr(item.line_item, "document_type", None)
+                ]
+                doc_types = [candidate_doc_type] if candidate_doc_type else []
+                doc_types.extend(line_item_doc_types)
+                if doc_types and candidate.page_count is not None:
                     for pattern, expected in rule.expected_page_count.items():
                         expected_counts = expected if isinstance(expected, list) else [expected]
-                        if self.match_doc_type(candidate_doc_type, pattern) and candidate.page_count not in expected_counts:
+                        matches_page_count_rule = any(
+                            self.match_doc_type(doc_type, pattern)
+                            for doc_type in doc_types
+                        )
+                        if matches_page_count_rule and candidate.page_count not in expected_counts:
                             expected_text = "/".join(str(count) for count in expected_counts)
+                            display_doc_type = candidate_doc_type or line_item_doc_types[0]
                             errors.append(
-                                f"{candidate_doc_type} has {candidate.page_count} pages (expected {expected_text})"
+                                f"{display_doc_type} has {candidate.page_count} pages "
+                                f"(expected {expected_text})"
                             )
 
         return errors

@@ -18,6 +18,7 @@ _INVESTMENT_ACQUISITION_SUMMARY_TERMS = {
 }
 _LOAN_SIMULATION_RAW_TYPES = {"simulacao", "simulation"}
 _LOAN_SIMULATION_CONTEXT_TERMS = {"credito", "credit", "loan", "emprestimo", "financiamento"}
+_LOAN_DISBURSEMENT_CONTEXT_TERMS = {"concess", "cred", "empr"}
 
 
 def normalize_document_type(
@@ -32,6 +33,8 @@ def normalize_document_type(
         return "investment-acquisition-summary"
     if is_loan_simulation(raw_value, document_title):
         return "loan-simulation"
+    if is_loan_disbursement_movement(raw_value, document_title):
+        return "bank-note"
     if value is None:
         return None
     return clean_enum_string(value, "DocumentType")
@@ -58,6 +61,14 @@ def is_loan_simulation(raw_value: str | None, document_title: str | None = None)
         return False
     context = _word_tokens(f"{raw_value or ''} {document_title or ''}")
     return any(term in context for term in _LOAN_SIMULATION_CONTEXT_TERMS)
+
+
+def is_loan_disbursement_movement(
+    raw_value: str | None,
+    document_title: str | None = None,
+) -> bool:
+    context = _word_tokens(f"{raw_value or ''} {document_title or ''}")
+    return _LOAN_DISBURSEMENT_CONTEXT_TERMS.issubset(context)
 
 
 def _compact_token(value: str) -> str:
