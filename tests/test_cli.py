@@ -113,7 +113,12 @@ class CliTests(unittest.TestCase):
                 result = self.runner.invoke(cli_main.app, ["review", "--profile", "default"])
 
         self.assertEqual(result.exit_code, 0)
-        create_runtime_mock.assert_called_once_with(profile_name="default", verbose=False)
+        create_runtime_mock.assert_called_once_with(
+            profile_name="default",
+            verbose=False,
+            enable_client=True,
+            probe_api=True,
+        )
         review_mock.assert_called_once_with(runtime, export_dir)
 
     def test_review_accepts_profile_before_subcommand(self):
@@ -137,8 +142,50 @@ class CliTests(unittest.TestCase):
                 result = self.runner.invoke(cli_main.app, ["--profile", "puzzle", "review"])
 
         self.assertEqual(result.exit_code, 0)
-        create_runtime_mock.assert_called_once_with(profile_name="default", verbose=False)
+        create_runtime_mock.assert_called_once_with(
+            profile_name="default",
+            verbose=False,
+            enable_client=True,
+            probe_api=True,
+        )
         review_mock.assert_called_once_with(runtime, export_dir)
+
+    def test_regression_command_uses_offline_runtime(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            export_root = Path(tmpdir)
+            month_dir = export_root / "2026-04"
+            month_dir.mkdir()
+            runtime = SimpleNamespace(
+                profile=SimpleNamespace(
+                    paths=SimpleNamespace(
+                        raw=[str(export_root)],
+                        processed=str(export_root),
+                        export=str(export_root),
+                    )
+                ),
+                console=MagicMock(),
+            )
+            result_obj = SimpleNamespace(ok=True, checked=37, failures=[])
+
+            with (
+                patch("main.create_runtime", return_value=runtime) as create_runtime_mock,
+                patch(
+                    "papertrail.reconciliation_regression.verify_reconciliation_regression",
+                    return_value=result_obj,
+                ),
+            ):
+                result = self.runner.invoke(
+                    cli_main.app,
+                    ["regression", "--export-date", "2026-04", "--profile", "default"],
+                )
+
+        self.assertEqual(result.exit_code, 0)
+        create_runtime_mock.assert_called_once_with(
+            profile_name="default",
+            verbose=False,
+            enable_client=False,
+            probe_api=False,
+        )
 
 
 if __name__ == "__main__":

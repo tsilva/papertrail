@@ -5,6 +5,7 @@ from __future__ import annotations
 import re
 from typing import Optional
 
+from papertrail.reconciliation_evidence import document_type_matches_family
 from papertrail.utils import strip_diacritics
 
 
@@ -107,6 +108,8 @@ class RuleEngine:
             if alt.endswith("*"):
                 if doc_lower.startswith(alt[:-1]):
                     return True
+            elif document_type_matches_family(doc_lower, alt):
+                return True
             elif doc_lower == alt or doc_lower in _DOC_TYPE_PATTERN_ALIASES.get(
                 alt, set()
             ):

@@ -101,6 +101,7 @@ class ReconciliationRule(SettingsModel):
 
 
 class ReconciliationSettings(SettingsModel):
+    mode: str = "legacy_rules"
     exclude_prefixes: list[str] = Field(default_factory=list)
     rules: list[ReconciliationRule] = Field(default_factory=list)
 
@@ -231,6 +232,7 @@ def _normalize_profile_data(data: dict[str, object], profile_path: Path | None) 
         paths["raw"] = []
 
     reconciliation = normalized["reconciliation"]
+    reconciliation.setdefault("mode", "legacy_rules")
     rules = reconciliation.get("rules")
     if rules is None:
         reconciliation["rules"] = [dict(rule) for rule in _DEFAULT_RECON_RULES]

@@ -192,6 +192,25 @@ class AdapterSmokeTests(unittest.TestCase):
         self.assertIn("statement.xlsx", review_data["file_index"])
         self.assertIn("Loaded **1** bank statements", status)
 
+    def test_review_skips_non_metadata_json_payloads(self):
+        export_dir = self.runtime.paths.export
+        (export_dir / "list-payload.json").write_text('["not", "metadata"]\n', encoding="utf-8")
+        create_millennium_statement(export_dir / "statement.xlsx")
+
+        from papertrail.bank_statement import classify_bank_statement
+
+        statement_path = export_dir / "statement.xlsx"
+        statement_hash = hash_file_fast(statement_path)
+        statement_metadata = classify_bank_statement(statement_path, statement_hash)
+        self.repository.save_document(statement_path, statement_metadata)
+
+        with patch("tools.shared.build_repository", return_value=self.repository):
+            review_data, status = review.load_export_folder(str(export_dir))
+
+        self.assertEqual(len(review_data["bank_statements"]), 1)
+        self.assertIn("statement.xlsx", review_data["file_index"])
+        self.assertIn("Loaded **1** bank statements", status)
+
     def test_tools_shared_uses_active_profile_env(self):
         shared._load_profile.cache_clear()
         shared.build_repository.cache_clear()

@@ -12,9 +12,11 @@ from typing import Optional
 import fitz
 
 from papertrail.bank_statement import load_transactions as load_bank_statement_transactions
+from papertrail.config import ReconciliationRule
 from papertrail.document_types import normalize_document_type
 from papertrail.llm import _extract_json_from_response
 from papertrail.logging_utils import get_logger
+from papertrail.reconciliation_evidence import build_document_evidence
 from papertrail.repository import DocumentRepository
 from papertrail.rules import RuleEngine
 from papertrail.runtime import Runtime
@@ -50,6 +52,9 @@ _PERIOD_TOKEN_RE = re.compile(
 )
 _DATE_DMY_RE = re.compile(r"\b(\d{2})[/-](\d{2})[/-](20\d{2})\b")
 _DATE_DM_RE = re.compile(r"\b(\d{2})[/-](\d{2})\b")
+_DIRECT_DEBIT_DATE_RE = re.compile(r"\bDEBITO\s+A\s+PARTIR\s+DE:\s*(\d{2})[/-](\d{2})[/-](20\d{2})\b")
+_DIRECT_DEBIT_AUTH_RE = re.compile(r"\bN[ºO]\s+AUTORIZACAO:\s*([A-Z0-9]+)\b")
+_DIRECT_DEBIT_AMOUNT_RE = re.compile(r"\bVALOR:[^\d\n]*([\d\s.]+,\d{2})\b")
 _BPI_TRANSFER_LINE_RE = re.compile(
     r"\b(?:TRF\s+CR\s+SEPA\+\s+|TRF\s+SEPA\+\s+INST\s+|TRANSFER[ÊE]NCIA\s+RECEBIDA\s+)(\d+)\b",
     re.IGNORECASE,
@@ -66,6 +71,121 @@ _SUPPORTING_DOC_TYPE_PATTERNS = [
     "receipt-reference",
     "receipt-delivery",
 ]
+
+
+def _evidence_v1_rules() -> list[ReconciliationRule]:
+    """Broad reconciliation rules built on derived evidence families."""
+    raw_rules = [
+        {
+            "name": "investment",
+            "match_description": ["TRANSFERENCIA A CREDITO LIS"],
+            "required_types": {"investment-evidence": [1, None]},
+            "expected_page_count": {"investment-evidence": [1, 2]},
+        },
+        {
+            "name": "investment",
+            "match_description": ["TRANSFERENCIA A DEBITO LIS"],
+            "required_types": {"investment-evidence": [1, None]},
+            "shared_types": {"investment-evidence": "bpi"},
+            "shared_filters": {"investment-evidence": {"document_type": "bank-investment"}},
+            "expected_page_count": {"investment-evidence": [1, 2]},
+        },
+        {
+            "name": "loan-payment",
+            "match_description": ["CONCESS CRED EMPR"],
+            "required_types": {
+                "bank-anchor": [1, None],
+                "contract-evidence": [1, None],
+            },
+            "expected_page_count": {"bank-anchor": 1},
+        },
+        {
+            "name": "loan-payment",
+            "match_description": ["IMP ABERT CRED EMPRES"],
+            "required_types": {"bank-anchor": 1, "supplier-evidence": 1},
+            "expected_page_count": {"bank-anchor": 1, "supplier-evidence": 1},
+        },
+        {
+            "name": "loan-payment",
+            "match_description": ["PAGAMENT EMPRESTIMO"],
+            "required_types": {"bank-anchor": 1, "supplier-evidence": 1},
+            "shared_types": {"supplier-evidence": "millennium-bcp"},
+            "shared_filters": {"supplier-evidence": {"document_title": "Pagamento de Prestação"}},
+            "expected_page_count": {"bank-anchor": 1, "supplier-evidence": 1},
+        },
+        {
+            "name": "tax-payment",
+            "match_description": ["IGCP", "PAG.DUC"],
+            "required_types": {"bank-anchor": 1, "tax-evidence": 1},
+            "expected_page_count": {"bank-anchor": 1},
+        },
+        {
+            "name": "payroll-payment",
+            "match_description": ["TAXA SOCIAL UNICA"],
+            "required_types": {"bank-anchor": 1, "payroll-evidence": 1},
+            "expected_page_count": {"bank-anchor": 1},
+        },
+        {
+            "name": "payroll-payment",
+            "match_description": ["EMPLOYEE ONE", "EMPLOYEE TWO"],
+            "required_types": {"bank-anchor": 1, "payroll-evidence": 1},
+            "shared_types": {"payroll-evidence": None},
+            "shared_filters": {"payroll-evidence": {"document_type": "payroll-salary"}},
+            "expected_page_count": {"bank-anchor": 1},
+        },
+        {
+            "name": "bank-fee",
+            "match_description": [
+                "CUSTO DE SERVICO INTERNACIONAL",
+                "MANUTENCAO DE CONTA VALOR NEGOCIOS",
+                "PACOTE M EMPRESA",
+                "TITULOS CUSTODIA",
+                "OPERACOES COM TITULOS",
+                "IMPOSTO DO SELO",
+                "IMPOSTO SELO",
+                "IMPOSTO DE SELO",
+                "COMISSAO",
+                "COMISSÃO",
+            ],
+            "required_types": {"supplier-evidence": [1, None], "bank-anchor": [0, 1]},
+            "expected_page_count": {"supplier-evidence": [1, 2], "bank-anchor": 1},
+        },
+        {
+            "name": "bank-only",
+            "match_description": [
+                "TRF SEPA+",
+                "TRF P/ EXAMPLE COMPANY - BPI",
+                "TRANSFERENCIA RECEBIDA",
+                "TRANSFERÊNCIA RECEBIDA",
+                "EXAMPLE COMPANY - BPI",
+            ],
+            "required_types": {"bank-anchor": 1},
+            "expected_page_count": {"bank-anchor": 1},
+        },
+        {
+            "name": "bank-only",
+            "direction": "credit",
+            "required_types": {"bank-anchor": [1, None]},
+            "expected_page_count": {"bank-anchor": 1},
+        },
+        {
+            "name": "supplier-payment",
+            "direction": "debit",
+            "required_types": {"bank-anchor": 1, "supplier-evidence": [1, None]},
+            "expected_page_count": {"bank-anchor": 1},
+        },
+    ]
+    return [ReconciliationRule.model_validate(rule) for rule in raw_rules]
+
+
+def _reconciliation_mode(profile) -> str:
+    return getattr(getattr(profile, "reconciliation", None), "mode", "legacy_rules") or "legacy_rules"
+
+
+def _rules_for_profile(profile) -> list:
+    if _reconciliation_mode(profile) == "evidence_v1":
+        return _evidence_v1_rules()
+    return profile.reconciliation.rules
 
 
 @dataclass(frozen=True)
@@ -115,6 +235,13 @@ class PDFCandidate:
     sub_doc_index: Optional[int] = None
     is_sub_document: bool = False
     exclude_from_matching: bool = False
+    document_family: str = "unknown"
+    counterparty_id: str = "$UNKNOWN$"
+    source_bank: Optional[str] = None
+    is_bank_anchor: bool = False
+    is_supplier_evidence: bool = False
+    is_ignored_for_reconciliation: bool = False
+    is_shared_period_document: bool = False
     line_items: list[CandidateLineItem] = field(default_factory=list)
 
     @property
@@ -163,6 +290,7 @@ def _build_candidate(
     exclude_from_matching: bool = False,
     line_items: list[CandidateLineItem] | None = None,
 ) -> PDFCandidate:
+    evidence = build_document_evidence(data)
     return PDFCandidate(
         json_path=json_path,
         pdf_filename=pdf_filename,
@@ -179,6 +307,13 @@ def _build_candidate(
         sub_doc_index=sub_doc_index,
         is_sub_document=is_sub_document,
         exclude_from_matching=exclude_from_matching,
+        document_family=evidence.document_family,
+        counterparty_id=evidence.counterparty_id,
+        source_bank=evidence.source_bank,
+        is_bank_anchor=evidence.is_bank_anchor,
+        is_supplier_evidence=evidence.is_supplier_evidence,
+        is_ignored_for_reconciliation=evidence.is_ignored_for_reconciliation,
+        is_shared_period_document=evidence.is_shared_period_document,
         line_items=line_items or [],
     )
 
@@ -785,11 +920,147 @@ def _extract_bpi_transfer_line_items(pdf_path: Path, data: dict) -> list[Candida
     return line_items
 
 
+def _extract_millennium_fee_invoice_line_items(pdf_path: Path, data: dict) -> list[CandidateLineItem]:
+    doc_type = (data.get("document_type") or "").lower()
+    issuing_party = _normalize_for_match(data.get("issuing_party") or "")
+    if doc_type not in {"invoice", "invoice-receipt"} or issuing_party not in {
+        "millenniumbcp",
+        "millenniumbancocomercialportugues",
+        "bancocomercialportugues",
+    }:
+        return []
+
+    try:
+        with fitz.open(pdf_path) as pdf:
+            lines = [line.strip() for page in pdf for line in page.get_text().splitlines() if line.strip()]
+    except Exception as exc:
+        logger.debug(f"[LINE-ITEMS] Failed to read {pdf_path.name}: {exc}")
+        return []
+
+    normalized_lines = [strip_diacritics(line).upper() for line in lines]
+    movement_date = _extract_millennium_movement_date(lines, normalized_lines) or data.get("date_issued")
+    line_items: list[CandidateLineItem] = []
+    seen: set[tuple[str, float, str]] = set()
+
+    for index, normalized_line in enumerate(normalized_lines):
+        amount = _next_amount_line(lines, index)
+        if amount is None:
+            continue
+
+        if "CUSTO DE SERVICO INTERNACIONAL" in normalized_line:
+            _append_line_item(
+                line_items,
+                seen,
+                category="bank-fee-international-service",
+                amount=amount,
+                label=lines[index],
+                date_issued=movement_date,
+            )
+        elif "COMISSAO REFERENTE" in normalized_line:
+            _append_line_item(
+                line_items,
+                seen,
+                category="bank-fee-maintenance",
+                amount=amount,
+                label=lines[index],
+                date_issued=movement_date,
+            )
+        elif (
+            ("IMPOSTO DO SELO" in normalized_line or "IMP. SELO" in normalized_line)
+            and "17.3.4" in normalized_line
+        ):
+            _append_line_item(
+                line_items,
+                seen,
+                category="bank-fee-stamp-duty",
+                amount=amount,
+                label=lines[index],
+                date_issued=movement_date,
+            )
+
+    if line_items:
+        logger.debug(
+            f"[LINE-ITEMS] {pdf_path.name}: "
+            f"{', '.join(f'{item.category}={item.amount:.2f}@{item.date_issued}' for item in line_items)}"
+        )
+    return line_items
+
+
+def _extract_millennium_movement_date(lines: list[str], normalized_lines: list[str]) -> Optional[str]:
+    for index, normalized_line in enumerate(normalized_lines):
+        if "DATA DO MOVIMENTO" not in normalized_line:
+            continue
+        for candidate_line in lines[index + 1 : index + 5]:
+            parsed = _date_from_iso(candidate_line.strip())
+            if parsed:
+                return parsed.isoformat()
+    return None
+
+
+def _next_amount_line(lines: list[str], index: int) -> Optional[float]:
+    for line in lines[index + 1 : index + 5]:
+        amount = _parse_euro_amount_line(line)
+        if amount is not None:
+            return amount
+    return None
+
+
+def _extract_direct_debit_invoice_line_items(pdf_path: Path, data: dict) -> list[CandidateLineItem]:
+    doc_type = (data.get("document_type") or "").lower()
+    if doc_type not in _SUPPORTING_DOC_TYPE_PATTERNS:
+        return []
+
+    try:
+        with fitz.open(pdf_path) as pdf:
+            text = "\n".join(page.get_text() for page in pdf)
+    except Exception as exc:
+        logger.debug(f"[LINE-ITEMS] Failed to read {pdf_path.name}: {exc}")
+        return []
+
+    normalized_text = strip_diacritics(text).upper()
+    date_match = _DIRECT_DEBIT_DATE_RE.search(normalized_text)
+    amount_match = _DIRECT_DEBIT_AMOUNT_RE.search(normalized_text)
+    if not date_match or not amount_match:
+        return []
+
+    day, month, year = (int(part) for part in date_match.groups())
+    try:
+        debit_date = date(year, month, day).isoformat()
+    except ValueError:
+        return []
+
+    try:
+        amount = float(amount_match.group(1).replace(" ", "").replace(".", "").replace(",", "."))
+    except ValueError:
+        return []
+
+    auth_match = _DIRECT_DEBIT_AUTH_RE.search(normalized_text)
+    reference = auth_match.group(1) if auth_match else None
+
+    line_items: list[CandidateLineItem] = []
+    seen: set[tuple[str, float, str]] = set()
+    label = "Direct debit" if reference is None else f"Direct debit {reference}"
+    _append_line_item(
+        line_items,
+        seen,
+        category="supplier-payment",
+        amount=amount,
+        label=label,
+        date_issued=debit_date,
+        reference=reference,
+        amount_currency=data.get("total_amount_currency") or "EUR",
+        document_type=data.get("document_type"),
+    )
+    return line_items
+
+
 def _extract_reconciliation_line_items(pdf_path: Path, data: dict) -> list[CandidateLineItem]:
     return [
         *_extract_bpi_fee_invoice_line_items(pdf_path, data),
         *_extract_bpi_stock_invoice_line_items(pdf_path, data),
         *_extract_bpi_transfer_line_items(pdf_path, data),
+        *_extract_millennium_fee_invoice_line_items(pdf_path, data),
+        *_extract_direct_debit_invoice_line_items(pdf_path, data),
     ]
 
 
@@ -1050,6 +1321,31 @@ def _candidate_date_rank(txn_date: Optional[str], cand: PDFCandidate) -> Optiona
     return (days, signed_days > 0, abs(signed_days))
 
 
+def _candidate_rank_for_transaction(
+    txn: Transaction,
+    candidate: PDFCandidate,
+    category: str,
+) -> Optional[tuple[int, bool, int]]:
+    txn_date = txn.date_posting or txn.date_value
+    relevant_line_items = [
+        item
+        for item in candidate.line_items
+        if _line_item_category_matches(category, item)
+        and (
+            not item.amount_match_required
+            or abs(abs(txn.amount) - item.amount) <= _AMOUNT_TOLERANCE
+        )
+    ]
+    if relevant_line_items:
+        ranks = [
+            rank
+            for item in relevant_line_items
+            if (rank := _line_item_date_rank(txn_date, candidate, item)) is not None
+        ]
+        return min(ranks) if ranks else None
+    return _candidate_date_rank(txn_date, candidate)
+
+
 def _line_item_date_rank(
     txn_date: Optional[str],
     candidate: PDFCandidate,
@@ -1224,7 +1520,7 @@ def _prune_rule_aware_exact_candidates(
         matching = sorted(
             matching,
             key=lambda candidate: (
-                _candidate_date_rank(txn_date, candidate) or (9999, True, 9999),
+                _candidate_rank_for_transaction(txn, candidate, rule.name) or (9999, True, 9999),
                 candidate.pdf_filename,
             ),
         )
@@ -1259,10 +1555,9 @@ def _phase1_deterministic_match(
     used_candidates: set[str] = set()
 
     for txn in transactions:
-        _, rule = _classify_transaction(txn, rules)
+        category, rule = _classify_transaction(txn, rules)
         abs_amount = abs(txn.amount)
-        amount_matches: list[tuple[PDFCandidate, int, int]] = []
-        txn_date = txn.date_posting or txn.date_value
+        amount_matches: list[tuple[PDFCandidate, tuple[int, bool, int]]] = []
         for cand in candidates:
             if cand.candidate_id in used_candidates:
                 continue
@@ -1271,11 +1566,9 @@ def _phase1_deterministic_match(
             if cand.total_amount is None:
                 continue
             if abs(abs_amount - cand.total_amount) <= _AMOUNT_TOLERANCE:
-                rank = _candidate_date_rank(txn_date, cand)
+                rank = _candidate_rank_for_transaction(txn, cand, category)
                 if rank is not None:
-                    amount_matches.append(
-                        (cand, rank[0], _signed_days_between(txn_date, cand.date_issued) or 0)
-                    )
+                    amount_matches.append((cand, rank))
 
         if not amount_matches:
             unmatched.append(txn)
@@ -1283,9 +1576,9 @@ def _phase1_deterministic_match(
 
         selected_matches = sorted(
             amount_matches,
-            key=lambda item: (item[1], item[2] > 0, abs(item[2]), item[0].pdf_filename),
+            key=lambda item: (item[1], item[0].pdf_filename),
         )
-        matched_pdfs = [candidate for candidate, _, _ in selected_matches]
+        matched_pdfs = [candidate for candidate, _ in selected_matches]
         if rule is not None:
             matched_pdfs = _prune_rule_aware_exact_candidates(txn, matched_pdfs, rule)
             if not matched_pdfs:
@@ -1296,16 +1589,16 @@ def _phase1_deterministic_match(
             for candidate in matched_pdfs:
                 key = _candidate_signature(candidate)
                 current = best_by_signature.get(key)
-                candidate_rank = _candidate_date_rank(txn_date, candidate) or (9999, True, 9999)
+                candidate_rank = _candidate_rank_for_transaction(txn, candidate, category) or (9999, True, 9999)
                 current_rank = (
-                    _candidate_date_rank(txn_date, current) or (9999, True, 9999)
+                    _candidate_rank_for_transaction(txn, current, category) or (9999, True, 9999)
                     if current is not None
                     else None
                 )
                 if current is None or candidate_rank < current_rank:
                     best_by_signature[key] = candidate
             matched_pdfs = list(best_by_signature.values())
-        closest_days = selected_matches[0][1]
+        closest_days = selected_matches[0][1][0]
 
         for cand in matched_pdfs:
             used_candidates.add(cand.candidate_id)
@@ -1358,7 +1651,7 @@ def _link_line_item_documents(
             if _transfer_line_item_count(candidate) > 1:
                 continue
             for line_item in candidate.line_items:
-                if line_item.category != category:
+                if not _line_item_category_matches(category, line_item):
                     continue
                 if (
                     line_item.amount_match_required
@@ -1424,6 +1717,18 @@ def _link_line_item_documents(
     updated_matches = all_matches + newly_matched
     updated_unmatched = [txn for txn in final_unmatched if txn.row_number in still_unmatched_rows]
     return updated_matches, updated_unmatched, line_item_candidate_ids
+
+
+def _line_item_category_matches(category: str, line_item: CandidateLineItem) -> bool:
+    if line_item.category == category:
+        return True
+    if category == "bank-fee":
+        return line_item.category.startswith("bank-fee") or line_item.category == "bank-custody-fee"
+    if category == "bank-only":
+        return line_item.category.startswith("bank-transfer")
+    if category == "investment":
+        return line_item.category.startswith("stock-")
+    return False
 
 
 def _link_related_no_amount_documents(
@@ -1500,6 +1805,7 @@ def _link_related_no_amount_documents(
 def _link_paired_supporting_documents(
     all_matches: list[MatchResult],
     all_candidates: list[PDFCandidate],
+    rules: list,
 ) -> set[str]:
     supporting_candidate_ids: set[str] = set()
     claimed_candidate_ids = {
@@ -1509,6 +1815,7 @@ def _link_paired_supporting_documents(
     }
 
     for match in all_matches:
+        category, _ = _classify_transaction(match.transaction, rules)
         existing_ids = {candidate.candidate_id for candidate in match.pdf_candidates}
         bank_anchors = [
             candidate
@@ -1518,7 +1825,6 @@ def _link_paired_supporting_documents(
         if not bank_anchors:
             continue
 
-        txn_date = match.transaction.date_posting or match.transaction.date_value
         related_for_match: list[PDFCandidate] = []
         for candidate in sorted(all_candidates, key=lambda cand: cand.pdf_filename):
             if candidate.candidate_id in existing_ids or candidate.candidate_id in claimed_candidate_ids:
@@ -1529,9 +1835,16 @@ def _link_paired_supporting_documents(
                 continue
             if abs(abs(match.transaction.amount) - candidate.total_amount) > _AMOUNT_TOLERANCE:
                 continue
-            if _candidate_date_rank(txn_date, candidate) is None:
+            if _candidate_rank_for_transaction(match.transaction, candidate, category) is None:
                 continue
             if not any(_candidate_parties_match(candidate, anchor) for anchor in bank_anchors):
+                continue
+            candidate_party = _normalize_for_match(candidate.issuing_party or "")
+            if any(
+                _is_paired_supporting_candidate(match, existing)
+                and _normalize_for_match(existing.issuing_party or "") == candidate_party
+                for existing in match.pdf_candidates
+            ):
                 continue
 
             match.pdf_candidates.append(candidate)
@@ -1549,6 +1862,95 @@ def _link_paired_supporting_documents(
             )
 
     return supporting_candidate_ids
+
+
+def _link_evidence_counterparty_documents(
+    all_matches: list[MatchResult],
+    all_candidates: list[PDFCandidate],
+    rules: list,
+) -> set[str]:
+    evidence_candidate_ids: set[str] = set()
+    engine = RuleEngine()
+
+    for match in all_matches:
+        category, rule = _classify_transaction(match.transaction, rules)
+        if rule is None or category not in {"supplier-payment", "bank-fee"}:
+            continue
+        if not any(engine.match_doc_type("invoice", pattern) for pattern in rule.required_types):
+            continue
+        if category == "supplier-payment" and any(
+            candidate.is_supplier_evidence for candidate in match.pdf_candidates
+        ):
+            continue
+        if category == "bank-fee" and any(
+            candidate.is_supplier_evidence for candidate in match.pdf_candidates
+        ):
+            continue
+
+        txn_date = match.transaction.date_posting or match.transaction.date_value
+        anchors = [
+            candidate
+            for candidate in match.pdf_candidates
+            if candidate.counterparty_id != "$UNKNOWN$"
+            and (candidate.is_bank_anchor or candidate.is_supplier_evidence)
+        ]
+        if not anchors:
+            continue
+
+        existing_ids = {candidate.candidate_id for candidate in match.pdf_candidates}
+        related_for_match: list[PDFCandidate] = []
+        for anchor in anchors:
+            candidates = [
+                candidate
+                for candidate in all_candidates
+                if candidate.candidate_id not in existing_ids
+                and candidate.is_supplier_evidence
+                and candidate.counterparty_id == anchor.counterparty_id
+                and _same_calendar_month(txn_date, candidate.date_issued)
+                and (
+                    candidate.is_shared_period_document
+                    or category == "bank-fee"
+                    or _candidate_amount_matches_transaction(match, candidate)
+                )
+            ]
+            if not candidates:
+                continue
+
+            selected = sorted(
+                candidates,
+                key=lambda candidate: (
+                    not candidate.is_shared_period_document,
+                    candidate.date_issued != txn_date,
+                    _amount_distance(match, candidate),
+                    _candidate_date_rank(txn_date, candidate) or (9999, True, 9999),
+                    candidate.pdf_filename,
+                ),
+            )[0]
+            match.pdf_candidates.append(selected)
+            existing_ids.add(selected.candidate_id)
+            evidence_candidate_ids.add(selected.candidate_id)
+            related_for_match.append(selected)
+
+        if related_for_match:
+            related_names = ", ".join(candidate.pdf_filename for candidate in related_for_match)
+            match.reasoning = f"{match.reasoning}; counterparty evidence document(s): {related_names}"
+            logger.debug(
+                f"[COUNTERPARTY-EVIDENCE] Row {match.transaction.row_number}: {related_names}"
+            )
+
+    return evidence_candidate_ids
+
+
+def _candidate_amount_matches_transaction(match: MatchResult, candidate: PDFCandidate) -> bool:
+    if candidate.total_amount is None:
+        return False
+    return abs(abs(match.transaction.amount) - candidate.total_amount) <= _AMOUNT_TOLERANCE
+
+
+def _amount_distance(match: MatchResult, candidate: PDFCandidate) -> float:
+    if candidate.total_amount is None:
+        return float("inf")
+    return abs(abs(match.transaction.amount) - candidate.total_amount)
 
 
 def _extract_period_tokens(text: str) -> set[str]:
@@ -1776,6 +2178,18 @@ def _validate_required_documents(matches: list[MatchResult], rules: list) -> dic
     for match in matches:
         _, rule = _classify_transaction(match.transaction, rules)
         row_errors = engine.validate_match(match, rules)
+        if rule is not None and rule.name == "supplier-payment":
+            row_errors = [
+                error
+                for error in row_errors
+                if not (
+                    error.startswith("missing supplier-evidence")
+                    and any(
+                        candidate.is_bank_anchor and candidate.counterparty_id == "shared-toll"
+                        for candidate in match.pdf_candidates
+                    )
+                )
+            ]
         paired_support_filenames = {
             candidate.pdf_filename
             for candidate in match.pdf_candidates
@@ -1818,7 +2232,7 @@ def _validate_supporting_documents_have_bank_pair(
             candidate.pdf_filename.startswith(_BANK_EXPORT_PREFIX)
             for candidate in match.pdf_candidates
         )
-        if has_supporting_doc and not has_bank_doc:
+        if has_supporting_doc and not has_bank_doc and not match.line_items:
             errors[match.transaction.row_number] = [
                 "missing BNC document for CMP/DIV support file"
             ]
@@ -2110,7 +2524,8 @@ def reconcile_single(
         return empty_stats
 
     profile = runtime.profile
-    rules = profile.reconciliation.rules
+    rules = _rules_for_profile(profile)
+    evidence_mode = _reconciliation_mode(profile) == "evidence_v1"
     exclude_prefixes = profile.reconciliation.exclude_prefixes
     statement_issuing_party = _load_statement_issuing_party(repository, excel_path)
     candidates = _load_reconciliation_candidates(
@@ -2124,6 +2539,7 @@ def reconcile_single(
         candidate
         for candidate in candidates
         if not candidate.exclude_from_matching
+        and not (evidence_mode and candidate.is_ignored_for_reconciliation)
         and _is_candidate_compatible_with_statement_bank(candidate, statement_issuing_party)
     ]
 
@@ -2159,6 +2575,12 @@ def reconcile_single(
     paired_supporting_candidate_ids = _link_paired_supporting_documents(
         all_matches,
         matchable,
+        rules,
+    )
+    evidence_candidate_ids = (
+        _link_evidence_counterparty_documents(all_matches, matchable, rules)
+        if evidence_mode
+        else set()
     )
     related_candidate_ids = _link_related_no_amount_documents(
         all_matches,
@@ -2184,6 +2606,7 @@ def reconcile_single(
                 and candidate_id not in companion_candidate_ids
                 and candidate_id not in line_item_candidate_ids
                 and candidate_id not in paired_supporting_candidate_ids
+                and candidate_id not in evidence_candidate_ids
                 and candidate_id not in related_candidate_ids
             ):
                 logger.warning(f"[REDUNDANT-MATCH] {candidate_id} matched {count} transactions")

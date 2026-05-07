@@ -136,7 +136,7 @@ class DocumentRepository:
         raise ValueError(f"Unsupported document scope: {scope}")
 
     def find_companion(self, json_path: Path, metadata: dict | None = None) -> Path | None:
-        if metadata:
+        if isinstance(metadata, dict):
             extension = metadata.get("source_extension")
             if extension:
                 candidate = json_path.with_suffix(extension)

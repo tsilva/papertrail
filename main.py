@@ -41,6 +41,8 @@ def _resolve_runtime(
     *,
     profile: Optional[str] = None,
     verbose: bool = False,
+    enable_client: bool = True,
+    probe_api: bool = True,
 ) -> Runtime:
     """Create or reuse runtime using root or subcommand overrides."""
     state = dict(ctx.obj or {})
@@ -50,14 +52,29 @@ def _resolve_runtime(
     runtime = state.get("runtime")
     runtime_profile = state.get("runtime_profile")
     runtime_verbose = state.get("runtime_verbose")
-    if runtime is None or runtime_profile != selected_profile or runtime_verbose != selected_verbose:
+    runtime_enable_client = state.get("runtime_enable_client", True)
+    runtime_probe_api = state.get("runtime_probe_api", True)
+    if (
+        runtime is None
+        or runtime_profile != selected_profile
+        or runtime_verbose != selected_verbose
+        or runtime_enable_client != enable_client
+        or runtime_probe_api != probe_api
+    ):
         try:
-            runtime = create_runtime(profile_name=selected_profile, verbose=selected_verbose)
+            runtime = create_runtime(
+                profile_name=selected_profile,
+                verbose=selected_verbose,
+                enable_client=enable_client,
+                probe_api=probe_api,
+            )
         except (ProfileNotFoundError, ConfigError) as e:
             _fail(str(e))
         state["runtime"] = runtime
         state["runtime_profile"] = selected_profile
         state["runtime_verbose"] = selected_verbose
+        state["runtime_enable_client"] = enable_client
+        state["runtime_probe_api"] = probe_api
 
     state["profile"] = selected_profile
     state["verbose"] = selected_verbose
@@ -246,6 +263,57 @@ def review(
     runtime = _resolve_runtime(ctx, profile=profile, verbose=verbose)
     export = _resolve_dir(export_path or _profile_path(runtime, "export"), "export_path")
     commands.review(runtime, export)
+
+
+@app.command()
+def regression(
+    ctx: typer.Context,
+    export_date: str = typer.Option(..., help="Export date in YYYY-MM format."),
+    export_path: Optional[str] = typer.Option(None, help="Path to a month export folder."),
+    seed_missing_approvals: bool = typer.Option(
+        False,
+        help="Seed missing approvals from existing successful reconciliation sidecars.",
+    ),
+    profile: Optional[str] = typer.Option(None, help=PROFILE_OPTION_HELP),
+    verbose: bool = typer.Option(False, "-v", "--verbose", help="Enable verbose output."),
+):
+    """Verify reconciliation output against approved groundtruth."""
+    if not re.match(r"^\d{4}-\d{2}$", export_date):
+        _fail("--export-date must be in YYYY-MM format.")
+    runtime = _resolve_runtime(
+        ctx,
+        profile=profile,
+        verbose=verbose,
+        enable_client=False,
+        probe_api=False,
+    )
+    export_root = export_path or _profile_path(runtime, "export")
+    if not export_root:
+        _fail("export_path is required.")
+    export_base = Path(export_root)
+    export = export_base if export_path else export_base / export_date
+    if not export.is_dir():
+        _fail(f"'{export}' is not a valid export month directory.")
+
+    from papertrail.reconciliation_regression import verify_reconciliation_regression
+    from papertrail.repository import DocumentRepository
+
+    result = verify_reconciliation_regression(
+        runtime,
+        DocumentRepository(runtime),
+        export,
+        seed_missing=seed_missing_approvals,
+    )
+    if result.ok:
+        runtime.console.success(
+            f"Regression passed: {result.checked} approved transaction(s) checked",
+            indent=False,
+        )
+        return
+
+    for failure in result.failures:
+        runtime.console.error(failure, indent=False)
+    _fail(f"Regression failed with {len(result.failures)} issue(s).")
 
 
 @app.command()

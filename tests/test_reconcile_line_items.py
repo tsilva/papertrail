@@ -9,6 +9,7 @@ from papertrail.commands.reconcile import (
     Transaction,
     _extract_bpi_fee_invoice_line_items,
     _extract_bpi_stock_invoice_line_items,
+    _extract_millennium_fee_invoice_line_items,
     _line_item_matches_transaction_context,
 )
 
@@ -65,6 +66,47 @@ class ReconcileLineItemTests(unittest.TestCase):
         self.assertIn(("bank-fee-maintenance", 7.99), by_category)
         self.assertIn(("bank-fee-stamp-duty", 0.32), by_category)
         self.assertIn(("bank-custody-fee", 11.06), by_category)
+
+    def test_extracts_millennium_fee_invoice_receipt_line_items(self):
+        lines = [
+            "Fatura-Recibo",
+            "Data emissão: 2026-03-04",
+            "Operação: MAN. CTA PACOTE M EMPRESA",
+            "Dados de Operação",
+            "Data do Movimento",
+            "2026-03-04",
+            "Dados de Faturação",
+            "Comissão referente a  02/2026          (1)",
+            "15,00",
+            "EUR",
+            "Imp. Selo art.17.3.4 da Tab. Geral - 4%",
+            "0,60",
+            "EUR",
+            "Total de Faturação",
+            "15,60",
+            "EUR",
+        ]
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            path = Path(tmp_dir) / "millennium.pdf"
+            doc = fitz.open()
+            page = doc.new_page()
+            page.insert_text((72, 72), "\n".join(lines), fontsize=10)
+            doc.save(path)
+            doc.close()
+
+            items = _extract_millennium_fee_invoice_line_items(
+                path,
+                {
+                    "date_issued": "2026-03-04",
+                    "document_type": "invoice-receipt",
+                    "issuing_party": "MillenniumBCP",
+                    "document_title": "MAN. CTA PACOTE M EMPRESA",
+                },
+            )
+
+        by_category = {(item.category, item.amount, item.date_issued) for item in items}
+        self.assertIn(("bank-fee-maintenance", 15.00, "2026-03-04"), by_category)
+        self.assertIn(("bank-fee-stamp-duty", 0.60, "2026-03-04"), by_category)
 
     def test_extracts_bpi_stock_sale_invoice_line_items(self):
         lines = [

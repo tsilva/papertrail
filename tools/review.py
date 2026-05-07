@@ -3,6 +3,8 @@
 import html as html_lib
 import json
 import re
+import tempfile
+import zipfile
 from pathlib import Path
 
 import gradio as gr
@@ -353,6 +355,50 @@ def _list_export_folders(base_dir):
     return sorted(folders, reverse=True)
 
 
+def _resolve_export_folder(folder_name, base_dir) -> Path | None:
+    if not folder_name or not base_dir:
+        return None
+
+    base = Path(str(base_dir)).expanduser().resolve()
+    folder = (base / str(folder_name)).resolve()
+    try:
+        folder.relative_to(base)
+    except ValueError:
+        return None
+    return folder if folder.is_dir() else None
+
+
+def _zip_export_folder(folder: Path) -> tuple[Path | None, str]:
+    archive_dir = Path(tempfile.gettempdir()) / "papertrail-review-zips"
+    archive_dir.mkdir(parents=True, exist_ok=True)
+    zip_path = archive_dir / f"{folder.name}.zip"
+
+    file_count = 0
+    total_bytes = 0
+    with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        for path in sorted(folder.rglob("*")):
+            if not path.is_file() or path.is_symlink():
+                continue
+            file_count += 1
+            total_bytes += path.stat().st_size
+            archive.write(path, Path(folder.name) / path.relative_to(folder))
+
+    if file_count == 0:
+        try:
+            zip_path.unlink()
+        except OSError:
+            pass
+        return None, f"**Error:** `{folder.name}` has no files to export."
+
+    size_mb = zip_path.stat().st_size / (1024 * 1024)
+    source_mb = total_bytes / (1024 * 1024)
+    return (
+        zip_path,
+        f"Created **{zip_path.name}** with **{file_count}** files "
+        f"({size_mb:.1f} MB zip, {source_mb:.1f} MB source).",
+    )
+
+
 def _collect_referenced_files(bank_statements):
     referenced = set()
     for bank_statement in bank_statements:
@@ -382,6 +428,8 @@ def _build_cross_folder_index(folder, file_index, referenced_files):
 
     cross_file_index = {}
     for json_path, metadata in iter_sidecars(export_base):
+        if not isinstance(metadata, dict):
+            continue
         if is_reconciliation_sidecar(json_path):
             continue
 
@@ -476,6 +524,8 @@ def load_export_folder(folder_path):
     bank_statements, file_index = [], {}
 
     for json_path, metadata in iter_sidecars(folder):
+        if not isinstance(metadata, dict):
+            continue
         if is_reconciliation_sidecar(json_path):
             continue
         doc_path = find_companion(json_path, metadata)
@@ -932,13 +982,17 @@ def build_ui():
 
         gr.Markdown("## Papertrail Document Review")
 
-        folder_dd = gr.Dropdown(
-            label="Export Folder",
-            choices=folder_choices,
-            value=default_folder,
-            interactive=True,
-        )
+        with gr.Row():
+            folder_dd = gr.Dropdown(
+                label="Export Folder",
+                choices=folder_choices,
+                value=default_folder,
+                interactive=True,
+                scale=4,
+            )
+            zip_btn = gr.Button("Export ZIP", scale=1)
         status_bar = gr.Markdown("")
+        zip_file = gr.File(label="Month ZIP", visible=False)
 
         selected_file_bridge = gr.Textbox(
             elem_id="selected_file_bridge", label="", container=False,
@@ -968,15 +1022,16 @@ def build_ui():
             empty = (
                 "Select an export folder.",
                 placeholder_html("No data loaded."),
+                gr.update(value=None, visible=False),
             )
-            if not folder_name or not base_dir:
+            folder = _resolve_export_folder(folder_name, base_dir)
+            if folder is None:
                 _CACHE["data"] = {}
                 return empty
-            folder_path = str(Path(base_dir) / folder_name)
-            data, status = load_export_folder(folder_path)
+            data, status = load_export_folder(str(folder))
             if not data:
                 _CACHE["data"] = {}
-                return (status, empty[1])
+                return (status, empty[1], empty[2])
 
             _CACHE["data"] = data
 
@@ -988,11 +1043,29 @@ def build_ui():
                 data=data,
             )
 
-            return (status, bank_content)
+            return (status, bank_content, empty[2])
 
         folder_dd.change(
             on_load, [folder_dd, export_base_state],
-            [status_bar, bank_html],
+            [status_bar, bank_html, zip_file],
+        )
+
+        def on_zip_click(folder_name, base_dir):
+            folder = _resolve_export_folder(folder_name, base_dir)
+            if folder is None:
+                return (
+                    "**Error:** select a valid export folder before creating a zip.",
+                    gr.update(value=None, visible=False),
+                )
+
+            zip_path, status = _zip_export_folder(folder)
+            if zip_path is None:
+                return status, gr.update(value=None, visible=False)
+            return status, gr.update(value=str(zip_path), visible=True)
+
+        zip_btn.click(
+            on_zip_click, [folder_dd, export_base_state],
+            [status_bar, zip_file],
         )
 
         def on_bridge_input(raw_value):
@@ -1105,7 +1178,7 @@ def build_ui():
         if default_folder:
             app.load(
                 on_load, [folder_dd, export_base_state],
-                [status_bar, bank_html],
+                [status_bar, bank_html, zip_file],
             )
 
     return app
