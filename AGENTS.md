@@ -453,7 +453,17 @@ Standalone Gradio apps for interactive document management. Run with `python too
 
 ## Testing
 
-No test suite currently.
+Run automated tests with:
+```bash
+uv run pytest -q
+```
+
+When the user asks to "regression test", "run regression", "check the golden exports", or verify that reconciliation/export behavior is still unbroken after a change, run:
+```bash
+make regression-golden
+```
+
+`make regression-golden` checks the approved reconciliation groundtruth for export months `2026-01`, `2026-02`, `2026-03`, and `2026-04` using the `puzzle` profile by default. Treat failures as real regressions unless the user explicitly says the golden approvals should be updated. Only run `make regression-seed-golden` when the user explicitly asks to refresh or seed the golden baseline.
 
 ## Dependencies
 

@@ -38,11 +38,13 @@ papertrail --profile personal check --verify-hashes            # audit metadata 
 papertrail --profile personal rename                           # rename files from sidecar JSON
 papertrail --profile personal reconcile                        # reconcile exported documents to bank rows
 papertrail --profile personal review                           # open reconciliation review UI
+papertrail --profile personal regression --export-date 2026-04 # check approved reconciliation groundtruth
 papertrail --profile personal gmail --months 2                 # download Gmail attachments
 papertrail --profile personal export excel --output /tmp/docs.xlsx
 papertrail --profile personal export dates --base-dir /tmp/export
 papertrail --profile personal export copy --pattern 2026-01 --dest /tmp/january
 .venv/bin/python -m pytest -q                                  # run tests
+make regression-golden PROFILE=personal                         # run golden reconciliation months
 ```
 
 ## Notes

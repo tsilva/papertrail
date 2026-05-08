@@ -2595,7 +2595,11 @@ def _link_via_verde_period_documents(
         if txn.row_number in matched_by_row:
             match = matched_by_row[txn.row_number]
             existing_ids = {candidate.candidate_id for candidate in match.pdf_candidates}
-            if shared_candidate.candidate_id not in existing_ids:
+            existing_filenames = {candidate.pdf_filename for candidate in match.pdf_candidates}
+            if (
+                shared_candidate.candidate_id not in existing_ids
+                and shared_candidate.pdf_filename not in existing_filenames
+            ):
                 match.pdf_candidates.append(shared_candidate)
                 if match.method == "exact":
                     match.reasoning = (
