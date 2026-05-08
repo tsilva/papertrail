@@ -371,6 +371,7 @@ class PDFCandidate:
     document_family: str = "unknown"
     counterparty_id: str = "$UNKNOWN$"
     source_bank: Optional[str] = None
+    source_filename: Optional[str] = None
     is_bank_anchor: bool = False
     is_supplier_evidence: bool = False
     is_ignored_for_reconciliation: bool = False
@@ -450,6 +451,7 @@ def _build_candidate(
         document_family=evidence.document_family,
         counterparty_id=evidence.counterparty_id,
         source_bank=evidence.source_bank,
+        source_filename=data.get("source_filename"),
         is_bank_anchor=evidence.is_bank_anchor,
         is_supplier_evidence=evidence.is_supplier_evidence,
         is_ignored_for_reconciliation=evidence.is_ignored_for_reconciliation,
@@ -615,7 +617,12 @@ def _prior_reconciliation_paths(export_path: Path) -> list[Path]:
     ]
 
 
-def _load_reconciled_filenames(search_paths: list[Path]) -> set[str]:
+def _filename_hash_key(filename: str) -> Optional[str]:
+    match = re.search(r"(?:^| - )([0-9a-fA-F]{8})(?:\.[^.]+)?$", filename)
+    return match.group(1).lower() if match else None
+
+
+def _load_reconciled_candidate_keys(search_paths: list[Path]) -> set[str]:
     reconciled: set[str] = set()
     for search_path in search_paths:
         for reconciliation_path in search_path.rglob("*.reconciliation.json"):
@@ -633,8 +640,22 @@ def _load_reconciled_filenames(search_paths: list[Path]) -> set[str]:
                 files = match.get("files") or []
                 if isinstance(files, str):
                     files = [files]
-                reconciled.update(str(filename) for filename in files if filename)
+                for filename in files:
+                    if not filename:
+                        continue
+                    filename = str(filename)
+                    reconciled.add(filename)
+                    if hash_key := _filename_hash_key(filename):
+                        reconciled.add(hash_key)
     return reconciled
+
+
+def _is_prior_reconciled_candidate(candidate: PDFCandidate, prior_reconciled_keys: set[str]) -> bool:
+    return bool(
+        candidate.pdf_filename in prior_reconciled_keys
+        or (candidate.hash_file and candidate.hash_file.lower() in prior_reconciled_keys)
+        or candidate.candidate_id in prior_reconciled_keys
+    )
 
 
 def _date_from_iso(value: Optional[str]) -> Optional[date]:
@@ -1567,7 +1588,7 @@ def _load_reconciliation_candidates(
     rules: list | None = None,
 ) -> list[PDFCandidate]:
     search_paths = _reconciliation_search_paths(export_path)
-    prior_reconciled_filenames = _load_reconciled_filenames(
+    prior_reconciled_keys = _load_reconciled_candidate_keys(
         _prior_reconciliation_paths(export_path)
     )
 
@@ -1580,7 +1601,7 @@ def _load_reconciliation_candidates(
         return [
             candidate
             for candidate in path_candidates
-            if candidate.pdf_filename not in prior_reconciled_filenames
+            if not _is_prior_reconciled_candidate(candidate, prior_reconciled_keys)
         ]
 
     rules = rules or []
@@ -1603,7 +1624,7 @@ def _load_reconciliation_candidates(
         for candidate in path_candidates:
             if candidate.candidate_id in seen_candidate_ids:
                 continue
-            if candidate.pdf_filename in prior_reconciled_filenames:
+            if _is_prior_reconciled_candidate(candidate, prior_reconciled_keys):
                 logger.debug(f"[PRIOR-RECONCILED] Skipping {candidate.pdf_filename}")
                 continue
             if not is_primary_path and not _is_relevant_supplemental_candidate(
@@ -1765,6 +1786,10 @@ def _candidate_parties_match(left: PDFCandidate, right: PDFCandidate) -> bool:
     return bool(left_party and right_party and left_party == right_party)
 
 
+def _candidate_sort_name(candidate: PDFCandidate) -> str:
+    return candidate.source_filename or candidate.pdf_filename
+
+
 def _is_paired_supporting_candidate(match: MatchResult, candidate: PDFCandidate) -> bool:
     if not _is_supporting_export_candidate(candidate):
         return False
@@ -1900,7 +1925,7 @@ def _prune_rule_aware_exact_candidates(
             matching,
             key=lambda candidate: (
                 _candidate_rank_for_transaction(txn, candidate, rule.name) or (9999, True, 9999),
-                candidate.pdf_filename,
+                _candidate_sort_name(candidate),
             ),
         )
 
@@ -1955,7 +1980,7 @@ def _phase1_deterministic_match(
 
         selected_matches = sorted(
             amount_matches,
-            key=lambda item: (item[1], item[0].pdf_filename),
+            key=lambda item: (item[1], _candidate_sort_name(item[0])),
         )
         matched_pdfs = [candidate for candidate, _ in selected_matches]
         if rule is not None:
@@ -2147,7 +2172,7 @@ def _link_related_no_amount_documents(
             if not anchor_doc_type or not anchor_party or not anchor.date_issued:
                 continue
 
-            for candidate in sorted(all_candidates, key=lambda cand: cand.pdf_filename):
+            for candidate in sorted(all_candidates, key=_candidate_sort_name):
                 if candidate.candidate_id in existing_ids or candidate.candidate_id in claimed_candidate_ids:
                     continue
                 if candidate.total_amount is not None:
@@ -2205,7 +2230,7 @@ def _link_paired_supporting_documents(
             continue
 
         related_for_match: list[PDFCandidate] = []
-        for candidate in sorted(all_candidates, key=lambda cand: cand.pdf_filename):
+        for candidate in sorted(all_candidates, key=_candidate_sort_name):
             if candidate.candidate_id in existing_ids or candidate.candidate_id in claimed_candidate_ids:
                 continue
             if not _is_supporting_export_candidate(candidate):

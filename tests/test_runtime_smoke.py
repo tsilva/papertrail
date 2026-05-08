@@ -192,6 +192,30 @@ class AdapterSmokeTests(unittest.TestCase):
         self.assertIn("statement.xlsx", review_data["file_index"])
         self.assertIn("Loaded **1** bank statements", status)
 
+    def test_review_warns_about_long_filenames(self):
+        export_dir = self.runtime.paths.export
+        create_millennium_statement(export_dir / "statement.xlsx")
+
+        from papertrail.bank_statement import classify_bank_statement
+
+        statement_path = export_dir / "statement.xlsx"
+        statement_hash = hash_file_fast(statement_path)
+        self.repository.save_document(
+            statement_path,
+            classify_bank_statement(statement_path, statement_hash),
+        )
+        long_file = export_dir / (
+            "CMP_2026-01-02 - invoice-receipt - millenniumbcp - "
+            "man cta pacote m empresa - abcdef12.pdf"
+        )
+        create_pdf(long_file, ["long filename"])
+
+        with patch("tools.shared.build_repository", return_value=self.repository):
+            _, status = review.load_export_folder(str(export_dir))
+
+        self.assertIn("**Warning:**", status)
+        self.assertIn(long_file.name, status)
+
     def test_review_skips_non_metadata_json_payloads(self):
         export_dir = self.runtime.paths.export
         (export_dir / "list-payload.json").write_text('["not", "metadata"]\n', encoding="utf-8")

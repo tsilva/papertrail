@@ -5,12 +5,57 @@ from papertrail.commands.reconcile import (
     MatchResult,
     PDFCandidate,
     Transaction,
+    _candidate_sort_name,
+    _filename_hash_key,
+    _is_prior_reconciled_candidate,
     _link_via_verde_period_documents,
     _reconciliation_rules,
 )
 
 
 class ReconcileLinkingTests(unittest.TestCase):
+    def test_prior_reconciled_detection_survives_export_rename(self):
+        old_filename = "BNC_2026-02-04 - bank-note - millenniumbcp - imposto selo art 17.3.4 - 52c84f00.pdf"
+        candidate = PDFCandidate(
+            json_path=Path("new-name.json"),
+            pdf_filename="BNC_2026-02-04 - bank-note - millenniumbcp - 52c84f00.pdf",
+            date_issued="2026-02-04",
+            document_type="bank-note",
+            document_type_raw="bank-note",
+            document_title="Imposto selo art 17.3.4",
+            issuing_party="millenniumbcp",
+            total_amount=0.60,
+            total_amount_currency="EUR",
+            file_extension=".pdf",
+            hash_file="52c84f00",
+        )
+
+        prior_keys = {old_filename, _filename_hash_key(old_filename)}
+
+        self.assertIn("52c84f00", prior_keys)
+        self.assertTrue(_is_prior_reconciled_candidate(candidate, prior_keys))
+
+    def test_candidate_sort_name_prefers_source_filename(self):
+        candidate = PDFCandidate(
+            json_path=Path("new-name.json"),
+            pdf_filename="BNC_2026-04-23 - bank-note - millenniumbcp - 594cdb99.pdf",
+            date_issued="2026-04-23",
+            document_type="bank-note",
+            document_type_raw="bank-note",
+            document_title="Transferencia pontual a debito SEPA+",
+            issuing_party="millenniumbcp",
+            total_amount=5000.0,
+            total_amount_currency="EUR",
+            file_extension=".pdf",
+            hash_file="594cdb99",
+            source_filename=(
+                "2026-04-23 - bank-note - millenniumbcp - "
+                "transferencia pontual a debito sepa+ - 5000 eur - 594cdb99.pdf"
+            ),
+        )
+
+        self.assertEqual(_candidate_sort_name(candidate), candidate.source_filename)
+
     def test_via_verde_shared_period_link_does_not_duplicate_existing_file(self):
         txn = Transaction(
             row_number=28,

@@ -9,6 +9,7 @@ from pathlib import Path
 
 import gradio as gr
 
+from papertrail.filename_audit import collect_long_filenames, format_long_filename_warning
 from papertrail.reconciliation_groundtruth import (
     approval_map,
     document_sets_match,
@@ -607,6 +608,12 @@ def load_export_folder(folder_path):
     )
     if n_unmatched_file_approvals:
         status += f", **{n_unmatched_file_approvals}** expected unmatched files"
+    if filename_warning := format_long_filename_warning(
+        collect_long_filenames(folder),
+        max_items=None,
+        markdown=True,
+    ):
+        status += f"\n\n{filename_warning}"
 
     return {
         "bank_statements": bank_statements,

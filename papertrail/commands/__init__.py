@@ -23,6 +23,7 @@ import pandas as pd
 from papertrail.config import get_gmail_config_paths, get_passwords_from_profile
 from papertrail.archive_extract import extract_archives
 from papertrail.document_types import normalize_document_type
+from papertrail.filename_audit import collect_long_filenames, format_long_filename_warning
 from papertrail.engine import DocumentEngine
 from papertrail.gmail import download_gmail_attachments
 from papertrail.logging_utils import (
@@ -49,6 +50,8 @@ from .reconcile import (
 
 logger = get_logger("commands")
 _PDFPRESS_COMPRESSOR = None
+_EXPORT_FILENAME_OMITTED_FIELDS = {"document_title"}
+_PDF_EXPORT_FILENAME_MAX_CHARS = 60
 
 
 @contextmanager
@@ -199,6 +202,157 @@ def _restore_reconciliation_groundtruth(
     return restored
 
 
+def _groundtruth_documents(snapshots: list[dict]) -> list[dict]:
+    documents = []
+    seen: set[tuple[str | None, str | None]] = set()
+    for snapshot in snapshots:
+        payload = snapshot.get("payload") or {}
+        for approval in payload.get("approvals", []):
+            for document in approval.get("required_documents", []):
+                key = (document.get("hash_file"), document.get("hash_content"))
+                if key in seen:
+                    continue
+                seen.add(key)
+                documents.append(document)
+        for approval in payload.get("unmatched_file_approvals", []):
+            document = approval.get("document") or {}
+            key = (document.get("hash_file"), document.get("hash_content"))
+            if key in seen:
+                continue
+            seen.add(key)
+            documents.append(document)
+    return documents
+
+
+def _document_identity_matches(metadata: dict, identity: dict) -> bool:
+    return bool(
+        (identity.get("hash_file") and metadata.get("hash_file") == identity.get("hash_file"))
+        or (
+            identity.get("hash_content")
+            and metadata.get("hash_content") == identity.get("hash_content")
+        )
+    )
+
+
+def _export_contains_document(repository: DocumentRepository, export_date_dir: Path, identity: dict) -> bool:
+    return any(
+        _document_identity_matches(data, identity)
+        for _, data in repository.iter_sidecars(export_date_dir)
+    )
+
+
+def _find_processed_document_by_identity(
+    repository: DocumentRepository,
+    processed_path: Path,
+    identity: dict,
+) -> tuple[Path, Path, dict] | None:
+    for json_path, data in repository.iter_sidecars(processed_path):
+        if not _document_identity_matches(data, identity):
+            continue
+        doc_path = repository.find_companion(json_path, data)
+        if doc_path is not None:
+            return json_path, doc_path, data
+    return None
+
+
+def _export_destination_paths(
+    doc_path: Path,
+    json_path: Path,
+    export_metadata_dict: dict,
+    dest_folder: Path,
+    *,
+    export_config,
+    profile_context: Optional[dict],
+) -> tuple[Path, Path]:
+    file_mappings = export_config.file_mappings if export_config is not None else None
+    use_prefixes = file_mappings is not None and file_mappings.enabled
+    engine = RuleEngine(profile_context=profile_context)
+
+    if use_prefixes:
+        prefix = _sanitize_export_prefix(
+            engine.evaluate_export_prefix(export_metadata_dict, file_mappings=file_mappings)
+        )
+        if file_mappings.filename_fields:
+            file_hash = export_metadata_dict.get("hash_file", doc_path.stem.split(" - ")[-1])
+            base_name = _build_filename_from_fields(
+                export_metadata_dict,
+                list(file_mappings.filename_fields),
+                file_hash,
+                profile_context=profile_context,
+            )
+        else:
+            base_name = _sanitize_export_filename(doc_path.name)
+        dest_name = _fit_pdf_export_filename(f"{prefix}{base_name}")
+    else:
+        dest_name = _fit_pdf_export_filename(_sanitize_export_filename(doc_path.name))
+
+    dest_doc = dest_folder / dest_name
+    return dest_doc, dest_doc.with_suffix(".json")
+
+
+def _copy_document_to_export(
+    repository: DocumentRepository,
+    doc_path: Path,
+    json_path: Path,
+    metadata_dict: dict,
+    dest_folder: Path,
+    *,
+    export_config,
+    profile_context: Optional[dict],
+    max_file_size_mb: float | None,
+) -> Path:
+    export_metadata_dict = _metadata_for_export(metadata_dict, doc_path)
+    dest_doc, dest_json = _export_destination_paths(
+        doc_path,
+        json_path,
+        export_metadata_dict,
+        dest_folder,
+        export_config=export_config,
+        profile_context=profile_context,
+    )
+    _check_file_size(doc_path, max_file_size_mb)
+    shutil.copy2(doc_path, dest_doc)
+    if dest_doc.suffix.lower() == ".pdf":
+        _compress_pdf_export(dest_doc)
+    metadata_copy = dict(export_metadata_dict)
+    metadata_copy["source_filename"] = doc_path.name
+    repository.save_json(dest_json, metadata_copy)
+    return dest_doc
+
+
+def _restore_groundtruth_documents(
+    repository: DocumentRepository,
+    processed_path: Path,
+    export_date_dir: Path,
+    snapshots: list[dict],
+    *,
+    export_config,
+    profile_context: Optional[dict],
+) -> int:
+    max_file_size_mb = export_config.max_file_size_mb if export_config is not None else None
+    restored = 0
+    for identity in _groundtruth_documents(snapshots):
+        if not identity or _export_contains_document(repository, export_date_dir, identity):
+            continue
+        found = _find_processed_document_by_identity(repository, processed_path, identity)
+        if found is None:
+            logger.warning(f"Could not restore approved export document {identity}")
+            continue
+        json_path, doc_path, metadata = found
+        _copy_document_to_export(
+            repository,
+            doc_path,
+            json_path,
+            metadata,
+            export_date_dir,
+            export_config=export_config,
+            profile_context=profile_context,
+            max_file_size_mb=max_file_size_mb,
+        )
+        restored += 1
+    return restored
+
+
 def _run_export_period(
     runtime: Runtime,
     processed_path: Path,
@@ -242,6 +396,18 @@ def _run_export_period(
     _pipeline_step(console, f"Export documents ({export_date})", export_documents)
 
     repository = DocumentRepository(runtime)
+    restored_documents = _restore_groundtruth_documents(
+        repository,
+        processed_path,
+        export_date_dir,
+        groundtruth_snapshots,
+        export_config=export_file_config,
+        profile_context=profile_context,
+    )
+    if restored_documents:
+        logger.debug(
+            f"[RECON-GROUNDTRUTH] Restored {restored_documents} approved document(s) for {export_date}"
+        )
     bank_statements = discover_bank_statements(repository, export_date_dir)
     restored_groundtruth = _restore_reconciliation_groundtruth(groundtruth_snapshots, bank_statements)
     if restored_groundtruth:
@@ -410,10 +576,52 @@ def rename(runtime: Runtime, processed_path: Path, *, quiet: bool = False) -> di
         return stats
 
 
+def _truncate_filename_component(value: str, max_length: int) -> str:
+    if max_length <= 0:
+        return ""
+    if len(value) <= max_length:
+        return value
+    return value[:max_length].rstrip(" -_.") or value[:max_length]
+
+
+def _fit_pdf_export_filename(filename: str, max_length: int = _PDF_EXPORT_FILENAME_MAX_CHARS) -> str:
+    if not filename.lower().endswith(".pdf") or len(filename) <= max_length:
+        return filename
+
+    suffix = ".pdf"
+    parts = filename[: -len(suffix)].split(" - ")
+    if len(parts) < 4:
+        return _truncate_filename_component(filename[: -len(suffix)], max_length - len(suffix)) + suffix
+    if len(parts) > 4:
+        parts = parts[:3] + parts[-1:]
+
+    def candidate_name() -> str:
+        return " - ".join(parts) + suffix
+
+    for index in (2, 1):
+        overage = len(candidate_name()) - max_length
+        if overage <= 0:
+            break
+        available = max(len(parts[index]) - 1, 0)
+        if available <= 0:
+            continue
+        parts[index] = _truncate_filename_component(parts[index], len(parts[index]) - min(overage, available))
+
+    candidate = candidate_name()
+    if len(candidate) <= max_length:
+        return candidate
+
+    overage = len(candidate) - max_length
+    parts[0] = _truncate_filename_component(parts[0], max(len(parts[0]) - overage, 1))
+    return candidate_name()
+
+
 def _build_filename_from_fields(metadata: dict, fields: list[str], file_hash: str, *, profile_context: dict | None = None) -> str:
     engine = RuleEngine(profile_context=profile_context)
     parts = []
     for field_name in fields:
+        if field_name in _EXPORT_FILENAME_OMITTED_FIELDS:
+            continue
         value = engine.get_nested_value(metadata, field_name)
         if value is not None and str(value).strip():
             component = engine.resolve_profile_value(str(value))
@@ -424,6 +632,18 @@ def _build_filename_from_fields(metadata: dict, fields: list[str], file_hash: st
     extension = metadata.get("source_extension") or ".pdf"
     parts.append(f"{file_hash}{extension}")
     return " - ".join(parts).lower()
+
+
+def _sanitize_export_prefix(prefix: str) -> str:
+    return sanitize_filename_component(prefix)
+
+
+def _sanitize_export_filename(filename: str) -> str:
+    suffix = Path(filename).suffix
+    stem = filename[: -len(suffix)] if suffix else filename
+    clean_stem = sanitize_filename_component(stem)
+    clean_suffix = sanitize_filename_component(suffix).lower()
+    return f"{clean_stem}{clean_suffix}"
 
 
 def _should_skip_copy(src: Path, dst: Path) -> bool:
@@ -479,6 +699,18 @@ def _compress_exported_pdfs(pdf_paths: list[Path]) -> None:
         _compress_pdf_export(pdf_path)
 
 
+def _long_filename_warning(path: Path) -> str:
+    return format_long_filename_warning(collect_long_filenames(path), max_items=None)
+
+
+def _warn_long_filenames(runtime: Runtime, path: Path) -> str:
+    warning = _long_filename_warning(path)
+    if not warning:
+        return ""
+    runtime.console.warning(warning, indent=False)
+    return warning
+
+
 def _metadata_for_export(metadata: dict, doc_path: Path) -> dict:
     export_metadata = dict(metadata)
     if doc_path.suffix.lower() == ".pdf":
@@ -528,10 +760,7 @@ def copy_matching(
     matcher = make_matcher(pattern, use_search=True)
     dest_folder.mkdir(parents=True, exist_ok=True)
 
-    file_mappings = export_config.file_mappings if export_config is not None else None
     max_file_size_mb = export_config.max_file_size_mb if export_config is not None else None
-    use_prefixes = file_mappings is not None and file_mappings.enabled
-    engine = RuleEngine(profile_context=profile_context)
 
     stats = {"copied": 0, "skipped": 0, "deduped": 0, "total": 0}
     seen_dedup_keys: set[tuple[str, ...]] = set()
@@ -555,23 +784,14 @@ def copy_matching(
         if dedup_key:
             seen_dedup_keys.add(dedup_key)
 
-        if use_prefixes:
-            prefix = engine.evaluate_export_prefix(export_metadata_dict, file_mappings=file_mappings)
-            if file_mappings.filename_fields:
-                file_hash = export_metadata_dict.get("hash_file", doc_path.stem.split(" - ")[-1])
-                base_name = _build_filename_from_fields(
-                    export_metadata_dict,
-                    list(file_mappings.filename_fields),
-                    file_hash,
-                    profile_context=profile_context,
-                )
-            else:
-                base_name = doc_path.name
-            dest_doc = dest_folder / f"{prefix}{base_name}"
-            dest_json = dest_doc.with_suffix(".json")
-        else:
-            dest_doc = dest_folder / doc_path.name
-            dest_json = dest_folder / json_path.name
+        dest_doc, dest_json = _export_destination_paths(
+            doc_path,
+            json_path,
+            export_metadata_dict,
+            dest_folder,
+            export_config=export_config,
+            profile_context=profile_context,
+        )
 
         if incremental and _should_skip_copy(doc_path, dest_doc):
             stats["skipped"] += 1
@@ -588,6 +808,7 @@ def copy_matching(
 
     if not quiet:
         runtime.console.success(f"Copied {stats['copied']} files to {dest_folder.name}", indent=False)
+        _warn_long_filenames(runtime, dest_folder)
     return stats
 
 
@@ -761,6 +982,8 @@ def export_dates(
                     logger.error(f"Merge failed: {exc}")
 
             runtime.console.success(f"Merged {len(changed_directories)} directories", indent=False)
+
+        _warn_long_filenames(runtime, export_base_dir)
 
 
 def archive(runtime: Runtime, processed_path: Path, digests: list[str], *, dry_run: bool = False) -> None:
@@ -1168,6 +1391,9 @@ def pipeline(
                 f"{total_statements} statement{'s' if total_statements != 1 else ''}, "
                 f"{avg_rate:.0f}% reconciled ({total_reconciled}/{total_txns})"
             )
+
+    if filename_warning := _long_filename_warning(Path(export_dir)):
+        pipeline_warnings.append(filename_warning)
 
     output_paths.append(("Excel", str(processed_files_excel_path)))
     output_paths.append(("Log", str(log_file_path)))

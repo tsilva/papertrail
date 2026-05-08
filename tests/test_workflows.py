@@ -133,9 +133,58 @@ class CommandTests(unittest.TestCase):
         self.assertEqual(stats["copied"], 1)
         exported_pdf = next(dest.glob("*.pdf"))
         self.assertTrue(exported_pdf.name.startswith("DIV_"))
-        self.assertIn("investment-acquisition-summary", exported_pdf.name)
+        self.assertLessEqual(len(exported_pdf.name), 60)
+        self.assertIn("investment-acquisition", exported_pdf.name)
+        self.assertNotIn("datas e valores", exported_pdf.name)
         exported_metadata = json.loads(exported_pdf.with_suffix(".json").read_text(encoding="utf-8"))
         self.assertEqual(exported_metadata["document_type"], "investment-acquisition-summary")
+
+    def test_copy_matching_export_names_omit_title_are_ascii_and_cap_pdfs(self):
+        self.runtime.profile.export.file_mappings.enabled = True
+        self.runtime.profile.export.file_mappings.default_prefix = "DIV_"
+        self.runtime.profile.export.file_mappings.rules = [
+            {"match": {"document_type": "bank-*"}, "prefix": "BNC_"},
+        ]
+        self.runtime.profile.export.file_mappings.filename_fields = [
+            "date_issued",
+            "document_type",
+            "issuing_party",
+            "document_title",
+        ]
+
+        source_pdf = self.processed / "2026-04-30 - payroll.pdf"
+        create_pdf(source_pdf, ["Recibo de remuneracao"])
+        self.repository.save_document(
+            source_pdf,
+            self._metadata(
+                "hash3333",
+                "file3333",
+                date_issued="2026-04-30",
+                document_type="payroll-vacation",
+                document_type_raw="Recibo",
+                issuing_party="segurança social",
+                issuing_party_raw="Segurança Social",
+                document_title="Remuneracao extraordinaria de ferias",
+            ),
+        )
+
+        dest = self.root / "copied"
+        with patch("papertrail.commands._compress_pdf_export"):
+            stats = copy_matching(
+                self.runtime,
+                self.processed,
+                "2026-04",
+                dest,
+                export_config=self.runtime.profile.export,
+                quiet=True,
+            )
+
+        self.assertEqual(stats["copied"], 1)
+        exported_pdf = next(dest.glob("*.pdf"))
+        self.assertLessEqual(len(exported_pdf.name), 60)
+        self.assertTrue(exported_pdf.name.isascii())
+        self.assertNotIn("remuneracao", exported_pdf.name)
+        self.assertTrue(exported_pdf.with_suffix(".json").exists())
 
     def test_copy_matching_exports_loan_disbursement_movement_as_bnc_bank_note(self):
         self.runtime.profile.export.file_mappings.enabled = True
@@ -280,6 +329,20 @@ class CommandTests(unittest.TestCase):
         source_statement.rename(processed_statement)
         self.repository.save_document(processed_statement, statement_metadata)
 
+        approved_receipt = self.processed / "2026-03-15 - receipt - vendor - doc12345.pdf"
+        create_pdf(approved_receipt, ["approved out-of-month receipt"])
+        self.repository.save_document(
+            approved_receipt,
+            self._metadata(
+                "content-doc12345",
+                "doc12345",
+                date_issued="2026-03-15",
+                document_type="receipt",
+                issuing_party="vendor",
+                document_title="Approved out-of-month receipt",
+            ),
+        )
+
         export_month = self.export / "2026-04"
         export_month.mkdir()
         old_statement = export_month / "old-statement-name.xlsx"
@@ -346,6 +409,9 @@ class CommandTests(unittest.TestCase):
             data["approvals"][0]["source_hint"]["statement_file"],
             exported_statement.name,
         )
+        restored_receipts = list((self.export / "2026-04").glob("*doc12345.pdf"))
+        self.assertEqual(len(restored_receipts), 1)
+        self.assertNotIn("approved out-of-month", restored_receipts[0].name)
         self.assertTrue((self.export / "_reconciliation_groundtruth" / "2026-04.json").exists())
 
     def test_reconcile_writes_reconciliation_sidecar(self):
