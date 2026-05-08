@@ -8,6 +8,8 @@ from typing import NotRequired, Optional, TypedDict
 
 from pydantic import BaseModel, Field, field_validator
 
+from papertrail.bank_statement.models import BankStatementSidecar
+
 
 def clean_enum_string(value: str, enum_prefix: Optional[str] = None) -> str:
     """Remove enum prefixes from serialized strings."""
@@ -48,13 +50,7 @@ class QRCodePayload(TypedDict, total=False):
     confidence: float
 
 
-class BankStatementPayload(TypedDict):
-    bank_format: str
-    account_number: str
-    currency: str
-    period_start: str
-    period_end: str
-    transaction_count: int
+BankStatementPayload = BankStatementSidecar
 
 
 class SubDocumentPayload(TypedDict, total=False):
@@ -137,7 +133,7 @@ class DocumentMetadata(BaseModel):
     issuer_tax_number: Optional[str] = Field(default=None)
     locale: Optional[str] = Field(default=None)
     qrcode: QRCodePayload | None = Field(default=None)
-    bank_statement: BankStatementPayload | None = Field(default=None)
+    bank_statement: BankStatementSidecar | None = Field(default=None)
     source_extension: Optional[str] = Field(default=None)
     sub_documents: Optional[list[SubDocumentPayload]] = Field(default=None)
 

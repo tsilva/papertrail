@@ -14,6 +14,10 @@ logger = get_logger('nif_lookup')
 _CACHE_LOAD_EXCEPTIONS = (OSError, UnicodeDecodeError, ValueError)
 
 
+def _default_nif_cache_path() -> Path:
+    return Path.home() / ".config" / "papertrail" / "cache" / "nif_cache.yaml"
+
+
 class NIFLookupCache:
     """Cache NIF -> issuer name mappings (TIER 1: cache, TIER 2: nif.pt web scraping)."""
 
@@ -22,7 +26,7 @@ class NIFLookupCache:
     def __init__(self, cache_path: Optional[Path] = None):
         self._lock = threading.Lock()
         if cache_path is None:
-            cache_path = Path(__file__).parent.parent / ".cache" / "nif_cache.yaml"
+            cache_path = _default_nif_cache_path()
         self.path = cache_path
         self._cache: dict[str, str] = {}
         self._normalized: dict[str, str] = {}

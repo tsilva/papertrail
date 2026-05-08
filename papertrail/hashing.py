@@ -20,12 +20,20 @@ logger = get_logger('hashing')
 _CACHE_LOAD_EXCEPTIONS = (OSError, UnicodeDecodeError, ValueError)
 
 
+class ContentHashError(RuntimeError):
+    """Raised when a PDF content hash cannot be computed from rendered pages."""
+
+
+def _default_hash_cache_path() -> Path:
+    return Path.home() / ".config" / "papertrail" / "cache" / "hash_cache.yaml"
+
+
 class HashCache:
     """Cache file_hash -> content_hash and file_hash -> text_hash mappings."""
 
     def __init__(self, cache_path: Optional[Path] = None):
         if cache_path is None:
-            cache_path = Path(__file__).parent.parent / ".cache" / "hash_cache.yaml"
+            cache_path = _default_hash_cache_path()
         self.path = cache_path
         self._cache: dict[str, str] = {}
         self._text_cache: dict[str, str] = {}
@@ -91,12 +99,13 @@ def hash_file_content(path: Path) -> str:
                     pix = page.get_pixmap(matrix=mat, alpha=False, colorspace=fitz.csRGB)
                     page_hash = hashlib.sha256(pix.samples).hexdigest()
                     page_hashes.append(page_hash)
-                except Exception:
-                    continue
+                except Exception as exc:
+                    raise ContentHashError(
+                        f"failed to render page {page.number} in {path.name}: {exc}"
+                    ) from exc
 
         if not page_hashes:
-            logger.warning(f"No pages rendered for {path.name}, falling back to file hash")
-            return hash_file_fast(path)
+            raise ContentHashError(f"no pages rendered for {path.name}")
 
         combined = "".join(page_hashes)
         result = hashlib.sha256(combined.encode()).hexdigest()[:8]
@@ -105,8 +114,9 @@ def hash_file_content(path: Path) -> str:
         return result
 
     except Exception as e:
-        logger.warning(f"Content hashing failed for {path.name} ({e}), falling back to file hash")
-        return hash_file_fast(path)
+        if isinstance(e, ContentHashError):
+            raise
+        raise ContentHashError(f"content hashing failed for {path.name}: {e}") from e
 
 
 def _page_has_text(page) -> bool:

@@ -4,6 +4,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from papertrail.engine import DocumentEngine
+from papertrail.hashing import ContentHashError, hash_file_content
 from papertrail.models import DocumentMetadata, DocumentMetadataRaw
 from papertrail.qr.models import QRExtractedMetadata
 from papertrail.repository import DocumentRepository
@@ -122,6 +123,31 @@ class DocumentLifecycleTests(unittest.TestCase):
         saved_metadata = self.repository.load_metadata(result.outputs[0].with_suffix(".json"), validate=True)
         self.assertEqual(saved_metadata.source_extension, ".xlsx")
         self.assertIn(saved_metadata.hash_file, result.outputs[0].name)
+
+    def test_corrupt_xlsx_counts_as_failed_not_unrecognized(self):
+        xlsx_path = self.raw / "broken.xlsx"
+        xlsx_path.write_bytes(b"not an xlsx workbook")
+
+        result = self.engine.upsert(xlsx_path, "ingest", processed_path=self.processed)
+
+        self.assertEqual(result.failed, 1)
+        self.assertEqual(result.reason, "unreadable_xlsx")
+        self.assertEqual(result.skipped, 0)
+
+    def test_content_hash_failure_raises_instead_of_file_hash_fallback(self):
+        pdf_path = self.raw / "broken.pdf"
+        pdf_path.write_bytes(b"not a pdf")
+
+        with self.assertRaises(ContentHashError):
+            hash_file_content(pdf_path)
+
+    def test_llm_classification_failure_is_not_saved_as_unknown_metadata(self):
+        pdf_path = self.raw / "invoice.pdf"
+        create_pdf(pdf_path, ["Invoice body"])
+
+        with patch("papertrail.engine._phase1_llm_extract", side_effect=RuntimeError("api down")):
+            with self.assertRaisesRegex(RuntimeError, "Classification failed"):
+                self.engine.classify_pdf_document(pdf_path, "content1234")
 
     def test_qr_metadata_overrides_llm_values(self):
         pdf_path = self.raw / "qr-invoice.pdf"

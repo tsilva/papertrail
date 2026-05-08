@@ -1,7 +1,7 @@
 # Profile Configuration Template
 # To create a new profile, create a directory and copy this file:
-#   mkdir profiles/myprofile
-#   cp profiles/profile.yaml.example profiles/myprofile/profile.yaml
+#   mkdir -p ~/.config/papertrail/profiles/myprofile
+#   cp profile.yaml.example ~/.config/papertrail/profiles/myprofile/profile.yaml
 
 profile:
   name: "default"
@@ -28,9 +28,9 @@ openrouter:
 # Gmail integration (optional)
 gmail:
   enabled: true
-  # Credentials default to ../.credentials/ when null (gitignored)
-  credentials_file: null  # Defaults to ../.credentials/gmail_credentials.json
-  token_file: null  # Defaults to ../.credentials/gmail_token.json
+  # Defaults to ~/.config/papertrail/credentials/ when null.
+  credentials_file: null  # Defaults to ~/.config/papertrail/credentials/gmail_credentials.json
+  token_file: null  # Defaults to ~/.config/papertrail/credentials/gmail_token.json
   # Or specify custom path: "/custom/path/gmail_credentials.json"
   settings:
     attachment_mime_types: ["application/pdf"]

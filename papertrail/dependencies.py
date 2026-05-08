@@ -5,7 +5,7 @@ from __future__ import annotations
 from importlib import import_module
 
 from papertrail.config import ConfigError
-from papertrail.qr import check_pyzbar_available
+from papertrail.qr.extractor import check_pyzbar_available
 
 _REQUIRED_IMPORTS = [
     ("unarch", "unarch"),

@@ -8,10 +8,13 @@ import tempfile
 import time as _time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
-from datetime import datetime
 from pathlib import Path
 
-from papertrail.bank_statement import classify_bank_statement
+from papertrail.bank_statement.extractor import (
+    BankStatementParseError,
+    BankStatementReadError,
+    classify_bank_statement,
+)
 from papertrail.document_types import normalize_document_type
 from papertrail.hashing import hash_file_content, hash_file_fast, hash_file_text
 from papertrail.llm import (
@@ -33,7 +36,8 @@ from papertrail.pdf import (
     render_pdf_to_images,
     split_pdf_bundle,
 )
-from papertrail.qr import QRExtractedMetadata, extract_all_metadata_from_qr
+from papertrail.qr.extractor import extract_all_metadata_from_qr
+from papertrail.qr.models import QRExtractedMetadata
 from papertrail.repository import DocumentRepository
 from papertrail.runtime import Runtime
 
@@ -486,18 +490,9 @@ class DocumentEngine:
                             f"LLM classification attempt 1 failed for {pdf_path.name}, retrying: {exc}"
                         )
                     else:
-                        logger.warning(
-                            f"LLM classification attempt 2 failed for {pdf_path.name}, using fallback: {exc}"
-                        )
-                        raw_metadata = DocumentMetadataRaw(
-                            issue_date="$UNKNOWN$",
-                            document_type="$UNKNOWN$",
-                            document_type_raw="$UNKNOWN$",
-                            issuing_party="$UNKNOWN$",
-                            issuing_party_raw="$UNKNOWN$",
-                            confidence=0.0,
-                            reasoning="LLM classification failed after 2 attempts",
-                        )
+                        raise RuntimeError(
+                            f"LLM classification failed after 2 attempts for {pdf_path.name}: {exc}"
+                        ) from exc
 
             assert raw_metadata is not None
 
@@ -689,21 +684,13 @@ class DocumentEngine:
                 if source_path.exists() and source_path.suffix.lower() == ".pdf":
                     all_results = extract_all_metadata_from_qr(source_path)
                     if len(all_results) >= 2:
-                        sub_docs = []
-                        for qr_metadata, qr_raw_data in all_results:
-                            sub_doc = SubDocumentMetadata(
-                                date_issued=qr_metadata.issue_date,
-                                document_type=qr_metadata.document_type,
-                                total_amount=qr_metadata.total_amount,
-                                total_amount_currency=qr_metadata.total_amount_currency,
-                                issuer_tax_number=qr_metadata.issuer_tax_number,
-                                document_number=qr_metadata.document_number,
-                                atcud=qr_metadata.atcud,
-                                locale=qr_metadata.locale,
-                                qrcode=qr_raw_data,
-                            )
-                            sub_docs.append(sub_doc.model_dump())
-                        data["sub_documents"] = sub_docs
+                        data["sub_documents"] = _build_sub_documents(
+                            all_results,
+                            self.runtime,
+                            self.repository,
+                            processed_path,
+                            None,
+                        )
                         data["qrcode"] = None
                     else:
                         data["sub_documents"] = None
@@ -776,7 +763,18 @@ class DocumentEngine:
                 result.reason = "hash_file"
                 return result
 
-            metadata = classify_bank_statement(source_path, file_hash)
+            try:
+                metadata = classify_bank_statement(source_path, file_hash)
+            except BankStatementReadError as exc:
+                logger.error(f"Failed to read XLSX {source_path.name}: {exc}")
+                result.failed = 1
+                result.reason = "unreadable_xlsx"
+                return result
+            except BankStatementParseError as exc:
+                logger.error(f"Failed to parse XLSX {source_path.name}: {exc}")
+                result.failed = 1
+                result.reason = "parse_failed_xlsx"
+                return result
             if metadata is None:
                 result.skipped = 1
                 result.reason = "unrecognized_xlsx"
