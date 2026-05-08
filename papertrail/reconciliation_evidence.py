@@ -14,10 +14,11 @@ from papertrail.models import clean_enum_string
 from papertrail.reconciliation_defaults import (
     DEFAULT_BANK_COUNTERPARTIES,
     DEFAULT_COUNTERPARTY_ALIASES,
+    DEFAULT_DOCUMENT_FAMILIES,
     DEFAULT_SHARED_PERIOD_TITLE_TERMS,
+    DEFAULT_TAX_NUMBER_DEFAULT_COUNTRY_PREFIX,
 )
 from papertrail.utils import strip_diacritics
-
 
 BANK_ANCHOR = "bank_anchor"
 SUPPLIER_EVIDENCE = "supplier_evidence"
@@ -29,45 +30,16 @@ CONTRACT_EVIDENCE = "contract_evidence"
 IGNORE = "ignore"
 UNKNOWN = "unknown"
 
-FAMILY_ALIASES = {
-    "bank-anchor": {BANK_ANCHOR},
-    "bank_anchor": {BANK_ANCHOR},
-    "supplier-evidence": {SUPPLIER_EVIDENCE},
-    "supplier_evidence": {SUPPLIER_EVIDENCE},
-    "tax-evidence": {TAX_EVIDENCE},
-    "tax_evidence": {TAX_EVIDENCE},
-    "payroll-evidence": {PAYROLL_EVIDENCE},
-    "payroll_evidence": {PAYROLL_EVIDENCE},
-    "loan-evidence": {LOAN_EVIDENCE},
-    "loan_evidence": {LOAN_EVIDENCE},
-    "investment-evidence": {INVESTMENT_EVIDENCE},
-    "investment_evidence": {INVESTMENT_EVIDENCE},
-    "contract-evidence": {CONTRACT_EVIDENCE},
-    "contract_evidence": {CONTRACT_EVIDENCE},
-}
-
-_BANK_ANCHOR_TYPES = {"bank-note", "bank-transfer", "bank-card-transaction"}
-_SUPPLIER_TYPES = {
-    "invoice",
-    "receipt",
-    "invoice-receipt",
-    "invoice-credit",
-    "invoice-debit",
-    "insurance-notice",
-    "bank-fees",
-}
-_INVESTMENT_TYPES = {
-    "bank-investment",
-    "investment-acquisition-summary",
-    "bank-stock-buy",
-    "bank-stock-sell",
-}
-_IGNORE_TYPES = {"investment-key-information-document", "loan-simulation"}
 _BANK_COUNTERPARTIES = set(DEFAULT_BANK_COUNTERPARTIES)
 _COUNTERPARTY_ALIASES = dict(DEFAULT_COUNTERPARTY_ALIASES)
 _SHARED_PERIOD_TITLE_TERMS = {
     party: tuple(terms)
     for party, terms in DEFAULT_SHARED_PERIOD_TITLE_TERMS.items()
+}
+_DOCUMENT_FAMILIES = {
+    str(family): dict(settings)
+    for family, settings in DEFAULT_DOCUMENT_FAMILIES.items()
+    if isinstance(settings, dict)
 }
 
 
@@ -91,44 +63,49 @@ class DocumentEvidence:
         return self.document_family == IGNORE
 
 
-def document_family_for_type(doc_type: str | None, metadata: dict[str, Any] | None = None) -> str:
+def document_family_for_type(
+    doc_type: str | None,
+    metadata: dict[str, Any] | None = None,
+    *,
+    document_families: dict[str, dict[str, Any]] | None = None,
+) -> str:
     doc_type = clean_enum_string(doc_type or "", "DocumentType").strip().lower()
     metadata = metadata or {}
+    families = _document_families(document_families)
 
-    if doc_type in _IGNORE_TYPES:
+    if _matches_family(doc_type, families.get(IGNORE, {})):
         return IGNORE
-    if _is_zero_amount_supplier_doc(doc_type, metadata.get("total_amount")):
+    supplier_config = families.get(SUPPLIER_EVIDENCE, {})
+    if _is_zero_amount_supplier_doc(doc_type, metadata.get("total_amount"), supplier_config):
         return IGNORE
-    if doc_type in _BANK_ANCHOR_TYPES:
-        return BANK_ANCHOR
-    if doc_type in _SUPPLIER_TYPES or doc_type.startswith("invoice-") or doc_type.startswith("receipt-"):
-        return SUPPLIER_EVIDENCE
-    if doc_type.startswith("tax-"):
-        return TAX_EVIDENCE
-    if doc_type.startswith("payroll-"):
-        return PAYROLL_EVIDENCE
-    if doc_type.startswith("loan-"):
-        return LOAN_EVIDENCE
-    if doc_type in _INVESTMENT_TYPES:
-        return INVESTMENT_EVIDENCE
-    if doc_type == "contract-signup":
-        return CONTRACT_EVIDENCE
+
+    for family, settings in families.items():
+        if family == IGNORE:
+            continue
+        if _matches_family(doc_type, settings):
+            return family
     if not doc_type:
         return UNKNOWN
     return UNKNOWN
 
 
-def document_type_matches_family(doc_type: str | None, family_pattern: str) -> bool:
-    families = FAMILY_ALIASES.get(family_pattern.strip().lower())
+def document_type_matches_family(
+    doc_type: str | None,
+    family_pattern: str,
+    *,
+    document_families: dict[str, dict[str, Any]] | None = None,
+) -> bool:
+    families = _family_aliases(document_families).get(family_pattern.strip().lower())
     if not families:
         return False
-    return document_family_for_type(doc_type) in families
+    return document_family_for_type(doc_type, document_families=document_families) in families
 
 
 def counterparty_id(
     metadata: dict[str, Any],
     *,
     counterparty_aliases: dict[str, str] | None = None,
+    tax_number_default_country_prefix: str | None = DEFAULT_TAX_NUMBER_DEFAULT_COUNTRY_PREFIX,
 ) -> str:
     candidates = [
         metadata.get("issuer_tax_number"),
@@ -140,7 +117,10 @@ def counterparty_id(
         if alias:
             return alias
 
-    tax_number = _normalize_tax_number(metadata.get("issuer_tax_number"))
+    tax_number = _normalize_tax_number(
+        metadata.get("issuer_tax_number"),
+        default_country_prefix=tax_number_default_country_prefix,
+    )
     if tax_number:
         return f"tax:{tax_number}"
 
@@ -157,9 +137,19 @@ def build_document_evidence(
     counterparty_aliases: dict[str, str] | None = None,
     bank_counterparties: list[str] | tuple[str, ...] | set[str] | None = None,
     shared_period_title_terms: dict[str, list[str]] | dict[str, tuple[str, ...]] | None = None,
+    document_families: dict[str, dict[str, Any]] | None = None,
+    tax_number_default_country_prefix: str | None = DEFAULT_TAX_NUMBER_DEFAULT_COUNTRY_PREFIX,
 ) -> DocumentEvidence:
-    family = document_family_for_type(metadata.get("document_type"), metadata)
-    party = counterparty_id(metadata, counterparty_aliases=counterparty_aliases)
+    family = document_family_for_type(
+        metadata.get("document_type"),
+        metadata,
+        document_families=document_families,
+    )
+    party = counterparty_id(
+        metadata,
+        counterparty_aliases=counterparty_aliases,
+        tax_number_default_country_prefix=tax_number_default_country_prefix,
+    )
     bank_parties = set(bank_counterparties or _BANK_COUNTERPARTIES)
     source_bank = party if family == BANK_ANCHOR and party in bank_parties else None
     return DocumentEvidence(
@@ -176,8 +166,51 @@ def build_document_evidence(
     )
 
 
-def _is_zero_amount_supplier_doc(doc_type: str, amount: Any) -> bool:
-    if not (doc_type in _SUPPLIER_TYPES or doc_type.startswith("invoice-") or doc_type.startswith("receipt-")):
+def _document_families(
+    document_families: dict[str, dict[str, Any]] | None = None,
+) -> dict[str, dict[str, Any]]:
+    source = document_families or _DOCUMENT_FAMILIES
+    return {_normalize_family_name(family): dict(settings) for family, settings in source.items()}
+
+
+def _normalize_family_name(value: str) -> str:
+    return value.strip().lower().replace("-", "_")
+
+
+def _family_aliases(
+    document_families: dict[str, dict[str, Any]] | None = None,
+) -> dict[str, set[str]]:
+    aliases: dict[str, set[str]] = {}
+    for family, settings in _document_families(document_families).items():
+        family_aliases = {family, family.replace("_", "-")}
+        family_aliases.update(str(alias).strip().lower() for alias in settings.get("aliases", ()) or ())
+        for alias in family_aliases:
+            if alias:
+                aliases.setdefault(alias, set()).add(family)
+    return aliases
+
+
+def _family_sequence(settings: dict[str, Any], key: str) -> tuple[str, ...]:
+    value = settings.get(key, ())
+    if isinstance(value, str):
+        return (value,)
+    return tuple(str(item) for item in (value or ()))
+
+
+def _matches_family(doc_type: str, settings: dict[str, Any]) -> bool:
+    if not doc_type:
+        return False
+    types = {clean_enum_string(item, "DocumentType").strip().lower() for item in _family_sequence(settings, "types")}
+    if doc_type in types:
+        return True
+    prefixes = tuple(clean_enum_string(item, "DocumentType").strip().lower() for item in _family_sequence(settings, "prefixes"))
+    return any(prefix and doc_type.startswith(prefix) for prefix in prefixes)
+
+
+def _is_zero_amount_supplier_doc(doc_type: str, amount: Any, supplier_config: dict[str, Any]) -> bool:
+    if not supplier_config.get("ignore_when_zero_amount", False):
+        return False
+    if not _matches_family(doc_type, supplier_config):
         return False
     try:
         return float(amount) == 0
@@ -236,13 +269,17 @@ def _shared_period_terms(
     return merged
 
 
-def _normalize_tax_number(value: Any) -> str:
+def _normalize_tax_number(
+    value: Any,
+    *,
+    default_country_prefix: str | None = DEFAULT_TAX_NUMBER_DEFAULT_COUNTRY_PREFIX,
+) -> str:
     text = str(value or "").strip().upper()
     if not text:
         return ""
     text = re.sub(r"[^A-Z0-9]", "", text)
-    if re.fullmatch(r"\d{9}", text):
-        return f"PT{text}"
+    if default_country_prefix and re.fullmatch(r"\d{9}", text):
+        return f"{default_country_prefix.upper()}{text}"
     return text
 
 

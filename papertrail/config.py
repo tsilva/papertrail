@@ -6,17 +6,25 @@ import os
 import shutil
 import urllib.error
 import urllib.request
+from copy import deepcopy
 from pathlib import Path
 
 import openai
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from papertrail.qr.models import (
+    DEFAULT_PORTUGUESE_INVOICE_DOCUMENT_TYPE_CODES,
+    DEFAULT_QR_COUNTRY_CODE,
+    DEFAULT_QR_CURRENCY,
+    DEFAULT_QR_CURRENCY_BY_COUNTRY,
+)
 from papertrail.reconciliation_defaults import (
     DEFAULT_AMOUNT_TOLERANCE,
     DEFAULT_BANK_COUNTERPARTIES,
     DEFAULT_BANK_EXPORT_PREFIX,
     DEFAULT_BANK_GENERATED_DOC_TYPES,
     DEFAULT_DATE_WINDOW_DAYS,
+    DEFAULT_DOCUMENT_FAMILIES,
     DEFAULT_EVIDENCE_COUNTERPARTY_CATEGORIES,
     DEFAULT_EVIDENCE_COUNTERPARTY_REQUIRED_PATTERN,
     DEFAULT_SAME_MONTH_SHARED_RULE_NAMES,
@@ -31,6 +39,7 @@ from papertrail.reconciliation_defaults import (
     DEFAULT_SUPPORTING_DOC_TYPE_PATTERNS,
     DEFAULT_SUPPORTING_EXPORT_PREFIXES,
     DEFAULT_SUPPORTING_PAIR_EXEMPT_STATEMENT_BANKS,
+    DEFAULT_TAX_NUMBER_DEFAULT_COUNTRY_PREFIX,
 )
 
 try:
@@ -152,6 +161,7 @@ class NIFAPISettings(SettingsModel):
     base_url: str = "https://www.nif.pt/{nif}/"
     timeout_seconds: int = 10
     cache_path: str | None = None
+    country_prefixes: list[str] = Field(default_factory=lambda: [DEFAULT_QR_COUNTRY_CODE])
 
 
 class RenderSettings(SettingsModel):
@@ -165,18 +175,12 @@ class QRSettings(SettingsModel):
     dpi: int = 300
     max_pages: int = 5
     include_last: bool = True
-    currency_by_country: dict[str, str] = Field(default_factory=lambda: {"PT": "EUR"})
-    default_currency: str = "EUR"
+    currency_by_country: dict[str, str] = Field(
+        default_factory=lambda: dict(DEFAULT_QR_CURRENCY_BY_COUNTRY)
+    )
+    default_currency: str = DEFAULT_QR_CURRENCY
     document_type_codes: dict[str, str] = Field(
-        default_factory=lambda: {
-            "FT": "invoice",
-            "FS": "invoice",
-            "FR": "invoice-receipt",
-            "NC": "invoice-credit",
-            "ND": "invoice-debit",
-            "RC": "receipt",
-            "RG": "receipt",
-        }
+        default_factory=lambda: dict(DEFAULT_PORTUGUESE_INVOICE_DOCUMENT_TYPE_CODES)
     )
 
 
@@ -202,6 +206,12 @@ class ToolSettings(SettingsModel):
     default_profile: str = "default"
     preview_dpi: int = 150
     xlsx_preview_max_rows: int = 100
+
+
+class NamingSettings(SettingsModel):
+    component_max_chars: int = 80
+    pdf_export_max_chars: int = 60
+    filename_warning_max_chars: int = 60
 
 
 class DependenciesSettings(SettingsModel):
@@ -306,11 +316,13 @@ class ReconciliationRule(SettingsModel):
 
 
 class ReconciliationSettings(SettingsModel):
+    policy_files: list[str] = Field(default_factory=list)
     exclude_prefixes: list[str] = Field(default_factory=list)
     rules: list[ReconciliationRule] = Field(default_factory=list)
     include_builtin_rules: bool = True
     amount_tolerance: float = DEFAULT_AMOUNT_TOLERANCE
     date_window_days: int = DEFAULT_DATE_WINDOW_DAYS
+    tax_number_default_country_prefix: str = DEFAULT_TAX_NUMBER_DEFAULT_COUNTRY_PREFIX
     bank_generated_doc_types: list[str] = Field(
         default_factory=lambda: list(DEFAULT_BANK_GENERATED_DOC_TYPES)
     )
@@ -326,6 +338,13 @@ class ReconciliationSettings(SettingsModel):
     )
     supporting_doc_type_patterns: list[str] = Field(
         default_factory=lambda: list(DEFAULT_SUPPORTING_DOC_TYPE_PATTERNS)
+    )
+    document_families: dict[str, dict[str, object]] = Field(
+        default_factory=lambda: {
+            family: dict(settings)
+            for family, settings in DEFAULT_DOCUMENT_FAMILIES.items()
+            if isinstance(settings, dict)
+        }
     )
     bank_counterparties: list[str] = Field(
         default_factory=lambda: list(DEFAULT_BANK_COUNTERPARTIES)
@@ -404,6 +423,7 @@ class ProfileSettings(SettingsModel):
     processing: ProcessingSettings = Field(default_factory=ProcessingSettings)
     workflow: WorkflowSettings = Field(default_factory=WorkflowSettings)
     tools: ToolSettings = Field(default_factory=ToolSettings)
+    naming: NamingSettings = Field(default_factory=NamingSettings)
     dependencies: DependenciesSettings = Field(default_factory=DependenciesSettings)
     bank_statements: BankStatementsSettings = Field(default_factory=BankStatementsSettings)
     classification: ClassificationSettings = Field(default_factory=ClassificationSettings)
@@ -425,6 +445,57 @@ def _resolve_path(path_str: str | None, profile_path: Path | None) -> str | None
     return str((profile_path.parent / path).resolve())
 
 
+def _deep_merge(base: dict[str, object], overlay: dict[str, object]) -> dict[str, object]:
+    merged = deepcopy(base)
+    for key, value in overlay.items():
+        existing = merged.get(key)
+        if isinstance(existing, dict) and isinstance(value, dict):
+            merged[key] = _deep_merge(existing, value)
+        else:
+            merged[key] = deepcopy(value)
+    return merged
+
+
+def _load_yaml_mapping(path: Path, *, description: str) -> dict[str, object]:
+    if yaml is None:
+        raise ConfigError("PyYAML is not installed.")
+    try:
+        with open(path, "r", encoding="utf-8") as handle:
+            data = yaml.safe_load(handle)
+    except OSError as exc:
+        raise ConfigError(f"Could not read {description} at {path}: {exc}") from exc
+    except yaml.YAMLError as exc:
+        raise ProfileParseError(f"Failed to parse {description} at {path}: {exc}") from exc
+    if data is None:
+        return {}
+    if not isinstance(data, dict):
+        raise ProfileParseError(f"{description} at {path} must be a YAML mapping")
+    return data
+
+
+def _merge_reconciliation_policy_files(
+    inline_reconciliation: dict[str, object],
+    profile_path: Path | None,
+) -> dict[str, object]:
+    policy_files = inline_reconciliation.get("policy_files") or []
+    if isinstance(policy_files, str):
+        policy_files = [policy_files]
+    if not policy_files:
+        return inline_reconciliation
+
+    merged: dict[str, object] = {}
+    for policy_file in policy_files:
+        policy_path = Path(str(policy_file)).expanduser()
+        if not policy_path.is_absolute() and profile_path is not None:
+            policy_path = profile_path.parent / policy_path
+        policy_data = _load_yaml_mapping(policy_path, description="reconciliation policy file")
+        merged = _deep_merge(merged, policy_data)
+
+    merged = _deep_merge(merged, inline_reconciliation)
+    merged["policy_files"] = [str(item) for item in policy_files]
+    return merged
+
+
 def _normalize_profile_data(data: dict[str, object], profile_path: Path | None) -> dict[str, object]:
     normalized = dict(data)
 
@@ -438,6 +509,7 @@ def _normalize_profile_data(data: dict[str, object], profile_path: Path | None) 
         "processing": {},
         "workflow": {},
         "tools": {},
+        "naming": {},
         "dependencies": {},
         "bank_statements": {},
         "classification": {},
@@ -446,6 +518,12 @@ def _normalize_profile_data(data: dict[str, object], profile_path: Path | None) 
     }
     for key, value in defaults.items():
         normalized.setdefault(key, value)
+
+    if isinstance(normalized.get("reconciliation"), dict):
+        normalized["reconciliation"] = _merge_reconciliation_policy_files(
+            dict(normalized["reconciliation"]),
+            profile_path,
+        )
 
     gmail = dict(normalized["gmail"])
     settings = gmail.pop("settings", {})
@@ -479,6 +557,7 @@ def _normalize_profile_data(data: dict[str, object], profile_path: Path | None) 
     normalized["nif_api"].setdefault("base_url", "https://www.nif.pt/{nif}/")
     normalized["nif_api"].setdefault("timeout_seconds", 10)
     normalized["nif_api"].setdefault("cache_path", None)
+    normalized["nif_api"].setdefault("country_prefixes", [DEFAULT_QR_COUNTRY_CODE])
     normalized["processing"].setdefault("render", {})
     normalized["processing"]["render"].setdefault("max_pages", 2)
     normalized["processing"]["render"].setdefault("enhance_contrast", True)
@@ -488,8 +567,11 @@ def _normalize_profile_data(data: dict[str, object], profile_path: Path | None) 
     normalized["processing"]["qr"].setdefault("dpi", 300)
     normalized["processing"]["qr"].setdefault("max_pages", 5)
     normalized["processing"]["qr"].setdefault("include_last", True)
-    normalized["processing"]["qr"].setdefault("currency_by_country", {"PT": "EUR"})
-    normalized["processing"]["qr"].setdefault("default_currency", "EUR")
+    normalized["processing"]["qr"].setdefault(
+        "currency_by_country",
+        dict(DEFAULT_QR_CURRENCY_BY_COUNTRY),
+    )
+    normalized["processing"]["qr"].setdefault("default_currency", DEFAULT_QR_CURRENCY)
     normalized["processing"]["qr"].setdefault(
         "document_type_codes",
         QRSettings().document_type_codes,
@@ -505,6 +587,9 @@ def _normalize_profile_data(data: dict[str, object], profile_path: Path | None) 
     normalized["tools"].setdefault("default_profile", "default")
     normalized["tools"].setdefault("preview_dpi", 150)
     normalized["tools"].setdefault("xlsx_preview_max_rows", 100)
+    normalized["naming"].setdefault("component_max_chars", 80)
+    normalized["naming"].setdefault("pdf_export_max_chars", 60)
+    normalized["naming"].setdefault("filename_warning_max_chars", 60)
     normalized["dependencies"].setdefault("zbar_library_paths", [])
     normalized["bank_statements"].setdefault("formats", BankStatementsSettings().formats)
     normalized["classification"].setdefault(
@@ -534,6 +619,7 @@ def _normalize_profile_data(data: dict[str, object], profile_path: Path | None) 
         paths["raw"] = []
 
     reconciliation = normalized["reconciliation"]
+    reconciliation.setdefault("policy_files", [])
     reconciliation.setdefault("exclude_prefixes", [])
     reconciliation.setdefault("rules", [])
     reconciliation.setdefault("include_builtin_rules", True)

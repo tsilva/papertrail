@@ -4,6 +4,19 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Optional
 
+DEFAULT_QR_COUNTRY_CODE = "PT"
+DEFAULT_QR_CURRENCY = "EUR"
+DEFAULT_QR_CURRENCY_BY_COUNTRY = {DEFAULT_QR_COUNTRY_CODE: DEFAULT_QR_CURRENCY}
+DEFAULT_PORTUGUESE_INVOICE_DOCUMENT_TYPE_CODES = {
+    "FT": "invoice",
+    "FS": "invoice",
+    "FR": "invoice-receipt",
+    "NC": "invoice-credit",
+    "ND": "invoice-debit",
+    "RC": "receipt",
+    "RG": "receipt",
+}
+
 
 class QRCodeType(Enum):
     """Type of QR code detected."""
@@ -27,7 +40,7 @@ class QRExtractedMetadata:
     issue_date: Optional[str] = None
     document_type: Optional[str] = None
     total_amount: Optional[float] = None
-    total_amount_currency: Optional[str] = "EUR"
+    total_amount_currency: Optional[str] = DEFAULT_QR_CURRENCY
     issuer_nif: Optional[str] = None
     issuer_tax_number: Optional[str] = None
     atcud: Optional[str] = None
@@ -42,7 +55,7 @@ class PortugueseInvoiceQR:
     """Parsed Portuguese invoice QR code (Portaria 195/2020 format)."""
     issuer_nif: str
     buyer_nif: Optional[str] = None
-    country_code: str = "PT"
+    country_code: str = DEFAULT_QR_COUNTRY_CODE
     document_type_code: str = ""
     document_status: str = "N"
     document_date: str = ""
@@ -67,7 +80,7 @@ class PortugueseInvoiceQR:
         self,
         *,
         currency_by_country: dict[str, str] | None = None,
-        default_currency: str = "EUR",
+        default_currency: str = DEFAULT_QR_CURRENCY,
         document_type_codes: dict[str, str] | None = None,
     ) -> QRExtractedMetadata:
         """Convert to QRExtractedMetadata for pipeline integration."""
@@ -79,15 +92,7 @@ class PortugueseInvoiceQR:
                 f"{self.document_date[6:8]}"
             )
 
-        doc_type_map = document_type_codes or {
-            "FT": "invoice",
-            "FS": "invoice",
-            "FR": "invoice-receipt",
-            "NC": "invoice-credit",
-            "ND": "invoice-debit",
-            "RC": "receipt",
-            "RG": "receipt",
-        }
+        doc_type_map = document_type_codes or DEFAULT_PORTUGUESE_INVOICE_DOCUMENT_TYPE_CODES
         document_type = doc_type_map.get(self.document_type_code)
 
         issuer_tax_number = self.issuer_nif if self.issuer_nif else None
@@ -95,7 +100,7 @@ class PortugueseInvoiceQR:
         locale = None
         if self.country_code:
             locale = f"{self.country_code.lower()}-{self.country_code}"
-        currencies = currency_by_country or {"PT": default_currency}
+        currencies = currency_by_country or {DEFAULT_QR_COUNTRY_CODE: default_currency}
         currency = (
             currencies.get(self.country_code.upper(), default_currency)
             if self.country_code

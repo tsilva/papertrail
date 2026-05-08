@@ -71,6 +71,11 @@ tools:
   preview_dpi: 150
   xlsx_preview_max_rows: 100
 
+naming:
+  component_max_chars: 80
+  pdf_export_max_chars: 60
+  filename_warning_max_chars: 60
+
 dependencies:
   # Optional explicit zbar paths when ctypes cannot find the shared library.
   zbar_library_paths: []
@@ -118,6 +123,7 @@ nif_api:
   base_url: "https://www.nif.pt/{nif}/"
   timeout_seconds: 10
   cache_path: null
+  country_prefixes: ["PT"]
 
 # Gmail integration (optional)
 gmail:
@@ -207,6 +213,8 @@ export:
 # Reconciliation policy. Leave rules empty to use the built-in defaults from
 # papertrail/reconciliation_defaults.py, or set rules here to replace them.
 reconciliation:
+  # Optional YAML files, resolved relative to this profile, merged before inline settings.
+  policy_files: []
   exclude_prefixes: ["EXC_"]
   include_builtin_rules: true
   include_builtin_counterparty_aliases: true
@@ -214,6 +222,7 @@ reconciliation:
   rules: []
   amount_tolerance: 0.01
   date_window_days: 30
+  tax_number_default_country_prefix: "PT"
   bank_export_prefix: "BNC_"
   supporting_export_prefixes: ["CMP_", "DIV_"]
   supporting_doc_type_patterns:

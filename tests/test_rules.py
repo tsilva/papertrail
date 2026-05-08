@@ -1,9 +1,11 @@
-import unittest
 import tempfile
+import unittest
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import patch
 
 from papertrail.commands.reconcile import _policy_from_profile, _rules_from_profile
+from papertrail.config import load_profile
 from papertrail.rules import RuleEngine
 from tests.support import make_test_runtime
 
@@ -31,6 +33,14 @@ class RuleEngineTests(unittest.TestCase):
     def test_match_doc_type_treats_card_transactions_as_bank_notes(self):
         engine = RuleEngine()
         self.assertTrue(engine.match_doc_type("bank-card-transaction", "bank-note"))
+
+    def test_match_doc_type_uses_configured_document_families(self):
+        engine = RuleEngine(
+            document_families={
+                "bank_anchor": {"aliases": ["bank-anchor"], "types": ["custom-bank-doc"]},
+            }
+        )
+        self.assertTrue(engine.match_doc_type("custom-bank-doc", "bank-anchor"))
 
     def test_evaluate_export_prefix_uses_first_match(self):
         file_mappings = SimpleNamespace(
@@ -185,6 +195,49 @@ class RuleEngineTests(unittest.TestCase):
         self.assertEqual(policy.bank_export_prefix, "BNK_")
         self.assertEqual(len(rules), 1)
         self.assertEqual(rules[0].name, "custom-debit")
+
+    def test_reconciliation_policy_files_merge_into_profile(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            profile_dir = root / "profiles" / "custom"
+            profile_dir.mkdir(parents=True)
+            policy_path = profile_dir / "policy.yaml"
+            policy_path.write_text(
+                "\n".join(
+                    [
+                        "amount_tolerance: 0.05",
+                        "bank_export_prefix: BNK_",
+                        "document_families:",
+                        "  bank_anchor:",
+                        "    aliases: [bank-anchor]",
+                        "    types: [custom-bank-doc]",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+            (profile_dir / "profile.yaml").write_text(
+                "\n".join(
+                    [
+                        "profile:",
+                        "  name: custom",
+                        "paths: {}",
+                        "reconciliation:",
+                        "  policy_files: [policy.yaml]",
+                        "  amount_tolerance: 0.07",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+
+            with patch.dict("os.environ", {"PAPERTRAIL_HOME": str(root)}):
+                profile = load_profile("custom")
+
+        self.assertEqual(profile.reconciliation.amount_tolerance, 0.07)
+        self.assertEqual(profile.reconciliation.bank_export_prefix, "BNK_")
+        self.assertEqual(
+            profile.reconciliation.document_families["bank_anchor"]["types"],
+            ["custom-bank-doc"],
+        )
 
 
 if __name__ == "__main__":

@@ -13,6 +13,7 @@ from papertrail.utils import load_yaml, save_yaml
 
 logger = get_logger('nif_lookup')
 _CACHE_LOAD_EXCEPTIONS = (OSError, UnicodeDecodeError, ValueError)
+DEFAULT_NIF_COUNTRY_PREFIXES = ("PT",)
 
 
 def _default_nif_cache_path() -> Path:
@@ -30,6 +31,7 @@ class NIFLookupCache:
         *,
         web_url: str | None = None,
         timeout_seconds: int = 10,
+        country_prefixes: list[str] | tuple[str, ...] | None = None,
     ):
         self._lock = threading.Lock()
         if cache_path is None:
@@ -37,6 +39,7 @@ class NIFLookupCache:
         self.path = cache_path
         self.web_url = web_url or self.DEFAULT_WEB_URL
         self.timeout_seconds = timeout_seconds
+        self.country_prefixes = tuple(prefix.upper() for prefix in (country_prefixes or DEFAULT_NIF_COUNTRY_PREFIXES))
         self._cache: dict[str, str] = {}
         self._normalized: dict[str, str] = {}
         self._dirty = False
@@ -52,11 +55,15 @@ class NIFLookupCache:
             self._normalized = {}
 
     @staticmethod
-    def normalize_nif(nif: str) -> str:
+    def normalize_nif(
+        nif: str,
+        *,
+        country_prefixes: list[str] | tuple[str, ...] | None = None,
+    ) -> str:
         """Normalize NIF by stripping country prefix and whitespace."""
         nif = nif.strip()
-        for prefix in ("PT", "pt"):
-            if nif.startswith(prefix):
+        for prefix in country_prefixes or DEFAULT_NIF_COUNTRY_PREFIXES:
+            if nif.upper().startswith(prefix.upper()):
                 nif = nif[len(prefix):]
         return nif.strip()
 
@@ -74,16 +81,26 @@ class NIFLookupCache:
         return int(nif[8]) == expected_check
 
     @staticmethod
-    def is_portuguese_nif(nif: str) -> bool:
+    def is_portuguese_nif(
+        nif: str,
+        *,
+        country_prefixes: list[str] | tuple[str, ...] | None = None,
+    ) -> bool:
         """Check if a tax number is a valid Portuguese NIF (9 digits, mod-11 checksum)."""
         nif = nif.strip().upper()
-        if nif.startswith("PT"):
-            nif = nif[2:].strip()
+        for prefix in country_prefixes or DEFAULT_NIF_COUNTRY_PREFIXES:
+            prefix = prefix.upper()
+            if nif.startswith(prefix):
+                nif = nif[len(prefix):].strip()
+                break
         if len(nif) >= 2 and nif[:2].isalpha():
             return False
         if not (len(nif) == 9 and nif.isdigit() and nif[0] != '0'):
             return False
         return NIFLookupCache.validate_nif_checksum(nif)
+
+    def is_supported_nif(self, nif: str) -> bool:
+        return self.is_portuguese_nif(nif, country_prefixes=self.country_prefixes)
 
     def save(self) -> None:
         with self._lock:
@@ -99,22 +116,22 @@ class NIFLookupCache:
         return len(self._cache)
 
     def get(self, nif: str) -> Optional[str]:
-        nif = self.normalize_nif(nif)
+        nif = self.normalize_nif(nif, country_prefixes=self.country_prefixes)
         return self._cache.get(nif)
 
     def set(self, nif: str, issuer: str) -> None:
-        nif = self.normalize_nif(nif)
+        nif = self.normalize_nif(nif, country_prefixes=self.country_prefixes)
         with self._lock:
             if self._cache.get(nif) != issuer:
                 self._cache[nif] = issuer
                 self._dirty = True
 
     def get_normalized(self, nif: str) -> Optional[str]:
-        nif = self.normalize_nif(nif)
+        nif = self.normalize_nif(nif, country_prefixes=self.country_prefixes)
         return self._normalized.get(nif)
 
     def set_normalized(self, nif: str, normalized: str) -> None:
-        nif = self.normalize_nif(nif)
+        nif = self.normalize_nif(nif, country_prefixes=self.country_prefixes)
         with self._lock:
             if self._normalized.get(nif) != normalized:
                 self._normalized[nif] = normalized
@@ -122,7 +139,7 @@ class NIFLookupCache:
 
     def lookup(self, nif: str) -> tuple[Optional[str], str, Optional[str]]:
         """Look up issuer by NIF. Returns (issuer_name, source, error_message)."""
-        nif = self.normalize_nif(nif)
+        nif = self.normalize_nif(nif, country_prefixes=self.country_prefixes)
         with self._lock:
             if nif in self._cache:
                 return self._cache[nif], "cache", None

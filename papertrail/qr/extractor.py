@@ -11,6 +11,8 @@ from PIL import Image
 
 from papertrail.logging_utils import get_logger
 from papertrail.qr.models import (
+    DEFAULT_QR_COUNTRY_CODE,
+    DEFAULT_QR_CURRENCY,
     PortugueseInvoiceQR,
     QRCodeData,
     QRCodeType,
@@ -51,7 +53,7 @@ def parse_portuguese_invoice_qr(
     qr_data: QRCodeData,
     *,
     currency_by_country: dict[str, str] | None = None,
-    default_currency: str = "EUR",
+    default_currency: str = DEFAULT_QR_CURRENCY,
     document_type_codes: dict[str, str] | None = None,
 ) -> tuple[Optional[QRExtractedMetadata], Optional[dict]]:
     """Parse Portuguese invoice QR code and extract metadata."""
@@ -79,7 +81,7 @@ def parse_portuguese_invoice_qr(
         parsed = PortugueseInvoiceQR(
             issuer_nif=fields.get("A", ""),
             buyer_nif=fields.get("B"),
-            country_code=fields.get("C", "PT"),
+            country_code=fields.get("C", DEFAULT_QR_COUNTRY_CODE),
             document_type_code=fields.get("D", ""),
             document_status=fields.get("E", "N"),
             document_date=fields.get("F", ""),
@@ -355,7 +357,7 @@ def extract_all_metadata_from_qr(
     include_last: bool = True,
     dpi: int = 300,
     currency_by_country: dict[str, str] | None = None,
-    default_currency: str = "EUR",
+    default_currency: str = DEFAULT_QR_CURRENCY,
     document_type_codes: dict[str, str] | None = None,
 ) -> list[tuple[QRExtractedMetadata, dict]]:
     """Extract metadata from ALL Portuguese invoice QR codes in a PDF.
@@ -404,7 +406,7 @@ def extract_metadata_from_qr(
     include_last: bool = True,
     dpi: int = 300,
     currency_by_country: dict[str, str] | None = None,
-    default_currency: str = "EUR",
+    default_currency: str = DEFAULT_QR_CURRENCY,
     document_type_codes: dict[str, str] | None = None,
 ) -> tuple[Optional[QRExtractedMetadata], Optional[dict]]:
     """Extract metadata from QR codes in a PDF. Returns (metadata, raw_data) or (None, None)."""

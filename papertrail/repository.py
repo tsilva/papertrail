@@ -296,8 +296,13 @@ class DocumentRepository:
             valid_entries.append((doc_path, metadata))
 
         renamed_count = 0
+        naming_settings = self.runtime.profile.naming
         for old_doc_path, metadata in valid_entries:
-            new_filename = file_name_from_metadata(metadata, metadata.hash_file)
+            new_filename = file_name_from_metadata(
+                metadata,
+                metadata.hash_file,
+                component_max_chars=naming_settings.component_max_chars,
+            )
             new_doc_path = root / new_filename
             new_metadata_path = new_doc_path.with_suffix(".json")
             if old_doc_path == new_doc_path:

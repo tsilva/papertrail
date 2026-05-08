@@ -5,6 +5,8 @@ import unicodedata
 
 from papertrail.models import DocumentMetadata
 
+DEFAULT_COMPONENT_MAX_CHARS = 80
+
 
 def sanitize_filename_component(value: str) -> str:
     """Sanitize a string for use in a filename."""
@@ -13,7 +15,19 @@ def sanitize_filename_component(value: str) -> str:
     return re.sub(r"\s+", " ", value)
 
 
-def file_name_from_metadata(metadata: DocumentMetadata, file_hash: str) -> str:
+def trim_filename_component(value: str, max_chars: int = DEFAULT_COMPONENT_MAX_CHARS) -> str:
+    """Trim a filename component without cutting the final word when possible."""
+    if max_chars <= 0 or len(value) <= max_chars:
+        return value
+    return value[:max_chars].rsplit(" ", 1)[0] or value[:max_chars]
+
+
+def file_name_from_metadata(
+    metadata: DocumentMetadata,
+    file_hash: str,
+    *,
+    component_max_chars: int = DEFAULT_COMPONENT_MAX_CHARS,
+) -> str:
     """Generate a filename from document metadata."""
     parts = [
         sanitize_filename_component(metadata.date_issued),
@@ -23,8 +37,7 @@ def file_name_from_metadata(metadata: DocumentMetadata, file_hash: str) -> str:
 
     if metadata.document_title:
         title = sanitize_filename_component(metadata.document_title)
-        if len(title) > 80:
-            title = title[:80].rsplit(" ", 1)[0]
+        title = trim_filename_component(title, component_max_chars)
         parts.append(title)
 
     if metadata.total_amount is not None:

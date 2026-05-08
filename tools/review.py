@@ -32,6 +32,7 @@ if __package__:
         get_export_dir,
         iter_sidecars,
         placeholder_html,
+        profile_setting_int,
         render_document_preview,
     )
 else:
@@ -43,6 +44,7 @@ else:
         get_export_dir,
         iter_sidecars,
         placeholder_html,
+        profile_setting_int,
         render_document_preview,
     )
 
@@ -685,11 +687,12 @@ def render_all_banks_html(bs_list, unmatched_files=None, file_index=None, data=N
 
 
 def _filename_length_warning_icon(filename: str) -> str:
-    if Path(filename).suffix.lower() != ".pdf" or len(filename) <= 60:
+    max_chars = profile_setting_int("naming", "filename_warning_max_chars", 60)
+    if Path(filename).suffix.lower() != ".pdf" or len(filename) <= max_chars:
         return ""
     return (
         '<span class="filename-warning" '
-        'title="PDF filename exceeds 60 characters">&#9888;</span>'
+        f'title="PDF filename exceeds {max_chars} characters">&#9888;</span>'
     )
 
 

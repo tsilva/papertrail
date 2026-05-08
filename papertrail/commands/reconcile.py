@@ -24,6 +24,7 @@ from papertrail.reconciliation_defaults import (
     DEFAULT_BANK_GENERATED_DOC_TYPES,
     DEFAULT_COUNTERPARTY_ALIASES,
     DEFAULT_DATE_WINDOW_DAYS,
+    DEFAULT_DOCUMENT_FAMILIES,
     DEFAULT_EVIDENCE_COUNTERPARTY_CATEGORIES,
     DEFAULT_EVIDENCE_COUNTERPARTY_REQUIRED_PATTERN,
     DEFAULT_LINE_ITEM_CATEGORY_ALIASES,
@@ -41,6 +42,7 @@ from papertrail.reconciliation_defaults import (
     DEFAULT_SUPPORTING_DOC_TYPE_PATTERNS,
     DEFAULT_SUPPORTING_EXPORT_PREFIXES,
     DEFAULT_SUPPORTING_PAIR_EXEMPT_STATEMENT_BANKS,
+    DEFAULT_TAX_NUMBER_DEFAULT_COUNTRY_PREFIX,
 )
 from papertrail.reconciliation_evidence import build_document_evidence
 from papertrail.repository import DocumentRepository
@@ -70,6 +72,7 @@ _SUPPORTING_DOC_TYPE_PATTERNS = list(DEFAULT_SUPPORTING_DOC_TYPE_PATTERNS)
 class ReconciliationPolicy:
     amount_tolerance: float = DEFAULT_AMOUNT_TOLERANCE
     date_window_days: int = DEFAULT_DATE_WINDOW_DAYS
+    tax_number_default_country_prefix: str = DEFAULT_TAX_NUMBER_DEFAULT_COUNTRY_PREFIX
     bank_generated_doc_types: tuple[str, ...] = DEFAULT_BANK_GENERATED_DOC_TYPES
     statement_bank_scoped_doc_types: tuple[str, ...] = DEFAULT_STATEMENT_BANK_SCOPED_DOC_TYPES
     statement_bank_issuer_aliases: dict[str, str] = field(
@@ -78,6 +81,13 @@ class ReconciliationPolicy:
     bank_export_prefix: str = DEFAULT_BANK_EXPORT_PREFIX
     supporting_export_prefixes: tuple[str, ...] = DEFAULT_SUPPORTING_EXPORT_PREFIXES
     supporting_doc_type_patterns: tuple[str, ...] = DEFAULT_SUPPORTING_DOC_TYPE_PATTERNS
+    document_families: dict[str, dict[str, object]] = field(
+        default_factory=lambda: {
+            family: dict(settings)
+            for family, settings in DEFAULT_DOCUMENT_FAMILIES.items()
+            if isinstance(settings, dict)
+        }
+    )
     bank_counterparties: tuple[str, ...] = DEFAULT_BANK_COUNTERPARTIES
     counterparty_aliases: dict[str, str] = field(default_factory=dict)
     shared_period_transaction_keywords: dict[str, tuple[str, ...]] = field(
@@ -128,6 +138,10 @@ _ACTIVE_RECONCILIATION_POLICY: ContextVar[ReconciliationPolicy] = ContextVar(
 
 def _reconciliation_policy() -> ReconciliationPolicy:
     return _ACTIVE_RECONCILIATION_POLICY.get()
+
+
+def _rule_engine() -> RuleEngine:
+    return RuleEngine(document_families=_reconciliation_policy().document_families)
 
 
 def _amount_tolerance() -> float:
@@ -196,6 +210,14 @@ def _policy_from_profile(profile) -> ReconciliationPolicy:
     return ReconciliationPolicy(
         amount_tolerance=float(getattr(settings, "amount_tolerance", DEFAULT_AMOUNT_TOLERANCE)),
         date_window_days=int(getattr(settings, "date_window_days", DEFAULT_DATE_WINDOW_DAYS)),
+        tax_number_default_country_prefix=str(
+            getattr(
+                settings,
+                "tax_number_default_country_prefix",
+                DEFAULT_TAX_NUMBER_DEFAULT_COUNTRY_PREFIX,
+            )
+            or ""
+        ),
         bank_generated_doc_types=_sequence(
             getattr(settings, "bank_generated_doc_types", None),
             DEFAULT_BANK_GENERATED_DOC_TYPES,
@@ -213,6 +235,10 @@ def _policy_from_profile(profile) -> ReconciliationPolicy:
         supporting_doc_type_patterns=_sequence(
             getattr(settings, "supporting_doc_type_patterns", None),
             DEFAULT_SUPPORTING_DOC_TYPE_PATTERNS,
+        ),
+        document_families=_settings_map(
+            getattr(settings, "document_families", None),
+            DEFAULT_DOCUMENT_FAMILIES,
         ),
         bank_counterparties=_sequence(
             getattr(settings, "bank_counterparties", None),
@@ -449,6 +475,8 @@ def _build_candidate(
         counterparty_aliases=policy.counterparty_aliases,
         bank_counterparties=policy.bank_counterparties,
         shared_period_title_terms=policy.shared_period_title_terms,
+        document_families=policy.document_families,
+        tax_number_default_country_prefix=policy.tax_number_default_country_prefix,
     )
     return PDFCandidate(
         json_path=json_path,
@@ -776,7 +804,7 @@ def _candidate_matches_patterns(candidate: PDFCandidate, patterns: list[str]) ->
     doc_type = candidate.effective_document_type or candidate.document_type
     if not doc_type:
         return False
-    engine = RuleEngine()
+    engine = _rule_engine()
     return any(engine.match_doc_type(doc_type, pattern) for pattern in patterns)
 
 
@@ -1469,7 +1497,7 @@ def _candidate_matches_shared_requirements(
     if not doc_type:
         return False
 
-    engine = RuleEngine()
+    engine = _rule_engine()
     for type_pattern, issuing_party_filter in shared_requirements:
         if not engine.match_doc_type(doc_type, type_pattern):
             continue
@@ -1888,7 +1916,7 @@ def _candidate_matches_shared_filters(rule, type_pattern: str, candidate: PDFCan
     if not filters:
         return True
 
-    engine = RuleEngine()
+    engine = _rule_engine()
     for field_name, expected in filters.items():
         if not engine.match_value(getattr(candidate, field_name, None), expected):
             return False
@@ -1903,7 +1931,7 @@ def _prune_rule_aware_exact_candidates(
     if not candidates:
         return candidates
 
-    engine = RuleEngine()
+    engine = _rule_engine()
     txn_date = txn.date_posting or txn.date_value
     allowed_patterns = _rule_allowed_patterns(rule)
     filtered = [
@@ -2170,7 +2198,7 @@ def _link_related_no_amount_documents(
         for match in all_matches
         for candidate in match.pdf_candidates
     }
-    engine = RuleEngine()
+    engine = _rule_engine()
 
     for match in all_matches:
         _, rule = _classify_transaction(match.transaction, rules)
@@ -2298,7 +2326,7 @@ def _link_evidence_counterparty_documents(
     rules: list,
 ) -> set[str]:
     evidence_candidate_ids: set[str] = set()
-    engine = RuleEngine()
+    engine = _rule_engine()
 
     for match in all_matches:
         category, rule = _classify_transaction(match.transaction, rules)
@@ -2547,7 +2575,7 @@ def _normalize_for_match(text: str) -> str:
 
 
 def _classify_transaction(txn: Transaction, rules: list) -> tuple[str, object | None]:
-    return RuleEngine().classify_transaction(txn, rules)
+    return _rule_engine().classify_transaction(txn, rules)
 
 
 def _count_documents_for_pattern(match: MatchResult, engine: RuleEngine, pattern: str) -> int:
@@ -2604,7 +2632,7 @@ def _is_paired_supporting_cardinality_error(
 
 
 def _validate_required_documents(matches: list[MatchResult], rules: list) -> dict[int, list[str]]:
-    engine = RuleEngine()
+    engine = _rule_engine()
     errors: dict[int, list[str]] = {}
     for match in matches:
         _, rule = _classify_transaction(match.transaction, rules)
@@ -2706,7 +2734,7 @@ def _merge_validation_errors(*error_sets: dict[int, list[str]]) -> dict[int, lis
 
 
 def _prune_unexpected_candidates(matches: list[MatchResult], rules: list) -> None:
-    engine = RuleEngine()
+    engine = _rule_engine()
     for match in matches:
         _, rule = _classify_transaction(match.transaction, rules)
         if rule is None:
@@ -2774,7 +2802,7 @@ def _link_shared_documents(
             best_shared_match: tuple[PDFCandidate, tuple[int, bool, int]] | None = None
             for cand in all_candidates:
                 doc_type = cand.effective_document_type
-                if not doc_type or not RuleEngine().match_doc_type(doc_type, type_pattern):
+                if not doc_type or not _rule_engine().match_doc_type(doc_type, type_pattern):
                     continue
                 if not _is_same_month_shared_candidate(rule, txn_date, cand):
                     continue

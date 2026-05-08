@@ -47,6 +47,24 @@ def _tool_setting_int(name: str, default: int) -> int:
         return default
 
 
+def profile_setting_int(section: str, name: str, default: int) -> int:
+    env_name = f"PAPERTRAIL_{name.upper()}"
+    try:
+        return int(os.environ.get(env_name) or "")
+    except ValueError:
+        pass
+    profile = _load_profile(_active_profile_name())
+    if profile is None:
+        return default
+    settings = getattr(profile, section, None)
+    if settings is None:
+        return default
+    try:
+        return int(getattr(settings, name.lower(), default) or default)
+    except (TypeError, ValueError):
+        return default
+
+
 @lru_cache(maxsize=8)
 def build_repository(profile_name: str) -> DocumentRepository | None:
     profile = _load_profile(profile_name)

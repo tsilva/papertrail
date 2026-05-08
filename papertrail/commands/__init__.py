@@ -20,11 +20,11 @@ from typing import Optional
 import fitz
 import pandas as pd
 
-from papertrail.config import get_gmail_config_paths, get_passwords_from_profile
 from papertrail.archive_extract import extract_archives
+from papertrail.config import get_gmail_config_paths, get_passwords_from_profile
 from papertrail.document_types import normalize_document_type
-from papertrail.filename_audit import collect_long_filenames, format_long_filename_warning
 from papertrail.engine import DocumentEngine
+from papertrail.filename_audit import collect_long_filenames, format_long_filename_warning
 from papertrail.gmail import download_gmail_attachments
 from papertrail.logging_utils import (
     get_logger,
@@ -34,7 +34,7 @@ from papertrail.logging_utils import (
 )
 from papertrail.mbox import extract_mbox_attachments
 from papertrail.models import DocumentMetadata, clean_enum_string
-from papertrail.naming import sanitize_filename_component
+from papertrail.naming import sanitize_filename_component, trim_filename_component
 from papertrail.pdf_merge import merge_all_pdfs
 from papertrail.reconciliation_groundtruth import GROUNDTRUTH_SUFFIX
 from papertrail.repository import DocumentRepository
@@ -51,7 +51,8 @@ from .reconcile import (
 logger = get_logger("commands")
 _PDFPRESS_COMPRESSOR = None
 _EXPORT_FILENAME_OMITTED_FIELDS = {"document_title"}
-_PDF_EXPORT_FILENAME_MAX_CHARS = 60
+_DEFAULT_PDF_EXPORT_FILENAME_MAX_CHARS = 60
+_DEFAULT_FILENAME_COMPONENT_MAX_CHARS = 80
 
 
 @contextmanager
@@ -284,6 +285,7 @@ def _export_destination_paths(
     *,
     export_config,
     profile_context: Optional[dict],
+    naming_settings=None,
 ) -> tuple[Path, Path]:
     file_mappings = export_config.file_mappings if export_config is not None else None
     use_prefixes = file_mappings is not None and file_mappings.enabled
@@ -300,12 +302,19 @@ def _export_destination_paths(
                 list(file_mappings.filename_fields),
                 file_hash,
                 profile_context=profile_context,
+                component_max_chars=_naming_component_max_chars(naming_settings),
             )
         else:
             base_name = _sanitize_export_filename(doc_path.name)
-        dest_name = _fit_pdf_export_filename(f"{prefix}{base_name}")
+        dest_name = _fit_pdf_export_filename(
+            f"{prefix}{base_name}",
+            max_length=_naming_pdf_export_max_chars(naming_settings),
+        )
     else:
-        dest_name = _fit_pdf_export_filename(_sanitize_export_filename(doc_path.name))
+        dest_name = _fit_pdf_export_filename(
+            _sanitize_export_filename(doc_path.name),
+            max_length=_naming_pdf_export_max_chars(naming_settings),
+        )
 
     dest_doc = dest_folder / dest_name
     return dest_doc, dest_doc.with_suffix(".json")
@@ -320,6 +329,7 @@ def _copy_document_to_export(
     *,
     export_config,
     profile_context: Optional[dict],
+    naming_settings=None,
     max_file_size_mb: float | None,
 ) -> Path:
     export_metadata_dict = _metadata_for_export(metadata_dict, doc_path)
@@ -330,6 +340,7 @@ def _copy_document_to_export(
         dest_folder,
         export_config=export_config,
         profile_context=profile_context,
+        naming_settings=naming_settings,
     )
     _check_file_size(doc_path, max_file_size_mb)
     shutil.copy2(doc_path, dest_doc)
@@ -349,6 +360,7 @@ def _restore_groundtruth_documents(
     *,
     export_config,
     profile_context: Optional[dict],
+    naming_settings=None,
 ) -> int:
     max_file_size_mb = export_config.max_file_size_mb if export_config is not None else None
     restored = 0
@@ -368,6 +380,7 @@ def _restore_groundtruth_documents(
             export_date_dir,
             export_config=export_config,
             profile_context=profile_context,
+            naming_settings=naming_settings,
             max_file_size_mb=max_file_size_mb,
         )
         restored += 1
@@ -424,6 +437,7 @@ def _run_export_period(
         groundtruth_snapshots,
         export_config=export_file_config,
         profile_context=profile_context,
+        naming_settings=runtime.profile.naming,
     )
     if restored_documents:
         logger.debug(
@@ -605,7 +619,28 @@ def _truncate_filename_component(value: str, max_length: int) -> str:
     return value[:max_length].rstrip(" -_.") or value[:max_length]
 
 
-def _fit_pdf_export_filename(filename: str, max_length: int = _PDF_EXPORT_FILENAME_MAX_CHARS) -> str:
+def _naming_component_max_chars(naming_settings) -> int:
+    return int(
+        getattr(naming_settings, "component_max_chars", _DEFAULT_FILENAME_COMPONENT_MAX_CHARS)
+        or _DEFAULT_FILENAME_COMPONENT_MAX_CHARS
+    )
+
+
+def _naming_pdf_export_max_chars(naming_settings) -> int:
+    return int(
+        getattr(naming_settings, "pdf_export_max_chars", _DEFAULT_PDF_EXPORT_FILENAME_MAX_CHARS)
+        or _DEFAULT_PDF_EXPORT_FILENAME_MAX_CHARS
+    )
+
+
+def _naming_warning_max_chars(naming_settings) -> int:
+    return int(
+        getattr(naming_settings, "filename_warning_max_chars", _DEFAULT_PDF_EXPORT_FILENAME_MAX_CHARS)
+        or _DEFAULT_PDF_EXPORT_FILENAME_MAX_CHARS
+    )
+
+
+def _fit_pdf_export_filename(filename: str, max_length: int = _DEFAULT_PDF_EXPORT_FILENAME_MAX_CHARS) -> str:
     if not filename.lower().endswith(".pdf") or len(filename) <= max_length:
         return filename
 
@@ -637,7 +672,14 @@ def _fit_pdf_export_filename(filename: str, max_length: int = _PDF_EXPORT_FILENA
     return candidate_name()
 
 
-def _build_filename_from_fields(metadata: dict, fields: list[str], file_hash: str, *, profile_context: dict | None = None) -> str:
+def _build_filename_from_fields(
+    metadata: dict,
+    fields: list[str],
+    file_hash: str,
+    *,
+    profile_context: dict | None = None,
+    component_max_chars: int = _DEFAULT_FILENAME_COMPONENT_MAX_CHARS,
+) -> str:
     engine = RuleEngine(profile_context=profile_context)
     parts = []
     for field_name in fields:
@@ -647,8 +689,7 @@ def _build_filename_from_fields(metadata: dict, fields: list[str], file_hash: st
         if value is not None and str(value).strip():
             component = engine.resolve_profile_value(str(value))
             component = sanitize_filename_component(component.strip())
-            if len(component) > 80:
-                component = component[:80].rsplit(" ", 1)[0]
+            component = trim_filename_component(component, component_max_chars)
             parts.append(component)
     extension = metadata.get("source_extension") or ".pdf"
     parts.append(f"{file_hash}{extension}")
@@ -720,15 +761,19 @@ def _compress_exported_pdfs(pdf_paths: list[Path]) -> None:
         _compress_pdf_export(pdf_path)
 
 
-def _long_filename_warning(path: Path) -> str:
+def _long_filename_warning(path: Path, *, naming_settings=None) -> str:
     return format_long_filename_warning(
-        collect_long_filenames(path, suffixes=(".pdf",)),
+        collect_long_filenames(
+            path,
+            max_length=_naming_warning_max_chars(naming_settings),
+            suffixes=(".pdf",),
+        ),
         max_items=None,
     )
 
 
 def _warn_long_filenames(runtime: Runtime, path: Path) -> str:
-    warning = _long_filename_warning(path)
+    warning = _long_filename_warning(path, naming_settings=runtime.profile.naming)
     if not warning:
         return ""
     runtime.console.warning(warning, indent=False)
@@ -815,6 +860,7 @@ def copy_matching(
             dest_folder,
             export_config=export_config,
             profile_context=profile_context,
+            naming_settings=runtime.profile.naming,
         )
 
         if incremental and _should_skip_copy(doc_path, dest_doc):
@@ -998,6 +1044,7 @@ def export_dates(
                     groundtruth_snapshots,
                     export_config=export_config,
                     profile_context=profile_context,
+                    naming_settings=runtime.profile.naming,
                 )
                 bank_statements = discover_bank_statements(repository, export_date_dir)
                 _restore_reconciliation_groundtruth(groundtruth_snapshots, bank_statements)
@@ -1435,7 +1482,10 @@ def pipeline(
                 f"{avg_rate:.0f}% reconciled ({total_reconciled}/{total_txns})"
             )
 
-    if filename_warning := _long_filename_warning(Path(export_dir)):
+    if filename_warning := _long_filename_warning(
+        Path(export_dir),
+        naming_settings=runtime.profile.naming,
+    ):
         pipeline_warnings.append(filename_warning)
 
     output_paths.append(("Excel", str(processed_files_excel_path)))

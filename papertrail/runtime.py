@@ -152,6 +152,7 @@ def runtime_from_profile(
             nif_cache_path,
             web_url=profile.nif_api.base_url,
             timeout_seconds=profile.nif_api.timeout_seconds,
+            country_prefixes=profile.nif_api.country_prefixes,
         )
 
     runtime = Runtime(

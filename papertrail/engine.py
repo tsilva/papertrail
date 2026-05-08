@@ -26,7 +26,6 @@ from papertrail.llm import (
 from papertrail.logging_utils import DocumentLogger, get_logger, log_failure
 from papertrail.models import DocumentMetadata, DocumentMetadataRaw, SubDocumentMetadata
 from papertrail.naming import file_name_from_metadata
-from papertrail.nif_lookup import NIFLookupCache
 from papertrail.pdf import (
     convert_image_to_pdf,
     find_document_files,
@@ -240,7 +239,7 @@ def _enrich_nif(
     if not (
         tax_number
         and runtime.nif_cache
-        and NIFLookupCache.is_portuguese_nif(tax_number)
+        and runtime.nif_cache.is_supported_nif(tax_number)
     ):
         return None, None
 
@@ -650,8 +649,13 @@ class DocumentEngine:
         dry_run: bool,
     ) -> UpsertResult:
         dest_path = source_path
+        naming_settings = self.runtime.profile.naming
         if mode == "ingest":
-            dest_path = processed_path / file_name_from_metadata(metadata, file_hash)
+            dest_path = processed_path / file_name_from_metadata(
+                metadata,
+                file_hash,
+                component_max_chars=naming_settings.component_max_chars,
+            )
             if dest_path.exists():
                 result.skipped = 1
                 result.reason = "destination_exists"
@@ -662,7 +666,11 @@ class DocumentEngine:
                 shutil.copy2(source_path, dest_path)
             self.repository.save_document(dest_path, metadata)
             if rename_on_resync and mode == "resync":
-                new_doc_path = source_path.parent / file_name_from_metadata(metadata, metadata.hash_file)
+                new_doc_path = source_path.parent / file_name_from_metadata(
+                    metadata,
+                    metadata.hash_file,
+                    component_max_chars=naming_settings.component_max_chars,
+                )
                 if new_doc_path != source_path:
                     source_path.rename(new_doc_path)
                     source_path.with_suffix(".json").rename(new_doc_path.with_suffix(".json"))

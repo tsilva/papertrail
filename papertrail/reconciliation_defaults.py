@@ -34,12 +34,16 @@ _POLICY = _load_policy()
 
 DEFAULT_AMOUNT_TOLERANCE = float(_POLICY.get("amount_tolerance", 0.01))
 DEFAULT_DATE_WINDOW_DAYS = int(_POLICY.get("date_window_days", 30))
+DEFAULT_TAX_NUMBER_DEFAULT_COUNTRY_PREFIX = str(
+    _POLICY.get("tax_number_default_country_prefix", "PT")
+)
 DEFAULT_BANK_GENERATED_DOC_TYPES = _tuple("bank_generated_doc_types")
 DEFAULT_STATEMENT_BANK_SCOPED_DOC_TYPES = _tuple("statement_bank_scoped_doc_types")
 DEFAULT_STATEMENT_BANK_ISSUER_ALIASES = _dict("statement_bank_issuer_aliases")
 DEFAULT_BANK_EXPORT_PREFIX = str(_POLICY.get("bank_export_prefix", "BNC_"))
 DEFAULT_SUPPORTING_EXPORT_PREFIXES = _tuple("supporting_export_prefixes")
 DEFAULT_SUPPORTING_DOC_TYPE_PATTERNS = _tuple("supporting_doc_type_patterns")
+DEFAULT_DOCUMENT_FAMILIES = _dict("document_families")
 DEFAULT_BANK_COUNTERPARTIES = _tuple("bank_counterparties")
 DEFAULT_COUNTERPARTY_ALIASES = _dict("counterparty_aliases")
 DEFAULT_SHARED_PERIOD_TRANSACTION_KEYWORDS = {

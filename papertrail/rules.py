@@ -8,7 +8,6 @@ from typing import Optional
 from papertrail.reconciliation_evidence import document_type_matches_family
 from papertrail.utils import strip_diacritics
 
-
 _DOC_TYPE_PATTERN_ALIASES = {
     "bank-note": {"bank-card-transaction"},
 }
@@ -17,9 +16,17 @@ _DOC_TYPE_PATTERN_ALIASES = {
 class RuleEngine:
     """Unified rule evaluation across export and reconciliation."""
 
-    def __init__(self, profile=None, profile_context: Optional[dict] = None):
+    def __init__(
+        self,
+        profile=None,
+        profile_context: Optional[dict] = None,
+        document_families: dict | None = None,
+    ):
         self.profile = profile
         self.profile_context = profile_context or {}
+        if document_families is None and profile is not None:
+            document_families = getattr(getattr(profile, "reconciliation", None), "document_families", None)
+        self.document_families = document_families
 
     def metadata_has_qrcode(self, metadata: dict) -> bool:
         """Return true when a document or any sub-document has QR metadata."""
@@ -108,7 +115,11 @@ class RuleEngine:
             if alt.endswith("*"):
                 if doc_lower.startswith(alt[:-1]):
                     return True
-            elif document_type_matches_family(doc_lower, alt):
+            elif document_type_matches_family(
+                doc_lower,
+                alt,
+                document_families=self.document_families,
+            ):
                 return True
             elif doc_lower == alt or doc_lower in _DOC_TYPE_PATTERN_ALIASES.get(
                 alt, set()

@@ -60,6 +60,16 @@ class ReconciliationEvidenceTests(unittest.TestCase):
         self.assertEqual(counterparty_id({"issuer_tax_number": "TESTINSURER"}), "insurance-provider")
         self.assertEqual(counterparty_id({"issuer_tax_number": "TESTUNKNOWN"}), "tax:PTTESTUNKNOWN")
 
+    def test_counterparty_tax_prefix_can_be_disabled(self):
+        self.assertEqual(
+            counterparty_id(
+                {"issuer_tax_number": "TESTUNKNOWN"},
+                counterparty_aliases={},
+                tax_number_default_country_prefix="",
+            ),
+            "tax:TESTUNKNOWN",
+        )
+
     def test_counterparty_aliases_can_be_extended_by_policy(self):
         self.assertEqual(
             counterparty_id(
@@ -73,6 +83,41 @@ class ReconciliationEvidenceTests(unittest.TestCase):
         self.assertTrue(document_type_matches_family("invoice-receipt", "supplier-evidence"))
         self.assertTrue(document_type_matches_family("bank-transfer", "bank-anchor"))
         self.assertFalse(document_type_matches_family("invoice", "bank-anchor"))
+
+    def test_document_families_can_be_overridden_by_policy(self):
+        families = {
+            "bank_anchor": {"aliases": ["bank-anchor"], "types": ["custom-bank-doc"]},
+            "supplier_evidence": {
+                "aliases": ["supplier-evidence"],
+                "prefixes": ["bill-"],
+                "ignore_when_zero_amount": True,
+            },
+            "ignore": {"types": ["ignore-me"]},
+        }
+
+        self.assertEqual(
+            document_family_for_type("custom-bank-doc", document_families=families),
+            BANK_ANCHOR,
+        )
+        self.assertEqual(
+            document_family_for_type("bill-monthly", document_families=families),
+            SUPPLIER_EVIDENCE,
+        )
+        self.assertEqual(
+            document_family_for_type(
+                "bill-monthly",
+                {"total_amount": 0},
+                document_families=families,
+            ),
+            IGNORE,
+        )
+        self.assertTrue(
+            document_type_matches_family(
+                "custom-bank-doc",
+                "bank-anchor",
+                document_families=families,
+            )
+        )
 
     def test_build_document_evidence_flags_shared_period_docs(self):
         evidence = build_document_evidence(
