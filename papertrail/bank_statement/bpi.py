@@ -93,7 +93,7 @@ def parse(xlsx_path: Path) -> BankStatementData | None:
         period_start=period_start,
         period_end=period_end,
         transaction_count=transaction_count,
-        issuing_party="bpi",
+        issuing_party="BPI",
         issuing_party_raw="BPI",
     )
 

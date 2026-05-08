@@ -147,7 +147,7 @@ class ClassificationSettings(SettingsModel):
     prompt_issuing_party_rules: list[str] = Field(
         default_factory=lambda: [
             "For bank notes, movements, and payment confirmations, issuing_party is the bank or financial institution that generated the document. Do not use the merchant, payee, beneficiary, destination bank, or counterparty as issuing_party; keep those details in document_title or reasoning instead",
-            "For Portuguese bank-generated documents, use Banco BPI/BPI -> bpi and Millennium bcp/Banco Comercial Português/BCP -> millennium-bcp when visible",
+            "For Portuguese bank-generated documents, use Banco BPI/BPI -> BPI and Millennium bcp/Banco Comercial Português/BCP -> MillenniumBCP when visible",
         ]
     )
     issuer_tax_number_prefix_rule: str = (

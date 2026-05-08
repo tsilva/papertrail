@@ -21,13 +21,17 @@ def collect_long_filenames(
     root: Path,
     *,
     max_length: int = DEFAULT_FILENAME_MAX_CHARS,
+    suffixes: tuple[str, ...] | None = None,
 ) -> list[FilenameLengthIssue]:
     issues: list[FilenameLengthIssue] = []
     if not root.exists():
         return issues
 
+    normalized_suffixes = tuple(suffix.lower() for suffix in suffixes) if suffixes else None
     for path in sorted(root.rglob("*")):
         if not path.is_file() or path.name == ".DS_Store" or path.name.startswith("Icon"):
+            continue
+        if normalized_suffixes and path.suffix.lower() not in normalized_suffixes:
             continue
         length = len(path.name)
         if length <= max_length:

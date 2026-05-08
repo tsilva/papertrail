@@ -9,7 +9,6 @@ from pathlib import Path
 
 import gradio as gr
 
-from papertrail.filename_audit import collect_long_filenames, format_long_filename_warning
 from papertrail.reconciliation_groundtruth import (
     approval_map,
     document_sets_match,
@@ -183,6 +182,11 @@ _CSS = """
     background: none; border: none; font: inherit; padding: 0;
 }
 .file-link:hover { color: #79c0ff; }
+.filename-warning {
+    color: #ffd166;
+    font-weight: 700;
+    margin-right: 4px;
+}
 .approval-btn {
     border: 1px solid var(--border-color-primary, #555);
     border-radius: 6px;
@@ -608,12 +612,6 @@ def load_export_folder(folder_path):
     )
     if n_unmatched_file_approvals:
         status += f", **{n_unmatched_file_approvals}** expected unmatched files"
-    if filename_warning := format_long_filename_warning(
-        collect_long_filenames(folder),
-        max_items=None,
-        markdown=True,
-    ):
-        status += f"\n\n{filename_warning}"
 
     return {
         "bank_statements": bank_statements,
@@ -686,6 +684,24 @@ def render_all_banks_html(bs_list, unmatched_files=None, file_index=None, data=N
     return "\n".join(parts)
 
 
+def _filename_length_warning_icon(filename: str) -> str:
+    if Path(filename).suffix.lower() != ".pdf" or len(filename) <= 60:
+        return ""
+    return (
+        '<span class="filename-warning" '
+        'title="PDF filename exceeds 60 characters">&#9888;</span>'
+    )
+
+
+def _render_file_link(filename: str) -> str:
+    safe_js = filename.replace("\\", "\\\\").replace("'", "\\'")
+    warning = _filename_length_warning_icon(filename)
+    return (
+        f'<button class="file-link" onclick="selectReviewFile(\'{safe_js}\');'
+        f'return false;">{warning}{html_lib.escape(filename)}</button>'
+    )
+
+
 def _render_unmatched_files_html(unmatched_files, file_index, data=None):
     if not unmatched_files:
         return ""
@@ -740,11 +756,7 @@ def _render_unmatched_files_html(unmatched_files, file_index, data=None):
         currency = uf.get("currency", "EUR") or "EUR"
         amt_str = f"{amt:.2f} {currency}" if amt is not None else "-"
 
-        sf = fname.replace("'", "\\'")
-        file_cell = (
-            f'<button class="file-link" onclick="selectReviewFile(\'{sf}\');'
-            f'return false;">{html_lib.escape(fname)}</button>'
-        )
+        file_cell = _render_file_link(fname)
 
         approval_status = _unmatched_file_approval_status(uf, data)
         approval = _unmatched_file_approval_cell(uf, approval_status)
@@ -919,11 +931,7 @@ def _render_txn_table(recon, bank_statement=None, data=None):
         if file_list:
             fs = ""
             for f in file_list:
-                sf = f.replace("'", "\\'")
-                fs += (
-                    f'<p><button class="file-link" onclick="selectReviewFile(\'{sf}\');'
-                    f'return false;">{html_lib.escape(f)}</button></p>'
-                )
+                fs += f"<p>{_render_file_link(f)}</p>"
         else:
             fs = '<span style="color:var(--body-text-color-subdued,#555);">-</span>'
 

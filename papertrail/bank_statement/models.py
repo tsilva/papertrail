@@ -21,7 +21,7 @@ class BankStatementData:
     period_start: str  # YYYY-MM-DD
     period_end: str  # YYYY-MM-DD
     transaction_count: int
-    issuing_party: str  # canonical slug (e.g., "millennium-bcp")
+    issuing_party: str  # canonical issuer name (e.g., "MillenniumBCP")
     issuing_party_raw: str  # display name (e.g., "Millennium BCP")
 
     def to_sidecar_dict(self) -> "BankStatementSidecar":

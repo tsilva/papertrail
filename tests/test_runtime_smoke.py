@@ -192,29 +192,74 @@ class AdapterSmokeTests(unittest.TestCase):
         self.assertIn("statement.xlsx", review_data["file_index"])
         self.assertIn("Loaded **1** bank statements", status)
 
-    def test_review_warns_about_long_filenames(self):
+    def test_review_marks_long_pdf_filenames_inline(self):
         export_dir = self.runtime.paths.export
-        create_millennium_statement(export_dir / "statement.xlsx")
-
-        from papertrail.bank_statement import classify_bank_statement
-
-        statement_path = export_dir / "statement.xlsx"
-        statement_hash = hash_file_fast(statement_path)
-        self.repository.save_document(
-            statement_path,
-            classify_bank_statement(statement_path, statement_hash),
-        )
         long_file = export_dir / (
             "CMP_2026-01-02 - invoice-receipt - millenniumbcp - "
             "man cta pacote m empresa - abcdef12.pdf"
         )
-        create_pdf(long_file, ["long filename"])
+        html = review.render_single_bank_html(
+            {
+                "doc_path": str(export_dir / "statement.xlsx"),
+                "metadata": {"bank_statement": {}},
+                "reconciliation": {
+                    "summary": {"total": 1, "reconciled": 1, "reconciliation_rate": 100},
+                    "matches": [
+                        {
+                            "row": 1,
+                            "date": "2026-01-02",
+                            "description": "TEST",
+                            "amount": -1,
+                            "currency": "EUR",
+                            "transaction_category": "default-debit",
+                            "method": "exact",
+                            "confidence": 1,
+                            "files": [long_file.name],
+                        }
+                    ],
+                    "unmatched": [],
+                },
+            },
+            data={},
+        )
 
-        with patch("tools.shared.build_repository", return_value=self.repository):
-            _, status = review.load_export_folder(str(export_dir))
+        self.assertIn("filename-warning", html)
+        self.assertIn(long_file.name, html)
+        self.assertIn("&#9888;", html)
 
-        self.assertIn("**Warning:**", status)
-        self.assertIn(long_file.name, status)
+    def test_review_does_not_warn_about_long_non_pdf_filenames(self):
+        export_dir = self.runtime.paths.export
+        long_json = export_dir / (
+            "BNC_2026-01-01 - bank-statement - millenniumbcp - "
+            "TEST-ACCOUNT-ALPHA - abcdef12.reconciliation.groundtruth.json"
+        )
+        html = review.render_single_bank_html(
+            {
+                "doc_path": str(export_dir / "statement.xlsx"),
+                "metadata": {"bank_statement": {}},
+                "reconciliation": {
+                    "summary": {"total": 1, "reconciled": 1, "reconciliation_rate": 100},
+                    "matches": [
+                        {
+                            "row": 1,
+                            "date": "2026-01-02",
+                            "description": "TEST",
+                            "amount": -1,
+                            "currency": "EUR",
+                            "transaction_category": "default-debit",
+                            "method": "exact",
+                            "confidence": 1,
+                            "files": [long_json.name],
+                        }
+                    ],
+                    "unmatched": [],
+                },
+            },
+            data={},
+        )
+
+        self.assertNotIn("filename-warning", html)
+        self.assertIn(long_json.name, html)
 
     def test_review_skips_non_metadata_json_payloads(self):
         export_dir = self.runtime.paths.export

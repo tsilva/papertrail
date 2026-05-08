@@ -84,6 +84,21 @@ def _statement_groundtruth_base_name(groundtruth_path: Path) -> str:
     return name[: -len(GROUNDTRUTH_SUFFIX)] if name.endswith(GROUNDTRUTH_SUFFIX) else groundtruth_path.stem
 
 
+def _statement_identity_key(document_name: str | None) -> tuple[str, str, str] | None:
+    """Best-effort identity for statement approvals when duplicate XLSX bytes change."""
+    if not document_name:
+        return None
+    stem = Path(document_name).stem
+    match = re.search(r"\d{4}-\d{2}-\d{2}", stem)
+    if not match:
+        return None
+    parts = stem[match.start() :].split(" - ")
+    if len(parts) < 3:
+        return None
+    issuer_key = re.sub(r"[^a-z0-9]+", "", parts[2].lower())
+    return parts[0], parts[1].lower(), issuer_key
+
+
 def _snapshot_reconciliation_groundtruth(export_date_dir: Path) -> list[dict]:
     snapshots = []
     if not export_date_dir.exists():
@@ -156,11 +171,15 @@ def _restore_reconciliation_groundtruth(
 
     by_hash = {}
     by_name = {}
+    by_statement_identity = {}
     for snapshot in snapshots:
         for key in (snapshot.get("hash_file"), snapshot.get("hash_content")):
             if key:
                 by_hash[str(key)] = snapshot
         by_name[snapshot.get("document_name")] = snapshot
+        identity_key = _statement_identity_key(snapshot.get("document_name"))
+        if identity_key:
+            by_statement_identity[identity_key] = snapshot
 
     restored = 0
     for statement_path in bank_statements:
@@ -183,6 +202,8 @@ def _restore_reconciliation_groundtruth(
                 break
         if snapshot is None:
             snapshot = by_name.get(statement_path.name)
+        if snapshot is None:
+            snapshot = by_statement_identity.get(_statement_identity_key(statement_path.name))
         if snapshot is None:
             continue
 
@@ -700,7 +721,10 @@ def _compress_exported_pdfs(pdf_paths: list[Path]) -> None:
 
 
 def _long_filename_warning(path: Path) -> str:
-    return format_long_filename_warning(collect_long_filenames(path), max_items=None)
+    return format_long_filename_warning(
+        collect_long_filenames(path, suffixes=(".pdf",)),
+        max_items=None,
+    )
 
 
 def _warn_long_filenames(runtime: Runtime, path: Path) -> str:
@@ -946,6 +970,12 @@ def export_dates(
         changed_directories = []
         for date in runtime.console.track(all_dates, "Exporting dates"):
             export_date_dir = export_base_dir / date
+            groundtruth_snapshots = _snapshot_reconciliation_groundtruth(export_date_dir)
+            if groundtruth_snapshots:
+                _save_reconciliation_groundtruth_backup(export_base_dir, date, groundtruth_snapshots)
+            else:
+                groundtruth_snapshots = _load_reconciliation_groundtruth_backup(export_base_dir, date)
+
             if export_date_dir.exists():
                 shutil.rmtree(export_date_dir)
 
@@ -959,6 +989,19 @@ def export_dates(
                 profile_context=profile_context,
                 quiet=True,
             )
+
+            if groundtruth_snapshots:
+                _restore_groundtruth_documents(
+                    repository,
+                    processed_path,
+                    export_date_dir,
+                    groundtruth_snapshots,
+                    export_config=export_config,
+                    profile_context=profile_context,
+                )
+                bank_statements = discover_bank_statements(repository, export_date_dir)
+                _restore_reconciliation_groundtruth(groundtruth_snapshots, bank_statements)
+
             total_copied += stats["copied"]
             total_skipped += stats["skipped"]
 
