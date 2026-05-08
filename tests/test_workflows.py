@@ -1713,6 +1713,123 @@ class CommandTests(unittest.TestCase):
         self.assertEqual(data["matches"][0]["line_items"][0]["document_type"], "bank-stock-sell")
         self.assertEqual(data["matches"][0]["line_items"][0]["currency"], "USD")
 
+    def test_reconcile_matches_multiple_bpi_stock_sales_from_columnar_invoice(self):
+        statement_path = self.export / "bpi-statement.xlsx"
+        create_bpi_statement(
+            statement_path,
+            transactions=[
+                {
+                    "date_posting": "24-03-2026",
+                    "date_value": "24-03-2026",
+                    "description": "TRANSFERENCIA A CREDITO LISTESTREFB",
+                    "amount": 5318.66,
+                    "currency": "EUR",
+                },
+                {
+                    "date_posting": "31-03-2026",
+                    "date_value": "31-03-2026",
+                    "description": "TRANSFERENCIA A CREDITO LISTESTREFC",
+                    "amount": 5008.82,
+                    "currency": "EUR",
+                },
+            ],
+        )
+
+        from papertrail.bank_statement import classify_bank_statement
+
+        statement_hash = hash_file_fast(statement_path)
+        statement_metadata = classify_bank_statement(statement_path, statement_hash)
+        self.repository.save_document(statement_path, statement_metadata)
+
+        stock_invoice_path = self.export / "bpi-stock-fee-invoice.pdf"
+        create_pdf(
+            stock_invoice_path,
+            [
+                "\n".join(
+                    [
+                        "FACTURA",
+                        "Data de Emissão: 31-03-2026",
+                        "Período de Facturação: 01-03-2026 a 31-03-2026",
+                        "TÍTULOS",
+                        "COMISSÃO CORRETAGEM",
+                        "COMISSÃO CORRETAGEM",
+                        "06/03",
+                        "24/03",
+                        "31/03",
+                        "06/03",
+                        "24/03",
+                        "24/03",
+                        "24/03",
+                        "31/03",
+                        "31/03",
+                        "31/03",
+                        "OPERAÇÃO BOLSA",
+                        "TOTAL A CRÉDITO",
+                        "OPERAÇÃO BOLSA",
+                        "TOTAL A CRÉDITO",
+                        "6 237,00",
+                        "6 221,40",
+                        "5 806,35",
+                        "5 790,75",
+                        "USD",
+                        "USD",
+                        "USD",
+                        "USD",
+                        "VENDA DE 45,0000 ACÇÕES STRATEGY INC(XNGS)",
+                        "AO PREÇO DE: 138,600000 USD NA SESSÃO DE BOLSA: "
+                        "23-03-2026 DA NASDAQ - ALL MARKETS",
+                        "Nº ORDEM: V7448535",
+                        "VENDA DE 45,0000 ACÇÕES STRATEGY INC(XNGS)",
+                        "AO PREÇO DE: 129,030000 USD NA SESSÃO DE BOLSA: "
+                        "30-03-2026 DA NASDAQ - ALL MARKETS",
+                        "Nº ORDEM: V7521425",
+                    ]
+                )
+            ],
+        )
+        self.repository.save_document(
+            stock_invoice_path,
+            self._metadata(
+                "bpistockcolumns",
+                "bpistockcolumns",
+                date_created="2026-03-31",
+                date_issued="2026-03-31",
+                date_updated="2026-03-31",
+                document_type="invoice",
+                document_type_raw="FACTURA",
+                issuing_party="bpi",
+                issuing_party_raw="BPI",
+                document_title="Comissoes de conta e titulos",
+                total_amount=35.61,
+                page_count=2,
+            ),
+        )
+
+        reconcile(self.runtime, self.export, dry_run=False)
+
+        sidecar_path = statement_path.with_suffix(".reconciliation.json")
+        data = json.loads(sidecar_path.read_text(encoding="utf-8"))
+        self.assertEqual(data["summary"]["reconciled"], 2)
+        self.assertEqual(data["summary"]["incomplete"], 0)
+        self.assertEqual(data["summary"]["unmatched"], 0)
+        self.assertEqual([match["method"] for match in data["matches"]], ["line-item", "line-item"])
+        self.assertEqual(
+            [match["files"] for match in data["matches"]],
+            [["bpi-stock-fee-invoice.pdf"], ["bpi-stock-fee-invoice.pdf"]],
+        )
+        self.assertEqual(
+            [match["line_items"][0]["reference"] for match in data["matches"]],
+            ["V7448535", "V7521425"],
+        )
+        self.assertEqual(
+            [match["line_items"][0]["date"] for match in data["matches"]],
+            ["2026-03-24", "2026-03-31"],
+        )
+        self.assertEqual(
+            [match["line_items"][0]["amount"] for match in data["matches"]],
+            [6221.4, 5790.75],
+        )
+
     def test_reconcile_links_same_day_no_amount_contract_document(self):
         statement_path = self.export / "statement.xlsx"
         create_millennium_statement(
@@ -2381,6 +2498,94 @@ class CommandTests(unittest.TestCase):
         unmatched_files = {entry["file"] for entry in data["unmatched_files"]}
         self.assertIn("april-extra.pdf", unmatched_files)
         self.assertNotIn("march-old-invoice.pdf", unmatched_files)
+
+    def test_reconcile_does_not_report_out_of_month_primary_candidates_as_unmatched(self):
+        mar_dir = self.export / "2026-03"
+        mar_dir.mkdir()
+
+        from papertrail.bank_statement import classify_bank_statement
+
+        statement_path = mar_dir / "statement.xlsx"
+        create_millennium_statement(
+            statement_path,
+            period_start="01/03/2026",
+            period_end="31/03/2026",
+            transactions=[
+                {
+                    "date_posting": "10/03/2026",
+                    "date_value": "10/03/2026",
+                    "description": "STORE PAYMENT",
+                    "amount": -20.00,
+                    "currency": "EUR",
+                    "notes": "",
+                    "treated": "Nao",
+                }
+            ],
+        )
+        statement_hash = hash_file_fast(statement_path)
+        statement_metadata = classify_bank_statement(statement_path, statement_hash)
+        self.repository.save_document(statement_path, statement_metadata)
+
+        bank_note = mar_dir / "march-bank-note.pdf"
+        invoice = mar_dir / "march-invoice.pdf"
+        april_payroll = mar_dir / "april-payroll-social.pdf"
+        create_pdf(bank_note, ["March bank note"])
+        create_pdf(invoice, ["March invoice"])
+        create_pdf(april_payroll, ["April social security document"])
+
+        self.repository.save_document(
+            bank_note,
+            self._metadata(
+                "marbn020",
+                "marbn020",
+                date_created="2026-03-10",
+                date_issued="2026-03-10",
+                date_updated="2026-03-10",
+                document_type="bank-note",
+                document_type_raw="Bank Note",
+                total_amount=20.00,
+            ),
+        )
+        self.repository.save_document(
+            invoice,
+            self._metadata(
+                "marinv20",
+                "marinv20",
+                date_created="2026-03-10",
+                date_issued="2026-03-10",
+                date_updated="2026-03-10",
+                document_type="invoice",
+                document_type_raw="Invoice",
+                issuing_party="Store",
+                issuing_party_raw="Store",
+                total_amount=20.00,
+            ),
+        )
+        self.repository.save_document(
+            april_payroll,
+            self._metadata(
+                "payapr08",
+                "payapr08",
+                date_created="2026-04-08",
+                date_issued="2026-04-08",
+                date_updated="2026-04-08",
+                document_type="payroll-social",
+                document_type_raw="Payroll Social",
+                issuing_party="Seguranca Social",
+                issuing_party_raw="Seguranca Social",
+                document_title="Remuneracoes 2026-03",
+                total_amount=596.83,
+            ),
+        )
+
+        reconcile(self.runtime, mar_dir, dry_run=False)
+
+        data = json.loads(statement_path.with_suffix(".reconciliation.json").read_text(encoding="utf-8"))
+        self.assertEqual(data["summary"]["reconciled"], 1)
+        self.assertNotIn(
+            "april-payroll-social.pdf",
+            {entry["file"] for entry in data["unmatched_files"]},
+        )
 
     def test_reconcile_month_folder_uses_adjacent_month_candidates_selectively(self):
         jan_dir = self.export / "2026-01"

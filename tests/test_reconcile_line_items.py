@@ -9,6 +9,7 @@ from papertrail.commands.reconcile import (
     Transaction,
     _extract_bpi_fee_invoice_line_items,
     _extract_bpi_stock_invoice_line_items,
+    _extract_insurance_notice_line_items,
     _extract_millennium_fee_invoice_line_items,
     _line_item_matches_transaction_context,
 )
@@ -59,6 +60,72 @@ class ReconcileLineItemTests(unittest.TestCase):
                     "document_type": "invoice",
                     "issuing_party": "BPI",
                     "document_title": "Comissões de conta e títulos",
+                },
+            )
+
+        by_category = {(item.category, item.amount) for item in items}
+        self.assertIn(("bank-fee-maintenance", 7.99), by_category)
+        self.assertIn(("bank-fee-stamp-duty", 0.32), by_category)
+        self.assertIn(("bank-custody-fee", 11.06), by_category)
+
+    def test_extracts_bpi_fee_invoice_line_items_from_maintenance_title(self):
+        lines = [
+            "FACTURA",
+            "Data de Emissão: 28-02-2026",
+            "MANUTENÇÃO DE CONTA VALOR NEGÓCIOS JAN 2026",
+            "8,31",
+            "16,81",
+            "11,06",
+            "7,99",
+        ]
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            path = Path(tmp_dir) / "bpi.pdf"
+            doc = fitz.open()
+            page = doc.new_page()
+            page.insert_text((72, 72), "\n".join(lines), fontsize=10)
+            doc.save(path)
+            doc.close()
+
+            items = _extract_bpi_fee_invoice_line_items(
+                path,
+                {
+                    "document_type": "invoice",
+                    "issuing_party": "BPI",
+                    "document_title": "Manutencao de Conta Valor Negocios",
+                },
+            )
+
+        by_category = {(item.category, item.amount) for item in items}
+        self.assertIn(("bank-fee-maintenance", 7.99), by_category)
+        self.assertIn(("bank-fee-stamp-duty", 0.32), by_category)
+
+    def test_extracts_bpi_fee_invoice_line_items_from_account_title(self):
+        lines = [
+            "FACTURA",
+            "Data de Emissão: 31-01-2026",
+            "MANUTENÇÃO DE CONTA VALOR NEGÓCIOS DEZ 2025",
+            "8,31",
+            "11,06",
+            "7,99",
+            "COMISSÃO DEPÓSITO E REGISTO VALORES MOBILIÁRIOS",
+            "TOTAL A DÉBITO",
+            "11,06",
+            "COMISSÃO DEPÓSITO E REGISTO VALORES MOBILIÁRIOS 4ºTRIMESTRE 2025",
+        ]
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            path = Path(tmp_dir) / "bpi.pdf"
+            doc = fitz.open()
+            page = doc.new_page()
+            page.insert_text((72, 72), "\n".join(lines), fontsize=10)
+            doc.save(path)
+            doc.close()
+
+            items = _extract_bpi_fee_invoice_line_items(
+                path,
+                {
+                    "document_type": "invoice",
+                    "issuing_party": "BPI",
+                    "document_title": "Conta Valor Negocios",
                 },
             )
 
@@ -151,6 +218,44 @@ class ReconcileLineItemTests(unittest.TestCase):
         self.assertEqual(items[0].date_issued, "2026-04-01")
         self.assertEqual(items[0].document_type, "bank-stock-sell")
         self.assertFalse(items[0].amount_match_required)
+
+    def test_extracts_insurance_notice_direct_debit_line_item(self):
+        lines = [
+            "Companhia de Seguros Insurance Provider Portugal, S.A.",
+            "Dados da sua Autorização de Débito",
+            "ADC",
+            "AUTHINSURE001",
+            "PERÍODO DO RECIBO",
+            "FRACCIONAMENTO",
+            "POLICYINSURE001",
+            "CUSTOMERINSURE001",
+            "04/02/2026 a 03/02/2027",
+            "PRÉMIO TOTAL",
+            "286,02 €",
+        ]
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            path = Path(tmp_dir) / "insurance-provider.pdf"
+            doc = fitz.open()
+            page = doc.new_page()
+            page.insert_text((72, 72), "\n".join(lines), fontsize=10)
+            doc.save(path)
+            doc.close()
+
+            items = _extract_insurance_notice_line_items(
+                path,
+                {
+                    "document_type": "insurance-notice",
+                    "total_amount": 286.02,
+                    "total_amount_currency": "EUR",
+                },
+            )
+
+        self.assertEqual(len(items), 1)
+        self.assertEqual(items[0].category, "supplier-payment")
+        self.assertEqual(items[0].amount, 286.02)
+        self.assertEqual(items[0].date_issued, "2026-02-04")
+        self.assertEqual(items[0].reference, "AUTHINSURE001")
+        self.assertEqual(items[0].document_type, "insurance-notice")
 
     def test_line_item_match_rejects_wrong_month_when_period_is_present(self):
         txn = Transaction(

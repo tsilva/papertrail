@@ -48,6 +48,7 @@ _SUPPLIER_TYPES = {
     "invoice-receipt",
     "invoice-credit",
     "invoice-debit",
+    "insurance-notice",
     "bank-fees",
 }
 _INVESTMENT_TYPES = {
@@ -88,6 +89,11 @@ _COUNTERPARTY_ALIASES = {
     "utility-provider": "utility-provider",
     "utility-providerportugal": "utility-provider",
     "utility-providerportugalcomunicacoespessoais": "utility-provider",
+    "TESTINSURER": "insurance-provider",
+    "ptTESTINSURER": "insurance-provider",
+    "insurance-provider": "insurance-provider",
+    "companhiadesegurosinsurance-providerportugal": "insurance-provider",
+    "companhiadesegurosinsurance-providerportugalsa": "insurance-provider",
     "ISSUER-TAX-ID": "melo-nadais",
     "ptISSUER-TAX-ID": "melo-nadais",
     "melonadais": "melo-nadais",

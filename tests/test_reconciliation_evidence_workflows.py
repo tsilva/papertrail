@@ -97,6 +97,73 @@ class ReconciliationEvidenceWorkflowTests(unittest.TestCase):
         self.assertEqual(row["errors"], [])
         self.assertEqual(set(row["files"]), {card.name, receipt.name})
 
+    def test_evidence_links_via_verde_shared_receipt_to_multiple_movements_without_bank_anchors(self):
+        statement = self._millennium_statement(
+            [
+                {
+                    "date_posting": "30/04/2026",
+                    "date_value": "30/04/2026",
+                    "description": "MDB TESTREF PAG BX VAL-SHAREDTOLL MOV 10",
+                    "amount": -9.35,
+                    "currency": "EUR",
+                    "notes": "",
+                    "treated": "Nao",
+                },
+                {
+                    "date_posting": "22/04/2026",
+                    "date_value": "22/04/2026",
+                    "description": "MDB TESTREF PAG BX VAL-SHAREDTOLL MOV  9",
+                    "amount": -4.90,
+                    "currency": "EUR",
+                    "notes": "",
+                    "treated": "Nao",
+                },
+            ]
+        )
+        receipt = self.export / "CMP_shared-toll-monthly.pdf"
+        create_pdf(receipt, ["Pagamentos de Serviços Shared Toll"])
+        self.repository.save_document(
+            receipt,
+            self._metadata(
+                "via1",
+                "via1",
+                date_issued="2026-04-30",
+                document_type="receipt",
+                document_type_raw="Extrato/Recibo",
+                issuing_party="Shared Toll",
+                issuer_tax_number="TESTSHAREDTOLL",
+                document_title="Pagamentos de Serviços Shared Toll",
+                total_amount=26.51,
+                sub_documents=[
+                    {
+                        "date_issued": "2026-04-30",
+                        "document_type": "invoice",
+                        "issuing_party": "Infraestruturas de Portugal",
+                        "total_amount": 0.20,
+                        "total_amount_currency": "EUR",
+                    },
+                    {
+                        "date_issued": "2026-04-30",
+                        "document_type": "invoice",
+                        "issuing_party": "Brisa",
+                        "total_amount": 8.30,
+                        "total_amount_currency": "EUR",
+                    },
+                ],
+            ),
+        )
+
+        reconcile(self.runtime, self.export, dry_run=False)
+
+        data = json.loads(statement.with_suffix(".reconciliation.json").read_text(encoding="utf-8"))
+        self.assertEqual(data["summary"]["reconciled"], 2)
+        self.assertEqual(data["summary"]["incomplete"], 0)
+        self.assertEqual(data["summary"]["unmatched"], 0)
+        self.assertEqual(data["unmatched_files"], [])
+        files_by_row = {match["row"]: match["files"] for match in data["matches"]}
+        self.assertEqual(files_by_row[9], [receipt.name])
+        self.assertEqual(files_by_row[10], [receipt.name])
+
     def test_evidence_allows_via_verde_bank_anchor_without_no_qr_summary(self):
         statement = self._millennium_statement(
             [
@@ -380,6 +447,65 @@ class ReconciliationEvidenceWorkflowTests(unittest.TestCase):
         self.assertEqual(row["errors"], [])
         self.assertEqual(row["files"], [invoice.name])
 
+    def test_evidence_matches_bpi_maintenance_invoice_to_fee_and_stamp_duty(self):
+        statement = self._bpi_statement(
+            [
+                {
+                    "date_posting": "06-02-2026",
+                    "date_value": "06-02-2026",
+                    "description": "IMPOSTO DE SELO JAN 2026",
+                    "amount": -0.32,
+                    "currency": "EUR",
+                },
+                {
+                    "date_posting": "06-02-2026",
+                    "date_value": "06-02-2026",
+                    "description": "MANUTENCAO DE CONTA VALOR NEGOCIOS JAN 2026",
+                    "amount": -7.99,
+                    "currency": "EUR",
+                },
+            ]
+        )
+        invoice = self.export / "CMP_bpi-maintenance.pdf"
+        create_pdf(
+            invoice,
+            [
+                "\n".join(
+                    [
+                        "FACTURA",
+                        "Data de Emissão: 28-02-2026",
+                        "MANUTENÇÃO DE CONTA VALOR NEGÓCIOS JAN 2026",
+                        "8,31",
+                        "16,81",
+                        "11,06",
+                        "7,99",
+                    ]
+                )
+            ],
+        )
+        self.repository.save_document(
+            invoice,
+            self._metadata(
+                "bpimaint",
+                "bpimaint",
+                date_issued="2026-02-28",
+                document_type="invoice",
+                issuing_party="BPI",
+                document_title="Manutencao de Conta Valor Negocios",
+                total_amount=8.31,
+            ),
+        )
+
+        reconcile(self.runtime, self.export, dry_run=False)
+
+        data = json.loads(statement.with_suffix(".reconciliation.json").read_text(encoding="utf-8"))
+        self.assertEqual(data["summary"]["reconciled"], 2)
+        self.assertEqual(data["summary"]["incomplete"], 0)
+        self.assertEqual(data["summary"]["unmatched"], 0)
+        files_by_row = {match["row"]: match["files"] for match in data["matches"]}
+        self.assertEqual(files_by_row[19], [invoice.name])
+        self.assertEqual(files_by_row[20], [invoice.name])
+
     def test_evidence_matches_millennium_fee_invoice_receipt_line_items(self):
         statement = self._millennium_statement(
             [
@@ -600,24 +726,27 @@ class ReconciliationEvidenceWorkflowTests(unittest.TestCase):
         document_title: str | None = None,
         issuer_tax_number: str | None = None,
         total_amount: float = 12.34,
+        **overrides,
     ) -> DocumentMetadata:
-        return DocumentMetadata(
-            class_confidence=1.0,
-            class_reasoning="test",
-            date_created=date_issued,
-            date_issued=date_issued,
-            date_updated=date_issued,
-            document_type=document_type,
-            document_type_raw=document_type,
-            issuing_party=issuing_party,
-            issuing_party_raw=issuing_party,
-            document_title=document_title,
-            issuer_tax_number=issuer_tax_number,
-            total_amount=total_amount,
-            total_amount_currency="EUR",
-            hash_content=hash_content,
-            hash_file=hash_file,
-        )
+        data = {
+            "class_confidence": 1.0,
+            "class_reasoning": "test",
+            "date_created": date_issued,
+            "date_issued": date_issued,
+            "date_updated": date_issued,
+            "document_type": document_type,
+            "document_type_raw": document_type,
+            "issuing_party": issuing_party,
+            "issuing_party_raw": issuing_party,
+            "document_title": document_title,
+            "issuer_tax_number": issuer_tax_number,
+            "total_amount": total_amount,
+            "total_amount_currency": "EUR",
+            "hash_content": hash_content,
+            "hash_file": hash_file,
+        }
+        data.update(overrides)
+        return DocumentMetadata(**data)
 
 
 if __name__ == "__main__":

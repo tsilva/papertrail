@@ -55,6 +55,11 @@ _DATE_DM_RE = re.compile(r"\b(\d{2})[/-](\d{2})\b")
 _DIRECT_DEBIT_DATE_RE = re.compile(r"\bDEBITO\s+A\s+PARTIR\s+DE:\s*(\d{2})[/-](\d{2})[/-](20\d{2})\b")
 _DIRECT_DEBIT_AUTH_RE = re.compile(r"\bN[ºO]\s+AUTORIZACAO:\s*([A-Z0-9]+)\b")
 _DIRECT_DEBIT_AMOUNT_RE = re.compile(r"\bVALOR:[^\d\n]*([\d\s.]+,\d{2})\b")
+_DIRECT_DEBIT_ADC_RE = re.compile(r"\bADC\s+([A-Z0-9]+)\b")
+_INSURANCE_PERIOD_RE = re.compile(
+    r"\bPERIODO\s+DO\s+RECIBO\b.*?(\d{2})[/-](\d{2})[/-](20\d{2})\s+A\s+\d{2}[/-]\d{2}[/-]20\d{2}\b",
+    re.DOTALL,
+)
 _BPI_TRANSFER_LINE_RE = re.compile(
     r"\b(?:TRF\s+CR\s+SEPA\+\s+|TRF\s+SEPA\+\s+INST\s+|TRANSFER[ÊE]NCIA\s+RECEBIDA\s+)(\d+)\b",
     re.IGNORECASE,
@@ -68,6 +73,7 @@ _SUPPORTING_DOC_TYPE_PATTERNS = [
     "invoice-credit",
     "invoice-debit",
     "invoice-order",
+    "insurance-notice",
     "receipt-reference",
     "receipt-delivery",
 ]
@@ -600,6 +606,16 @@ def _parse_euro_amount_line(line: str) -> Optional[float]:
         return None
 
 
+def _parse_amount_line(line: str) -> Optional[float]:
+    amount = _parse_euro_amount_line(line)
+    if amount is not None:
+        return amount
+    parsed = _parse_currency_amount_line(line)
+    if parsed:
+        return parsed[0]
+    return None
+
+
 def _parse_currency_amount_line(line: str) -> Optional[tuple[float, Optional[str]]]:
     text = line.strip()
     match = re.fullmatch(r"(-?\d[\d\s.]*,\d{2})(?:\s+([A-Z]{3}))?", text)
@@ -612,15 +628,62 @@ def _parse_currency_amount_line(line: str) -> Optional[tuple[float, Optional[str
     return amount, match.group(2)
 
 
+def _parse_currency_amounts_between(
+    lines: list[str],
+    start: int,
+    end: int,
+) -> list[tuple[float, Optional[str]]]:
+    amount_entries: list[tuple[float, Optional[str]]] = []
+    standalone_currencies: list[str] = []
+    for line in lines[start:end]:
+        parsed = _parse_currency_amount_line(line)
+        if parsed:
+            amount_entries.append(parsed)
+            continue
+        currency = line.strip()
+        if re.fullmatch(r"[A-Z]{3}", currency):
+            standalone_currencies.append(currency)
+
+    if not standalone_currencies:
+        return amount_entries
+
+    filled_entries: list[tuple[float, Optional[str]]] = []
+    for index, (amount, currency) in enumerate(amount_entries):
+        if currency is None:
+            if index < len(standalone_currencies):
+                currency = standalone_currencies[index]
+            else:
+                currency = standalone_currencies[0]
+        filled_entries.append((amount, currency))
+    return filled_entries
+
+
 def _amounts_near(lines: list[str], index: int, *, before: int = 0, after: int = 0) -> list[float]:
     start = max(0, index - before)
     end = min(len(lines), index + after + 1)
     amounts: list[float] = []
     for line in lines[start:end]:
-        amount = _parse_euro_amount_line(line)
+        amount = _parse_amount_line(line)
         if amount is not None:
             amounts.append(amount)
     return amounts
+
+
+def _find_bpi_stamp_duty_pair(amounts: list[float]) -> tuple[float, float] | None:
+    pairs: list[tuple[int, float, float]] = []
+    for gross_index, gross in enumerate(amounts):
+        for base in amounts:
+            if gross <= base:
+                continue
+            tax = round(gross - base, 2)
+            if tax <= 0 or tax > 1:
+                continue
+            if abs(round(base * 0.04, 2) - tax) <= _AMOUNT_TOLERANCE:
+                pairs.append((gross_index, base, gross))
+    if not pairs:
+        return None
+    _, base, gross = min(pairs, key=lambda item: (item[0], item[1]))
+    return base, gross
 
 
 def _append_line_item(
@@ -661,7 +724,12 @@ def _extract_bpi_fee_invoice_line_items(pdf_path: Path, data: dict) -> list[Cand
     title = _normalize_for_match(data.get("document_title") or "")
     if doc_type != "invoice" or issuing_party != "bpi":
         return []
-    if "comissoes" not in title and "titulos" not in title:
+    if (
+        "comissoes" not in title
+        and "titulos" not in title
+        and "manutencaodecontavalornegocios" not in title
+        and "contavalornegocios" not in title
+    ):
         return []
 
     try:
@@ -679,10 +747,10 @@ def _extract_bpi_fee_invoice_line_items(pdf_path: Path, data: dict) -> list[Cand
         if "MANUTENCAO DE CONTA VALOR NEGOCIOS" not in line:
             continue
         amounts = _amounts_near(lines, index, after=25)
-        gross = amounts[0] if amounts else None
-        base = amounts[3] if len(amounts) >= 4 else (amounts[1] if len(amounts) >= 2 else None)
-        if base is None:
+        pair = _find_bpi_stamp_duty_pair(amounts)
+        if pair is None:
             continue
+        base, gross = pair
         _append_line_item(
             line_items,
             seen,
@@ -690,18 +758,45 @@ def _extract_bpi_fee_invoice_line_items(pdf_path: Path, data: dict) -> list[Cand
             amount=base,
             label=lines[index],
         )
-        if gross is not None and gross > base:
-            _append_line_item(
-                line_items,
-                seen,
-                category="bank-fee-stamp-duty",
-                amount=gross - base,
-                label=f"Stamp duty for {lines[index]}",
-            )
+        _append_line_item(
+            line_items,
+            seen,
+            category="bank-fee-stamp-duty",
+            amount=gross - base,
+            label=f"Stamp duty for {lines[index]}",
+        )
 
     for index, line in enumerate(normalized_lines):
         if "COMISSAO DEPOSITO E REGISTO VALORES MOBILIARIOS" not in line:
             continue
+        custody_matched = False
+        for offset, candidate_line in enumerate(normalized_lines[index : index + 20]):
+            if candidate_line != "TOTAL A DEBITO":
+                continue
+            amount = _amounts_near(lines, index + offset, after=3)
+            if amount:
+                _append_line_item(
+                    line_items,
+                    seen,
+                    category="bank-custody-fee",
+                    amount=amount[0],
+                    label=lines[index],
+                )
+                custody_matched = True
+                break
+        if custody_matched:
+            continue
+        amounts_after = [amount for amount in _amounts_near(lines, index, after=15) if 0 < amount <= 100]
+        if index > 0 and "MANUTENCAO DE CONTA VALOR NEGOCIOS" in normalized_lines[index - 1]:
+            if len(amounts_after) >= 2:
+                _append_line_item(
+                    line_items,
+                    seen,
+                    category="bank-custody-fee",
+                    amount=amounts_after[1],
+                    label=lines[index],
+                )
+                continue
         amounts_before = [amount for amount in _amounts_near(lines, index, before=15) if 0 < amount <= 100]
         if amounts_before:
             _append_line_item(
@@ -760,6 +855,20 @@ def _parse_partial_movement_date_from_line(value: str, issue_date: Optional[date
     return None
 
 
+def _parse_bpi_stock_settlement_date(lines: list[str], sale_index: int) -> Optional[str]:
+    context = " ".join(lines[sale_index : sale_index + 5])
+    match = _DATE_DMY_RE.search(context)
+    if not match:
+        return None
+
+    day, month, year = (int(part) for part in match.groups())
+    try:
+        session_date = date(year, month, day)
+    except ValueError:
+        return None
+    return (session_date + timedelta(days=1)).isoformat()
+
+
 def _extract_bpi_stock_invoice_line_items(pdf_path: Path, data: dict) -> list[CandidateLineItem]:
     doc_type = (data.get("document_type") or "").lower()
     issuing_party = _normalize_for_match(data.get("issuing_party") or "")
@@ -786,38 +895,13 @@ def _extract_bpi_stock_invoice_line_items(pdf_path: Path, data: dict) -> list[Ca
     for lines, page_text in zip(page_lines, page_texts):
         issue_date = _parse_page_issue_date(page_text, data.get("date_issued"))
         normalized_lines = [strip_diacritics(line).upper() for line in lines]
+        sale_entries: list[tuple[int, str, Optional[str], Optional[str]]] = []
 
-        for index, normalized_line in enumerate(normalized_lines):
-            if normalized_line != "TOTAL A CREDITO":
+        for sale_index, normalized_line in enumerate(normalized_lines):
+            if "VENDA DE" not in normalized_line or "ACCOES" not in normalized_line:
                 continue
-
-            amounts: list[float] = []
-            currency: Optional[str] = None
-            for amount_line in lines[index + 1 : index + 10]:
-                if "VENDA DE" in strip_diacritics(amount_line).upper():
-                    break
-                parsed = _parse_currency_amount_line(amount_line)
-                if parsed:
-                    amounts.append(parsed[0])
-                    currency = parsed[1] or currency
-                    continue
-                if re.fullmatch(r"[A-Z]{3}", amount_line.strip()):
-                    currency = currency or amount_line.strip()
-            if not amounts:
-                continue
-            amount = amounts[-1]
-
-            sale_line = None
-            for candidate_line in lines[index + 1 : index + 35]:
-                normalized_candidate = strip_diacritics(candidate_line).upper()
-                if "VENDA DE" in normalized_candidate and "ACCOES" in normalized_candidate:
-                    sale_line = candidate_line
-                    break
-            if sale_line is None:
-                continue
-
             reference = None
-            for candidate_line in lines[index + 1 : index + 50]:
+            for candidate_line in lines[sale_index + 1 : sale_index + 15]:
                 match = re.search(
                     r"N[ºO]\s+ORDEM:\s*([A-Z0-9]+)",
                     strip_diacritics(candidate_line).upper(),
@@ -825,12 +909,44 @@ def _extract_bpi_stock_invoice_line_items(pdf_path: Path, data: dict) -> list[Ca
                 if match:
                     reference = match.group(1)
                     break
+            settlement_date = _parse_bpi_stock_settlement_date(lines, sale_index)
+            sale_entries.append((sale_index, lines[sale_index], reference, settlement_date))
 
+        if not sale_entries:
+            continue
+
+        first_sale_index = sale_entries[0][0]
+        total_credit_indices = [
+            index
+            for index, normalized_line in enumerate(normalized_lines[:first_sale_index])
+            if normalized_line == "TOTAL A CREDITO"
+        ]
+        if not total_credit_indices:
+            continue
+
+        amount_entries = _parse_currency_amounts_between(
+            lines,
+            total_credit_indices[0] + 1,
+            first_sale_index,
+        )
+        sale_count = min(len(sale_entries), len(total_credit_indices))
+        if len(amount_entries) >= 2 * sale_count:
+            credit_entries = amount_entries[1 : 2 * sale_count : 2]
+        elif len(amount_entries) >= sale_count:
+            credit_entries = amount_entries[-sale_count:]
+        else:
+            continue
+
+        for (sale_index, sale_line, reference, settlement_date), (amount, currency) in zip(
+            sale_entries,
+            credit_entries,
+        ):
             movement_date = None
-            for date_line in reversed(lines[max(0, index - 25) : index + 1]):
+            for date_line in reversed(lines[max(0, sale_index - 25) : sale_index + 1]):
                 movement_date = _parse_partial_movement_date_from_line(date_line, issue_date)
                 if movement_date:
                     break
+            movement_date = settlement_date or movement_date
 
             label = sale_line if reference is None else f"{sale_line} ({reference})"
             _append_line_item(
@@ -1049,6 +1165,53 @@ def _extract_direct_debit_invoice_line_items(pdf_path: Path, data: dict) -> list
     return line_items
 
 
+def _extract_insurance_notice_line_items(pdf_path: Path, data: dict) -> list[CandidateLineItem]:
+    doc_type = (data.get("document_type") or "").lower()
+    if doc_type != "insurance-notice":
+        return []
+
+    amount = _coerce_amount(data.get("total_amount"))
+    if amount is None:
+        return []
+
+    try:
+        with fitz.open(pdf_path) as pdf:
+            text = "\n".join(page.get_text() for page in pdf)
+    except Exception as exc:
+        logger.debug(f"[LINE-ITEMS] Failed to read {pdf_path.name}: {exc}")
+        return []
+
+    normalized_text = strip_diacritics(text).upper()
+    period_match = _INSURANCE_PERIOD_RE.search(normalized_text)
+    if not period_match:
+        return []
+
+    day, month, year = (int(part) for part in period_match.groups())
+    try:
+        debit_date = date(year, month, day).isoformat()
+    except ValueError:
+        return []
+
+    adc_match = _DIRECT_DEBIT_ADC_RE.search(normalized_text)
+    reference = adc_match.group(1) if adc_match else None
+    label = "Insurance direct debit" if reference is None else f"Insurance direct debit {reference}"
+
+    line_items: list[CandidateLineItem] = []
+    seen: set[tuple[str, float, str]] = set()
+    _append_line_item(
+        line_items,
+        seen,
+        category="supplier-payment",
+        amount=amount,
+        label=label,
+        date_issued=debit_date,
+        reference=reference,
+        amount_currency=data.get("total_amount_currency") or "EUR",
+        document_type=data.get("document_type"),
+    )
+    return line_items
+
+
 def _extract_reconciliation_line_items(pdf_path: Path, data: dict) -> list[CandidateLineItem]:
     return [
         *_extract_bpi_fee_invoice_line_items(pdf_path, data),
@@ -1056,6 +1219,7 @@ def _extract_reconciliation_line_items(pdf_path: Path, data: dict) -> list[Candi
         *_extract_bpi_transfer_line_items(pdf_path, data),
         *_extract_millennium_fee_invoice_line_items(pdf_path, data),
         *_extract_direct_debit_invoice_line_items(pdf_path, data),
+        *_extract_insurance_notice_line_items(pdf_path, data),
     ]
 
 
@@ -1280,6 +1444,17 @@ def _candidate_belongs_to_export_path(candidate: PDFCandidate, export_path: Path
         return False
 
 
+def _candidate_matches_export_month(candidate: PDFCandidate, export_path: Path) -> bool:
+    export_key = _export_month_key(export_path)
+    if export_key is None or not candidate.date_issued:
+        return True
+
+    candidate_date = _date_from_iso(candidate.date_issued)
+    if candidate_date is None:
+        return True
+    return (candidate_date.year, candidate_date.month) == export_key
+
+
 def _days_between(date_str1: Optional[str], date_str2: Optional[str]) -> Optional[int]:
     if not date_str1 or not date_str2:
         return None
@@ -1363,6 +1538,14 @@ def _same_calendar_month(date_str1: Optional[str], date_str2: Optional[str]) -> 
     except ValueError:
         return False
     return (left.year, left.month) == (right.year, right.month)
+
+
+def _is_via_verde_transaction(txn: Transaction) -> bool:
+    return "SHAREDTOLL" in _normalize_for_match(txn.description).upper()
+
+
+def _is_via_verde_shared_period_candidate(candidate: PDFCandidate) -> bool:
+    return candidate.is_shared_period_document and candidate.counterparty_id == "shared-toll"
 
 
 def _is_bank_generated_candidate(candidate: PDFCandidate) -> bool:
@@ -2184,6 +2367,14 @@ def _validate_required_documents(matches: list[MatchResult], rules: list) -> dic
                         for candidate in match.pdf_candidates
                     )
                 )
+                and not (
+                    error.startswith("missing bank-anchor")
+                    and _is_via_verde_transaction(match.transaction)
+                    and any(
+                        _is_via_verde_shared_period_candidate(candidate)
+                        for candidate in match.pdf_candidates
+                    )
+                )
             ]
         paired_support_filenames = {
             candidate.pdf_filename
@@ -2227,7 +2418,11 @@ def _validate_supporting_documents_have_bank_pair(
             candidate.pdf_filename.startswith(_BANK_EXPORT_PREFIX)
             for candidate in match.pdf_candidates
         )
-        if has_supporting_doc and not has_bank_doc and not match.line_items:
+        has_via_verde_shared_doc = _is_via_verde_transaction(match.transaction) and any(
+            _is_via_verde_shared_period_candidate(candidate)
+            for candidate in match.pdf_candidates
+        )
+        if has_supporting_doc and not has_bank_doc and not match.line_items and not has_via_verde_shared_doc:
             errors[match.transaction.row_number] = [
                 "missing BNC document for CMP/DIV support file"
             ]
@@ -2354,6 +2549,71 @@ def _link_shared_documents(
                 )
                 still_unmatched_rows.discard(txn.row_number)
                 matched_by_row[txn.row_number] = newly_matched[-1]
+
+    updated_matches = all_matches + newly_matched
+    updated_unmatched = [txn for txn in final_unmatched if txn.row_number in still_unmatched_rows]
+    return updated_matches, updated_unmatched, shared_candidate_ids
+
+
+def _link_via_verde_period_documents(
+    all_matches: list[MatchResult],
+    final_unmatched: list[Transaction],
+    all_candidates: list[PDFCandidate],
+    rules: list,
+) -> tuple[list[MatchResult], list[Transaction], set[str]]:
+    shared_candidate_ids: set[str] = set()
+    matched_by_row = {match.transaction.row_number: match for match in all_matches}
+    all_txns = [match.transaction for match in all_matches] + final_unmatched
+
+    newly_matched: list[MatchResult] = []
+    still_unmatched_rows: set[int] = {txn.row_number for txn in final_unmatched}
+
+    for txn in all_txns:
+        category, rule = _classify_transaction(txn, rules)
+        if rule is None or category != "supplier-payment" or not _is_via_verde_transaction(txn):
+            continue
+
+        txn_date = txn.date_posting or txn.date_value
+        best_shared_match: tuple[PDFCandidate, tuple[int, bool, int]] | None = None
+        for candidate in all_candidates:
+            if not _is_via_verde_shared_period_candidate(candidate):
+                continue
+            if not _same_calendar_month(txn_date, candidate.date_issued):
+                continue
+            rank = _candidate_date_rank(txn_date, candidate)
+            if rank is None:
+                continue
+            if best_shared_match is None or rank < best_shared_match[1]:
+                best_shared_match = (candidate, rank)
+
+        if best_shared_match is None:
+            continue
+
+        shared_candidate = best_shared_match[0]
+        shared_candidate_ids.add(shared_candidate.candidate_id)
+
+        if txn.row_number in matched_by_row:
+            match = matched_by_row[txn.row_number]
+            existing_ids = {candidate.candidate_id for candidate in match.pdf_candidates}
+            if shared_candidate.candidate_id not in existing_ids:
+                match.pdf_candidates.append(shared_candidate)
+                if match.method == "exact":
+                    match.reasoning = (
+                        f"{match.reasoning}; shared Shared Toll period document: "
+                        f"{shared_candidate.pdf_filename}"
+                    )
+        elif txn.row_number in still_unmatched_rows:
+            newly_matched.append(
+                MatchResult(
+                    transaction=txn,
+                    pdf_candidates=[shared_candidate],
+                    method="shared",
+                    confidence=1.0,
+                    reasoning=f"Shared Shared Toll period document: {shared_candidate.pdf_filename}",
+                )
+            )
+            still_unmatched_rows.discard(txn.row_number)
+            matched_by_row[txn.row_number] = newly_matched[-1]
 
     updated_matches = all_matches + newly_matched
     updated_unmatched = [txn for txn in final_unmatched if txn.row_number in still_unmatched_rows]
@@ -2566,6 +2826,13 @@ def reconcile_single(
         matchable,
         rules,
     )
+    all_matches, final_unmatched, via_verde_shared_candidate_ids = _link_via_verde_period_documents(
+        all_matches,
+        final_unmatched,
+        matchable,
+        rules,
+    )
+    shared_candidate_ids.update(via_verde_shared_candidate_ids)
     paired_supporting_candidate_ids = _link_paired_supporting_documents(
         all_matches,
         matchable,
@@ -2606,11 +2873,19 @@ def reconcile_single(
         for match in all_matches
         for candidate in match.pdf_candidates
     }
+    matched_shared_period_filenames = {
+        candidate.pdf_filename
+        for match in all_matches
+        for candidate in match.pdf_candidates
+        if candidate.is_shared_period_document
+    }
     unmatched_files = [
         candidate
-        for candidate in candidates
+        for candidate in matchable
         if candidate.candidate_id not in matched_candidate_ids
+        and candidate.pdf_filename not in matched_shared_period_filenames
         and _candidate_belongs_to_export_path(candidate, export_path)
+        and _candidate_matches_export_month(candidate, export_path)
     ]
 
     validation_errors = _merge_validation_errors(
