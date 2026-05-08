@@ -200,8 +200,20 @@ def get_system_prompt_classify(
     known_issuing_parties: list[str],
     pre_extracted: QRPreExtractedFields | None = None,
     multi_qr_info: MultiQRInfo | None = None,
+    classification_settings=None,
 ) -> str:
     """Build the single-call document classification prompt."""
+    document_type_rules = list(getattr(classification_settings, "prompt_document_type_rules", []) or [])
+    issuing_party_rules = list(getattr(classification_settings, "prompt_issuing_party_rules", []) or [])
+    issuer_tax_number_rule = getattr(
+        classification_settings,
+        "issuer_tax_number_prefix_rule",
+        "Include country prefix when visible (e.g., DETESTOWNER). "
+        "Omit prefix only for Portuguese documents where no prefix is shown. Null if the issuer tax number is not visible.",
+    )
+    title_max_chars = int(getattr(classification_settings, "document_title_max_chars", 60) or 60)
+    document_type_rule_text = "".join(f"- {rule}\n" for rule in document_type_rules)
+    issuing_party_rule_text = "".join(f"- {rule}\n" for rule in issuing_party_rules)
     prompt = (
         f"You are an expert document classification assistant. "
         f"Today's date is {datetime.now().strftime('%Y-%m-%d')}. "
@@ -223,11 +235,7 @@ def get_system_prompt_classify(
         "- If a known type matches, use it EXACTLY (case-sensitive)\n"
         "- If no match, suggest a new slug-cased name (lowercase, hyphen-separated, English, "
         "e.g. tax-*, bank-*, invoice-*)\n"
-        "- For a credit/loan product simulation (e.g. 'Simulação Crédito Digital Finance Desk'), "
-        "use loan-simulation\n"
-        "- For Millennium/BCP loan disbursement movement details with wording like "
-        "'CONCESS CRED EMPR MN', use bank-note, not bank-transfer. Do not treat "
-        "navigation/counterparty text such as 'TRF P/ ... - BPI' as the issuer or title.\n"
+        f"{document_type_rule_text}"
         "- Only use '$UNKNOWN$' if the raw value is empty or truly unidentifiable\n\n"
         "For issuing_party, normalize the raw issuer to a canonical slug-cased value:\n"
         f"- Known parties: {', '.join(p for p in known_issuing_parties if p != '$UNKNOWN$')}\n"
@@ -235,23 +243,17 @@ def get_system_prompt_classify(
         "- If no match, produce a clean short name: lowercase, strip legal suffixes "
         "(Inc., Ltd., S.A., Lda., PBC), use the most recognizable form "
         "(e.g., 'Anthropic, PBC' -> 'anthropic', 'Amazon Web Services' -> 'amazon')\n"
-        "- For bank notes, movements, and payment confirmations, issuing_party is the bank "
-        "or financial institution that generated the document. Do not use the merchant, "
-        "payee, beneficiary, destination bank, or counterparty as issuing_party; keep those "
-        "details in document_title or reasoning instead\n"
-        "- For Portuguese bank-generated documents, use Banco BPI/BPI -> bpi and "
-        "Millennium bcp/Banco Comercial Português/BCP -> millennium-bcp when visible\n"
+        f"{issuing_party_rule_text}"
         "- Only use '$UNKNOWN$' if the raw value is empty or truly unidentifiable\n\n"
         "## Other Fields\n\n"
         "For document_title, extract the specific SUBJECT, PRODUCT, SERVICE, or TRANSACTION. "
         "This is NOT the document type — it distinguishes this document from others of the same type and issuer. "
-        "Keep it concise (max ~60 characters). "
+        f"Keep it concise (max ~{title_max_chars} characters). "
         "Examples: 'YouTube Premium', 'Claude API', 'Saúde Multicare Individual'. "
         "If no specific subject beyond what document_type already captures, leave null.\n\n"
         "For issuer_tax_number, look for the issuer's tax identification number (NIF, VAT, EIN), "
         "not a customer, borrower, payer, or beneficiary tax number. "
-        "Include country prefix when visible (e.g., DETESTOWNER). "
-        "Omit prefix only for Portuguese documents where no prefix is shown. Null if the issuer tax number is not visible.\n\n"
+        f"{issuer_tax_number_rule}\n\n"
         "For locale, use BCP-47 format based on language, currency, tax ID format "
         "(e.g., 'pt-PT', 'en-US', 'es-ES'). Null if uncertain.\n\n"
         "If a value cannot be extracted, use '$UNKNOWN$'. "

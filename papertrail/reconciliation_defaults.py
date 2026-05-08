@@ -110,6 +110,105 @@ DEFAULT_SHARED_PERIOD_TITLE_TERMS = {
     "$bank": ("comissoes", "manctapacote", "operacaocartoes", "impostodoselo"),
 }
 DEFAULT_SAME_MONTH_SHARED_RULE_NAMES = ("vendor-sharedtoll",)
+DEFAULT_STRICT_STATEMENT_BANKS = ("bpi",)
+DEFAULT_SUPPORTING_PAIR_EXEMPT_STATEMENT_BANKS = ("bpi",)
+DEFAULT_SHARED_PERIOD_LINK_CATEGORIES = ("supplier-payment",)
+DEFAULT_SHARED_PERIOD_SUPPLIER_EVIDENCE_ERROR_EXEMPT_RULE_NAMES = ("supplier-payment",)
+DEFAULT_SHARED_PERIOD_BANK_ANCHOR_ERROR_EXEMPT_RULE_NAMES = ("supplier-payment",)
+DEFAULT_EVIDENCE_COUNTERPARTY_CATEGORIES = ("supplier-payment", "bank-fee")
+DEFAULT_EVIDENCE_COUNTERPARTY_REQUIRED_PATTERN = "invoice"
+DEFAULT_LINE_ITEM_CATEGORY_ALIASES = {
+    "bank-fee": {
+        "prefixes": ("bank-fee",),
+        "categories": ("bank-custody-fee",),
+    },
+    "bank-only": {
+        "prefixes": ("bank-transfer",),
+        "categories": (),
+    },
+    "investment": {
+        "prefixes": ("stock-",),
+        "categories": (),
+    },
+}
+DEFAULT_LINE_ITEM_EXTRACTORS = {
+    "bpi_fee_invoice": {
+        "document_types": ("invoice",),
+        "issuing_parties": ("bpi",),
+        "title_terms": (
+            "comissoes",
+            "titulos",
+            "manutencaodecontavalornegocios",
+            "contavalornegocios",
+        ),
+        "maintenance_marker": "MANUTENCAO DE CONTA VALOR NEGOCIOS",
+        "custody_marker": "COMISSAO DEPOSITO E REGISTO VALORES MOBILIARIOS",
+        "total_debit_marker": "TOTAL A DEBITO",
+        "stamp_duty_rate": 0.04,
+        "max_stamp_duty": 1.0,
+        "maintenance_search_after": 25,
+        "custody_total_search_after": 20,
+        "custody_total_amount_after": 3,
+        "custody_fallback_after": 15,
+        "custody_fallback_before": 15,
+        "custody_fallback_max_amount": 100,
+        "maintenance_category": "bank-fee-maintenance",
+        "stamp_duty_category": "bank-fee-stamp-duty",
+        "custody_category": "bank-custody-fee",
+    },
+    "bpi_stock_invoice": {
+        "document_types": ("invoice",),
+        "issuing_parties": ("bpi",),
+        "title_terms": ("comissoes", "titulos"),
+        "sale_required_terms": ("VENDA DE", "ACCOES"),
+        "order_reference_pattern": r"N[ºO]\s+ORDEM:\s*([A-Z0-9]+)",
+        "total_credit_marker": "TOTAL A CREDITO",
+        "settlement_offset_days": 1,
+        "movement_date_lookback": 25,
+        "reference_search_after": 15,
+        "category": "stock-sale-bpi",
+        "document_type": "bank-stock-sell",
+    },
+    "bpi_transfer": {
+        "document_types": ("bank-note", "bank-transfer"),
+        "issuing_parties": ("bpi",),
+        "line_pattern": r"\b(?:TRF\s+CR\s+SEPA\+\s+|TRF\s+SEPA\+\s+INST\s+|TRANSFER[ÊE]NCIA\s+RECEBIDA\s+)(\d+)\b",
+        "amount_search_before": 8,
+        "date_search_after": 5,
+        "category": "bank-transfer-sepa",
+    },
+    "millennium_fee_invoice": {
+        "document_types": ("invoice", "invoice-receipt"),
+        "issuing_parties": (
+            "millenniumbcp",
+            "millenniumbancocomercialportugues",
+            "bancocomercialportugues",
+        ),
+        "movement_date_marker": "DATA DO MOVIMENTO",
+        "amount_search_after": 5,
+        "markers": {
+            "CUSTO DE SERVICO INTERNACIONAL": "bank-fee-international-service",
+            "COMISSAO REFERENTE": "bank-fee-maintenance",
+        },
+        "stamp_duty_markers": ("IMPOSTO DO SELO", "IMP. SELO"),
+        "stamp_duty_legal_reference": "17.3.4",
+        "stamp_duty_category": "bank-fee-stamp-duty",
+    },
+    "direct_debit": {
+        "date_pattern": r"\bDEBITO\s+A\s+PARTIR\s+DE:\s*(\d{2})[/-](\d{2})[/-](20\d{2})\b",
+        "auth_pattern": r"\bN[ºO]\s+AUTORIZACAO:\s*([A-Z0-9]+)\b",
+        "amount_pattern": r"\bVALOR:[^\d\n]*([\d\s.]+,\d{2})\b",
+        "category": "supplier-payment",
+        "label": "Direct debit",
+    },
+    "insurance_notice": {
+        "document_types": ("insurance-notice",),
+        "period_pattern": r"\bPERIODO\s+DO\s+RECIBO\b.*?(\d{2})[/-](\d{2})[/-](20\d{2})\s+A\s+\d{2}[/-]\d{2}[/-]20\d{2}\b",
+        "reference_pattern": r"\bADC\s+([A-Z0-9]+)\b",
+        "category": "supplier-payment",
+        "label": "Insurance direct debit",
+    },
+}
 
 DEFAULT_RECONCILIATION_RULES = (
     {

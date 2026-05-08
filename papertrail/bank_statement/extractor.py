@@ -6,7 +6,6 @@ from pathlib import Path
 
 import openpyxl
 
-from . import bpi, millennium_bcp
 from papertrail.bank_statement.models import (
     BankFormat,
     BankStatementParser,
@@ -14,6 +13,8 @@ from papertrail.bank_statement.models import (
 )
 from papertrail.logging_utils import get_logger
 from papertrail.models import DocumentMetadata
+
+from . import bpi, millennium_bcp
 
 logger = get_logger("bank_statement")
 
@@ -80,7 +81,12 @@ def load_transactions(xlsx_path: Path) -> list[BankTransactionRecord]:
     return transactions or []
 
 
-def classify_bank_statement(xlsx_path: Path, file_hash: str) -> DocumentMetadata | None:
+def classify_bank_statement(
+    xlsx_path: Path,
+    file_hash: str,
+    *,
+    locale: str = "pt-PT",
+) -> DocumentMetadata | None:
     """Deterministic classification of a bank statement XLSX.
 
     Returns DocumentMetadata with confidence=1.0 (no LLM needed), or None if
@@ -111,7 +117,7 @@ def classify_bank_statement(xlsx_path: Path, file_hash: str) -> DocumentMetadata
         hash_content=file_hash,
         hash_file=file_hash,
         source_extension=".xlsx",
-        locale="pt-PT",
+        locale=locale,
         page_count=None,
         bank_statement=data.to_sidecar_dict(),
         date_created=now,

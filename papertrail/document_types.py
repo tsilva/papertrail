@@ -7,68 +7,107 @@ import re
 from papertrail.models import clean_enum_string
 from papertrail.utils import strip_diacritics
 
-_BANK_NOTE_RAW_TYPES = {"movimento", "notadelancamento"}
-_INVESTMENT_ACQUISITION_SUMMARY_TERMS = {
-    "mapa",
-    "resumo",
-    "datas",
-    "valores",
-    "aquisicao",
-    "mobiliarios",
-}
-_LOAN_SIMULATION_RAW_TYPES = {"simulacao", "simulation"}
-_LOAN_SIMULATION_CONTEXT_TERMS = {"credito", "credit", "loan", "emprestimo", "financiamento"}
-_LOAN_DISBURSEMENT_CONTEXT_TERMS = {"concess", "cred", "empr"}
+DEFAULT_DOCUMENT_TYPE_OVERRIDES = (
+    {"target": "bank-note", "raw_types": ("movimento", "notadelancamento")},
+    {
+        "target": "investment-acquisition-summary",
+        "context_all": ("mapa", "resumo", "datas", "valores", "aquisicao", "mobiliarios"),
+    },
+    {
+        "target": "loan-simulation",
+        "raw_types": ("simulacao", "simulation"),
+        "context_any": ("credito", "credit", "loan", "emprestimo", "financiamento"),
+    },
+    {"target": "bank-note", "context_all": ("concess", "cred", "empr")},
+)
 
 
 def normalize_document_type(
     value: str | None,
     raw_value: str | None = None,
     document_title: str | None = None,
+    overrides: list | tuple | None = None,
 ) -> str | None:
     """Apply deterministic document-type overrides before registry canonicalization."""
-    if is_bank_note_raw_type(raw_value):
-        return "bank-note"
-    if is_investment_acquisition_summary(raw_value, document_title):
-        return "investment-acquisition-summary"
-    if is_loan_simulation(raw_value, document_title):
-        return "loan-simulation"
-    if is_loan_disbursement_movement(raw_value, document_title):
-        return "bank-note"
+    override = match_document_type_override(raw_value, document_title, overrides)
+    if override:
+        return override
     if value is None:
         return None
     return clean_enum_string(value, "DocumentType")
 
 
+def match_document_type_override(
+    raw_value: str | None,
+    document_title: str | None = None,
+    overrides: list | tuple | None = None,
+) -> str | None:
+    raw_token = _compact_token(raw_value or "")
+    context = _word_tokens(f"{raw_value or ''} {document_title or ''}")
+    for override in overrides or DEFAULT_DOCUMENT_TYPE_OVERRIDES:
+        target = _override_get(override, "target")
+        if not target:
+            continue
+
+        raw_types = {_compact_token(str(item)) for item in _override_get(override, "raw_types", [])}
+        if raw_types and raw_token not in raw_types:
+            continue
+
+        context_all = set(_override_get(override, "context_all", []))
+        if context_all and not context_all.issubset(context):
+            continue
+
+        context_any = set(_override_get(override, "context_any", []))
+        if context_any and not any(term in context for term in context_any):
+            continue
+
+        return str(target)
+    return None
+
+
 def is_bank_note_raw_type(raw_value: str | None) -> bool:
-    if raw_value is None:
-        return False
-    return _compact_token(raw_value) in _BANK_NOTE_RAW_TYPES
+    return match_document_type_override(
+        raw_value,
+        overrides=[{"target": "bank-note", "raw_types": ("movimento", "notadelancamento")}],
+    ) == "bank-note"
 
 
 def is_investment_acquisition_summary(
     raw_value: str | None,
     document_title: str | None = None,
 ) -> bool:
-    context = _word_tokens(f"{raw_value or ''} {document_title or ''}")
-    return _INVESTMENT_ACQUISITION_SUMMARY_TERMS.issubset(context)
+    return match_document_type_override(
+        raw_value,
+        document_title,
+        overrides=[DEFAULT_DOCUMENT_TYPE_OVERRIDES[1]],
+    ) == "investment-acquisition-summary"
 
 
 def is_loan_simulation(raw_value: str | None, document_title: str | None = None) -> bool:
     if raw_value is None:
         return False
-    if _compact_token(raw_value) not in _LOAN_SIMULATION_RAW_TYPES:
-        return False
-    context = _word_tokens(f"{raw_value or ''} {document_title or ''}")
-    return any(term in context for term in _LOAN_SIMULATION_CONTEXT_TERMS)
+    return match_document_type_override(
+        raw_value,
+        document_title,
+        overrides=[DEFAULT_DOCUMENT_TYPE_OVERRIDES[2]],
+    ) == "loan-simulation"
 
 
 def is_loan_disbursement_movement(
     raw_value: str | None,
     document_title: str | None = None,
 ) -> bool:
-    context = _word_tokens(f"{raw_value or ''} {document_title or ''}")
-    return _LOAN_DISBURSEMENT_CONTEXT_TERMS.issubset(context)
+    return match_document_type_override(
+        raw_value,
+        document_title,
+        overrides=[DEFAULT_DOCUMENT_TYPE_OVERRIDES[3]],
+    ) == "bank-note"
+
+
+def _override_get(override: object, key: str, default=None):
+    if isinstance(override, dict):
+        return override.get(key, default)
+    return getattr(override, key, default)
 
 
 def _compact_token(value: str) -> str:

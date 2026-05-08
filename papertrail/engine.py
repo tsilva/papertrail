@@ -58,12 +58,12 @@ def _merge_qr_metadata(
     llm_values: dict,
     doc_logger: DocumentLogger | None,
 ) -> dict:
-    for field in _QR_MERGE_FIELDS:
-        qr_val = getattr(qr_metadata, field)
+    for field_name in _QR_MERGE_FIELDS:
+        qr_val = getattr(qr_metadata, field_name)
         if qr_val is not None:
-            if doc_logger and llm_values[field] != qr_val:
-                doc_logger.log_qr_merge(field, qr_val, llm_values[field])
-            llm_values[field] = qr_val
+            if doc_logger and llm_values[field_name] != qr_val:
+                doc_logger.log_qr_merge(field_name, qr_val, llm_values[field_name])
+            llm_values[field_name] = qr_val
     return llm_values
 
 
@@ -150,6 +150,7 @@ def _phase1_llm_extract(
                 repository.registry.issuing_parties(scope),
                 pre_extracted or None,
                 multi_qr_info=multi_qr_info,
+                classification_settings=runtime.profile.classification,
             ),
         },
         {
@@ -265,7 +266,8 @@ def _phase4_nif_enrich(
     scope: str | Path,
     doc_logger: DocumentLogger | None,
 ) -> str:
-    if merged["locale"] != "pt-PT":
+    enabled_locales = set(getattr(runtime.profile.nif_api, "enabled_locales", ["pt-PT"]) or [])
+    if enabled_locales and merged["locale"] not in enabled_locales:
         return normalized_issuing_party
 
     t0 = _time.monotonic()
@@ -515,6 +517,7 @@ class DocumentEngine:
                         raw_metadata.document_type,
                         raw_metadata.document_type_raw,
                         raw_metadata.document_title,
+                        self.runtime.profile.classification.document_type_overrides,
                     )
                 ),
                 "total_amount": raw_metadata.total_amount,
@@ -764,7 +767,11 @@ class DocumentEngine:
                 return result
 
             try:
-                metadata = classify_bank_statement(source_path, file_hash)
+                metadata = classify_bank_statement(
+                    source_path,
+                    file_hash,
+                    locale=self.runtime.profile.classification.bank_statement_locale,
+                )
             except BankStatementReadError as exc:
                 logger.error(f"Failed to read XLSX {source_path.name}: {exc}")
                 result.failed = 1

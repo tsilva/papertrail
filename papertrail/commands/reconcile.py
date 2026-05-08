@@ -23,14 +23,23 @@ from papertrail.reconciliation_defaults import (
     DEFAULT_BANK_EXPORT_PREFIX,
     DEFAULT_BANK_GENERATED_DOC_TYPES,
     DEFAULT_DATE_WINDOW_DAYS,
+    DEFAULT_EVIDENCE_COUNTERPARTY_CATEGORIES,
+    DEFAULT_EVIDENCE_COUNTERPARTY_REQUIRED_PATTERN,
+    DEFAULT_LINE_ITEM_CATEGORY_ALIASES,
+    DEFAULT_LINE_ITEM_EXTRACTORS,
     DEFAULT_RECONCILIATION_RULES,
     DEFAULT_SAME_MONTH_SHARED_RULE_NAMES,
+    DEFAULT_SHARED_PERIOD_BANK_ANCHOR_ERROR_EXEMPT_RULE_NAMES,
+    DEFAULT_SHARED_PERIOD_LINK_CATEGORIES,
+    DEFAULT_SHARED_PERIOD_SUPPLIER_EVIDENCE_ERROR_EXEMPT_RULE_NAMES,
     DEFAULT_SHARED_PERIOD_TITLE_TERMS,
     DEFAULT_SHARED_PERIOD_TRANSACTION_KEYWORDS,
     DEFAULT_STATEMENT_BANK_ISSUER_ALIASES,
     DEFAULT_STATEMENT_BANK_SCOPED_DOC_TYPES,
+    DEFAULT_STRICT_STATEMENT_BANKS,
     DEFAULT_SUPPORTING_DOC_TYPE_PATTERNS,
     DEFAULT_SUPPORTING_EXPORT_PREFIXES,
+    DEFAULT_SUPPORTING_PAIR_EXEMPT_STATEMENT_BANKS,
 )
 from papertrail.reconciliation_evidence import build_document_evidence
 from papertrail.repository import DocumentRepository
@@ -51,18 +60,6 @@ _PERIOD_TOKEN_RE = re.compile(
 )
 _DATE_DMY_RE = re.compile(r"\b(\d{2})[/-](\d{2})[/-](20\d{2})\b")
 _DATE_DM_RE = re.compile(r"\b(\d{2})[/-](\d{2})\b")
-_DIRECT_DEBIT_DATE_RE = re.compile(r"\bDEBITO\s+A\s+PARTIR\s+DE:\s*(\d{2})[/-](\d{2})[/-](20\d{2})\b")
-_DIRECT_DEBIT_AUTH_RE = re.compile(r"\bN[ºO]\s+AUTORIZACAO:\s*([A-Z0-9]+)\b")
-_DIRECT_DEBIT_AMOUNT_RE = re.compile(r"\bVALOR:[^\d\n]*([\d\s.]+,\d{2})\b")
-_DIRECT_DEBIT_ADC_RE = re.compile(r"\bADC\s+([A-Z0-9]+)\b")
-_INSURANCE_PERIOD_RE = re.compile(
-    r"\bPERIODO\s+DO\s+RECIBO\b.*?(\d{2})[/-](\d{2})[/-](20\d{2})\s+A\s+\d{2}[/-]\d{2}[/-]20\d{2}\b",
-    re.DOTALL,
-)
-_BPI_TRANSFER_LINE_RE = re.compile(
-    r"\b(?:TRF\s+CR\s+SEPA\+\s+|TRF\s+SEPA\+\s+INST\s+|TRANSFER[ÊE]NCIA\s+RECEBIDA\s+)(\d+)\b",
-    re.IGNORECASE,
-)
 _BANK_EXPORT_PREFIX = DEFAULT_BANK_EXPORT_PREFIX
 _SUPPORTING_EXPORT_PREFIXES = tuple(DEFAULT_SUPPORTING_EXPORT_PREFIXES)
 _SUPPORTING_DOC_TYPE_PATTERNS = list(DEFAULT_SUPPORTING_DOC_TYPE_PATTERNS)
@@ -95,6 +92,31 @@ class ReconciliationPolicy:
         }
     )
     same_month_shared_rule_names: tuple[str, ...] = DEFAULT_SAME_MONTH_SHARED_RULE_NAMES
+    strict_statement_banks: tuple[str, ...] = DEFAULT_STRICT_STATEMENT_BANKS
+    supporting_pair_exempt_statement_banks: tuple[str, ...] = (
+        DEFAULT_SUPPORTING_PAIR_EXEMPT_STATEMENT_BANKS
+    )
+    shared_period_link_categories: tuple[str, ...] = DEFAULT_SHARED_PERIOD_LINK_CATEGORIES
+    shared_period_supplier_evidence_error_exempt_rule_names: tuple[str, ...] = (
+        DEFAULT_SHARED_PERIOD_SUPPLIER_EVIDENCE_ERROR_EXEMPT_RULE_NAMES
+    )
+    shared_period_bank_anchor_error_exempt_rule_names: tuple[str, ...] = (
+        DEFAULT_SHARED_PERIOD_BANK_ANCHOR_ERROR_EXEMPT_RULE_NAMES
+    )
+    evidence_counterparty_categories: tuple[str, ...] = DEFAULT_EVIDENCE_COUNTERPARTY_CATEGORIES
+    evidence_counterparty_required_pattern: str = DEFAULT_EVIDENCE_COUNTERPARTY_REQUIRED_PATTERN
+    line_item_category_aliases: dict[str, dict[str, object]] = field(
+        default_factory=lambda: {
+            name: dict(settings)
+            for name, settings in DEFAULT_LINE_ITEM_CATEGORY_ALIASES.items()
+        }
+    )
+    line_item_extractors: dict[str, dict[str, object]] = field(
+        default_factory=lambda: {
+            name: dict(settings)
+            for name, settings in DEFAULT_LINE_ITEM_EXTRACTORS.items()
+        }
+    )
 
 
 _ACTIVE_RECONCILIATION_POLICY: ContextVar[ReconciliationPolicy] = ContextVar(
@@ -138,6 +160,17 @@ def _keywords_map(value, fallback: dict[str, tuple[str, ...]]) -> dict[str, tupl
     for key, items in dict(value).items():
         if key and items:
             merged[str(key)] = tuple(str(item) for item in items)
+    return merged
+
+
+def _settings_map(value, fallback: dict[str, dict[str, object]]) -> dict[str, dict[str, object]]:
+    merged = {name: dict(settings) for name, settings in fallback.items()}
+    if not value:
+        return merged
+    for name, settings in dict(value).items():
+        if not isinstance(settings, dict):
+            continue
+        merged[str(name)] = {**merged.get(str(name), {}), **settings}
     return merged
 
 
@@ -188,6 +221,45 @@ def _policy_from_profile(profile) -> ReconciliationPolicy:
             getattr(settings, "same_month_shared_rule_names", None),
             DEFAULT_SAME_MONTH_SHARED_RULE_NAMES,
         ),
+        strict_statement_banks=_sequence(
+            getattr(settings, "strict_statement_banks", None),
+            DEFAULT_STRICT_STATEMENT_BANKS,
+        ),
+        supporting_pair_exempt_statement_banks=_sequence(
+            getattr(settings, "supporting_pair_exempt_statement_banks", None),
+            DEFAULT_SUPPORTING_PAIR_EXEMPT_STATEMENT_BANKS,
+        ),
+        shared_period_link_categories=_sequence(
+            getattr(settings, "shared_period_link_categories", None),
+            DEFAULT_SHARED_PERIOD_LINK_CATEGORIES,
+        ),
+        shared_period_supplier_evidence_error_exempt_rule_names=_sequence(
+            getattr(settings, "shared_period_supplier_evidence_error_exempt_rule_names", None),
+            DEFAULT_SHARED_PERIOD_SUPPLIER_EVIDENCE_ERROR_EXEMPT_RULE_NAMES,
+        ),
+        shared_period_bank_anchor_error_exempt_rule_names=_sequence(
+            getattr(settings, "shared_period_bank_anchor_error_exempt_rule_names", None),
+            DEFAULT_SHARED_PERIOD_BANK_ANCHOR_ERROR_EXEMPT_RULE_NAMES,
+        ),
+        evidence_counterparty_categories=_sequence(
+            getattr(settings, "evidence_counterparty_categories", None),
+            DEFAULT_EVIDENCE_COUNTERPARTY_CATEGORIES,
+        ),
+        evidence_counterparty_required_pattern=str(
+            getattr(
+                settings,
+                "evidence_counterparty_required_pattern",
+                DEFAULT_EVIDENCE_COUNTERPARTY_REQUIRED_PATTERN,
+            )
+        ),
+        line_item_category_aliases=_settings_map(
+            getattr(settings, "line_item_category_aliases", None),
+            DEFAULT_LINE_ITEM_CATEGORY_ALIASES,
+        ),
+        line_item_extractors=_settings_map(
+            getattr(settings, "line_item_extractors", None),
+            DEFAULT_LINE_ITEM_EXTRACTORS,
+        ),
     )
 
 
@@ -204,6 +276,49 @@ def _rules_from_profile(profile) -> list[ReconciliationRule]:
         rule if isinstance(rule, ReconciliationRule) else ReconciliationRule.model_validate(rule)
         for rule in configured_rules
     ]
+
+
+def _line_item_config(name: str) -> dict[str, object]:
+    return dict(_reconciliation_policy().line_item_extractors.get(name, {}))
+
+
+def _config_sequence(config: dict[str, object], key: str, default: tuple[str, ...] = ()) -> tuple[str, ...]:
+    value = config.get(key, default)
+    if isinstance(value, str):
+        return (value,)
+    return tuple(str(item) for item in (value or ()))
+
+
+def _config_float(config: dict[str, object], key: str, default: float) -> float:
+    try:
+        return float(config.get(key, default))
+    except (TypeError, ValueError):
+        return default
+
+
+def _config_int(config: dict[str, object], key: str, default: int) -> int:
+    try:
+        return int(config.get(key, default))
+    except (TypeError, ValueError):
+        return default
+
+
+def _config_regex(config: dict[str, object], key: str, *, flags: int = 0) -> re.Pattern[str] | None:
+    pattern = config.get(key)
+    if not pattern:
+        return None
+    return re.compile(str(pattern), flags)
+
+
+def _doc_matches_line_item_config(doc_type: str, issuing_party: str, config: dict[str, object]) -> bool:
+    doc_types = {item.lower() for item in _config_sequence(config, "document_types")}
+    issuing_parties = {_normalize_for_match(item) for item in _config_sequence(config, "issuing_parties")}
+    return (
+        bool(doc_types)
+        and bool(issuing_parties)
+        and doc_type in doc_types
+        and issuing_party in issuing_parties
+    )
 
 
 @dataclass(frozen=True)
@@ -693,16 +808,21 @@ def _amounts_near(lines: list[str], index: int, *, before: int = 0, after: int =
     return amounts
 
 
-def _find_bpi_stamp_duty_pair(amounts: list[float]) -> tuple[float, float] | None:
+def _find_bpi_stamp_duty_pair(
+    amounts: list[float],
+    *,
+    rate: float,
+    max_tax: float,
+) -> tuple[float, float] | None:
     pairs: list[tuple[int, float, float]] = []
     for gross_index, gross in enumerate(amounts):
         for base in amounts:
             if gross <= base:
                 continue
             tax = round(gross - base, 2)
-            if tax <= 0 or tax > 1:
+            if tax <= 0 or tax > max_tax:
                 continue
-            if abs(round(base * 0.04, 2) - tax) <= _amount_tolerance():
+            if abs(round(base * rate, 2) - tax) <= _amount_tolerance():
                 pairs.append((gross_index, base, gross))
     if not pairs:
         return None
@@ -743,17 +863,14 @@ def _append_line_item(
 
 
 def _extract_bpi_fee_invoice_line_items(pdf_path: Path, data: dict) -> list[CandidateLineItem]:
+    config = _line_item_config("bpi_fee_invoice")
     doc_type = (data.get("document_type") or "").lower()
     issuing_party = _normalize_for_match(data.get("issuing_party") or "")
     title = _normalize_for_match(data.get("document_title") or "")
-    if doc_type != "invoice" or issuing_party != "bpi":
+    if not _doc_matches_line_item_config(doc_type, issuing_party, config):
         return []
-    if (
-        "comissoes" not in title
-        and "titulos" not in title
-        and "manutencaodecontavalornegocios" not in title
-        and "contavalornegocios" not in title
-    ):
+    title_terms = tuple(_normalize_for_match(item) for item in _config_sequence(config, "title_terms"))
+    if title_terms and not any(term in title for term in title_terms):
         return []
 
     try:
@@ -768,41 +885,49 @@ def _extract_bpi_fee_invoice_line_items(pdf_path: Path, data: dict) -> list[Cand
     seen: set[tuple[str, float, str]] = set()
 
     for index, line in enumerate(normalized_lines):
-        if "MANUTENCAO DE CONTA VALOR NEGOCIOS" not in line:
+        maintenance_marker = str(config.get("maintenance_marker", ""))
+        if maintenance_marker not in line:
             continue
-        amounts = _amounts_near(lines, index, after=25)
-        pair = _find_bpi_stamp_duty_pair(amounts)
+        amounts = _amounts_near(lines, index, after=_config_int(config, "maintenance_search_after", 25))
+        pair = _find_bpi_stamp_duty_pair(
+            amounts,
+            rate=_config_float(config, "stamp_duty_rate", 0.04),
+            max_tax=_config_float(config, "max_stamp_duty", 1.0),
+        )
         if pair is None:
             continue
         base, gross = pair
         _append_line_item(
             line_items,
             seen,
-            category="bank-fee-maintenance",
+            category=str(config.get("maintenance_category", "bank-fee-maintenance")),
             amount=base,
             label=lines[index],
         )
         _append_line_item(
             line_items,
             seen,
-            category="bank-fee-stamp-duty",
+            category=str(config.get("stamp_duty_category", "bank-fee-stamp-duty")),
             amount=gross - base,
             label=f"Stamp duty for {lines[index]}",
         )
 
     for index, line in enumerate(normalized_lines):
-        if "COMISSAO DEPOSITO E REGISTO VALORES MOBILIARIOS" not in line:
+        custody_marker = str(config.get("custody_marker", ""))
+        if custody_marker not in line:
             continue
         custody_matched = False
-        for offset, candidate_line in enumerate(normalized_lines[index : index + 20]):
-            if candidate_line != "TOTAL A DEBITO":
+        total_marker = str(config.get("total_debit_marker", ""))
+        total_search_after = _config_int(config, "custody_total_search_after", 20)
+        for offset, candidate_line in enumerate(normalized_lines[index : index + total_search_after]):
+            if candidate_line != total_marker:
                 continue
-            amount = _amounts_near(lines, index + offset, after=3)
+            amount = _amounts_near(lines, index + offset, after=_config_int(config, "custody_total_amount_after", 3))
             if amount:
                 _append_line_item(
                     line_items,
                     seen,
-                    category="bank-custody-fee",
+                    category=str(config.get("custody_category", "bank-custody-fee")),
                     amount=amount[0],
                     label=lines[index],
                 )
@@ -810,23 +935,32 @@ def _extract_bpi_fee_invoice_line_items(pdf_path: Path, data: dict) -> list[Cand
                 break
         if custody_matched:
             continue
-        amounts_after = [amount for amount in _amounts_near(lines, index, after=15) if 0 < amount <= 100]
-        if index > 0 and "MANUTENCAO DE CONTA VALOR NEGOCIOS" in normalized_lines[index - 1]:
+        max_amount = _config_float(config, "custody_fallback_max_amount", 100)
+        amounts_after = [
+            amount
+            for amount in _amounts_near(lines, index, after=_config_int(config, "custody_fallback_after", 15))
+            if 0 < amount <= max_amount
+        ]
+        if index > 0 and maintenance_marker in normalized_lines[index - 1]:
             if len(amounts_after) >= 2:
                 _append_line_item(
                     line_items,
                     seen,
-                    category="bank-custody-fee",
+                    category=str(config.get("custody_category", "bank-custody-fee")),
                     amount=amounts_after[1],
                     label=lines[index],
                 )
                 continue
-        amounts_before = [amount for amount in _amounts_near(lines, index, before=15) if 0 < amount <= 100]
+        amounts_before = [
+            amount
+            for amount in _amounts_near(lines, index, before=_config_int(config, "custody_fallback_before", 15))
+            if 0 < amount <= max_amount
+        ]
         if amounts_before:
             _append_line_item(
                 line_items,
                 seen,
-                category="bank-custody-fee",
+                category=str(config.get("custody_category", "bank-custody-fee")),
                 amount=amounts_before[-1],
                 label=lines[index],
             )
@@ -880,6 +1014,7 @@ def _parse_partial_movement_date_from_line(value: str, issue_date: Optional[date
 
 
 def _parse_bpi_stock_settlement_date(lines: list[str], sale_index: int) -> Optional[str]:
+    config = _line_item_config("bpi_stock_invoice")
     context = " ".join(lines[sale_index : sale_index + 5])
     match = _DATE_DMY_RE.search(context)
     if not match:
@@ -890,16 +1025,18 @@ def _parse_bpi_stock_settlement_date(lines: list[str], sale_index: int) -> Optio
         session_date = date(year, month, day)
     except ValueError:
         return None
-    return (session_date + timedelta(days=1)).isoformat()
+    return (session_date + timedelta(days=_config_int(config, "settlement_offset_days", 1))).isoformat()
 
 
 def _extract_bpi_stock_invoice_line_items(pdf_path: Path, data: dict) -> list[CandidateLineItem]:
+    config = _line_item_config("bpi_stock_invoice")
     doc_type = (data.get("document_type") or "").lower()
     issuing_party = _normalize_for_match(data.get("issuing_party") or "")
     title = _normalize_for_match(data.get("document_title") or "")
-    if doc_type != "invoice" or issuing_party != "bpi":
+    if not _doc_matches_line_item_config(doc_type, issuing_party, config):
         return []
-    if "comissoes" not in title and "titulos" not in title:
+    title_terms = tuple(_normalize_for_match(item) for item in _config_sequence(config, "title_terms"))
+    if title_terms and not any(term in title for term in title_terms):
         return []
 
     try:
@@ -922,13 +1059,17 @@ def _extract_bpi_stock_invoice_line_items(pdf_path: Path, data: dict) -> list[Ca
         sale_entries: list[tuple[int, str, Optional[str], Optional[str]]] = []
 
         for sale_index, normalized_line in enumerate(normalized_lines):
-            if "VENDA DE" not in normalized_line or "ACCOES" not in normalized_line:
+            required_terms = _config_sequence(config, "sale_required_terms")
+            if not all(term in normalized_line for term in required_terms):
                 continue
             reference = None
-            for candidate_line in lines[sale_index + 1 : sale_index + 15]:
-                match = re.search(
-                    r"N[ºO]\s+ORDEM:\s*([A-Z0-9]+)",
-                    strip_diacritics(candidate_line).upper(),
+            reference_pattern = _config_regex(config, "order_reference_pattern")
+            reference_search_after = _config_int(config, "reference_search_after", 15)
+            for candidate_line in lines[sale_index + 1 : sale_index + reference_search_after]:
+                match = (
+                    reference_pattern.search(strip_diacritics(candidate_line).upper())
+                    if reference_pattern
+                    else None
                 )
                 if match:
                     reference = match.group(1)
@@ -943,7 +1084,7 @@ def _extract_bpi_stock_invoice_line_items(pdf_path: Path, data: dict) -> list[Ca
         total_credit_indices = [
             index
             for index, normalized_line in enumerate(normalized_lines[:first_sale_index])
-            if normalized_line == "TOTAL A CREDITO"
+            if normalized_line == str(config.get("total_credit_marker", "TOTAL A CREDITO"))
         ]
         if not total_credit_indices:
             continue
@@ -966,7 +1107,8 @@ def _extract_bpi_stock_invoice_line_items(pdf_path: Path, data: dict) -> list[Ca
             credit_entries,
         ):
             movement_date = None
-            for date_line in reversed(lines[max(0, sale_index - 25) : sale_index + 1]):
+            lookback = _config_int(config, "movement_date_lookback", 25)
+            for date_line in reversed(lines[max(0, sale_index - lookback) : sale_index + 1]):
                 movement_date = _parse_partial_movement_date_from_line(date_line, issue_date)
                 if movement_date:
                     break
@@ -976,14 +1118,14 @@ def _extract_bpi_stock_invoice_line_items(pdf_path: Path, data: dict) -> list[Ca
             _append_line_item(
                 line_items,
                 seen,
-                category="stock-sale-bpi",
+                category=str(config.get("category", "stock-sale-bpi")),
                 amount=amount,
                 label=label,
                 date_issued=movement_date,
                 reference=reference,
                 amount_currency=currency,
                 amount_match_required=False,
-                document_type="bank-stock-sell",
+                document_type=str(config.get("document_type", "bank-stock-sell")),
             )
 
     if line_items:
@@ -999,9 +1141,13 @@ def _extract_bpi_stock_invoice_line_items(pdf_path: Path, data: dict) -> list[Ca
 
 
 def _extract_bpi_transfer_line_items(pdf_path: Path, data: dict) -> list[CandidateLineItem]:
+    config = _line_item_config("bpi_transfer")
     doc_type = (data.get("document_type") or "").lower()
     issuing_party = _normalize_for_match(data.get("issuing_party") or "")
-    if doc_type not in {"bank-note", "bank-transfer"} or issuing_party != "bpi":
+    if not _doc_matches_line_item_config(doc_type, issuing_party, config):
+        return []
+    line_pattern = _config_regex(config, "line_pattern", flags=re.IGNORECASE)
+    if line_pattern is None:
         return []
 
     try:
@@ -1022,16 +1168,17 @@ def _extract_bpi_transfer_line_items(pdf_path: Path, data: dict) -> list[Candida
         issue_date = _parse_page_issue_date(page_text, data.get("date_issued"))
         normalized_lines = [strip_diacritics(line).upper() for line in lines]
         for index, normalized_line in enumerate(normalized_lines):
-            match = _BPI_TRANSFER_LINE_RE.search(normalized_line)
+            match = line_pattern.search(normalized_line)
             if not match:
                 continue
 
-            amounts = _amounts_near(lines, index, before=8)
+            amounts = _amounts_near(lines, index, before=_config_int(config, "amount_search_before", 8))
             if not amounts:
                 continue
 
             movement_date = None
-            for line in lines[index + 1 : index + 5]:
+            date_search_after = _config_int(config, "date_search_after", 5)
+            for line in lines[index + 1 : index + date_search_after]:
                 movement_date = _parse_partial_movement_date(line, issue_date)
                 if movement_date:
                     break
@@ -1040,7 +1187,7 @@ def _extract_bpi_transfer_line_items(pdf_path: Path, data: dict) -> list[Candida
             _append_line_item(
                 line_items,
                 seen,
-                category="bank-transfer-sepa",
+                category=str(config.get("category", "bank-transfer-sepa")),
                 amount=amounts[-1],
                 label=lines[index],
                 date_issued=movement_date,
@@ -1056,13 +1203,10 @@ def _extract_bpi_transfer_line_items(pdf_path: Path, data: dict) -> list[Candida
 
 
 def _extract_millennium_fee_invoice_line_items(pdf_path: Path, data: dict) -> list[CandidateLineItem]:
+    config = _line_item_config("millennium_fee_invoice")
     doc_type = (data.get("document_type") or "").lower()
     issuing_party = _normalize_for_match(data.get("issuing_party") or "")
-    if doc_type not in {"invoice", "invoice-receipt"} or issuing_party not in {
-        "millenniumbcp",
-        "millenniumbancocomercialportugues",
-        "bancocomercialportugues",
-    }:
+    if not _doc_matches_line_item_config(doc_type, issuing_party, config):
         return []
 
     try:
@@ -1078,36 +1222,32 @@ def _extract_millennium_fee_invoice_line_items(pdf_path: Path, data: dict) -> li
     seen: set[tuple[str, float, str]] = set()
 
     for index, normalized_line in enumerate(normalized_lines):
-        amount = _next_amount_line(lines, index)
+        amount = _next_amount_line(lines, index, after=_config_int(config, "amount_search_after", 5))
         if amount is None:
             continue
 
-        if "CUSTO DE SERVICO INTERNACIONAL" in normalized_line:
+        matched_category = None
+        for marker, category in dict(config.get("markers", {})).items():
+            if str(marker) in normalized_line:
+                matched_category = str(category)
+                break
+        if matched_category:
             _append_line_item(
                 line_items,
                 seen,
-                category="bank-fee-international-service",
-                amount=amount,
-                label=lines[index],
-                date_issued=movement_date,
-            )
-        elif "COMISSAO REFERENTE" in normalized_line:
-            _append_line_item(
-                line_items,
-                seen,
-                category="bank-fee-maintenance",
+                category=matched_category,
                 amount=amount,
                 label=lines[index],
                 date_issued=movement_date,
             )
         elif (
-            ("IMPOSTO DO SELO" in normalized_line or "IMP. SELO" in normalized_line)
-            and "17.3.4" in normalized_line
+            any(marker in normalized_line for marker in _config_sequence(config, "stamp_duty_markers"))
+            and str(config.get("stamp_duty_legal_reference", "")) in normalized_line
         ):
             _append_line_item(
                 line_items,
                 seen,
-                category="bank-fee-stamp-duty",
+                category=str(config.get("stamp_duty_category", "bank-fee-stamp-duty")),
                 amount=amount,
                 label=lines[index],
                 date_issued=movement_date,
@@ -1122,18 +1262,21 @@ def _extract_millennium_fee_invoice_line_items(pdf_path: Path, data: dict) -> li
 
 
 def _extract_millennium_movement_date(lines: list[str], normalized_lines: list[str]) -> Optional[str]:
+    config = _line_item_config("millennium_fee_invoice")
+    marker = str(config.get("movement_date_marker", "DATA DO MOVIMENTO"))
+    amount_search_after = _config_int(config, "amount_search_after", 5)
     for index, normalized_line in enumerate(normalized_lines):
-        if "DATA DO MOVIMENTO" not in normalized_line:
+        if marker not in normalized_line:
             continue
-        for candidate_line in lines[index + 1 : index + 5]:
+        for candidate_line in lines[index + 1 : index + amount_search_after]:
             parsed = _date_from_iso(candidate_line.strip())
             if parsed:
                 return parsed.isoformat()
     return None
 
 
-def _next_amount_line(lines: list[str], index: int) -> Optional[float]:
-    for line in lines[index + 1 : index + 5]:
+def _next_amount_line(lines: list[str], index: int, *, after: int = 5) -> Optional[float]:
+    for line in lines[index + 1 : index + after]:
         amount = _parse_euro_amount_line(line)
         if amount is not None:
             return amount
@@ -1141,8 +1284,14 @@ def _next_amount_line(lines: list[str], index: int) -> Optional[float]:
 
 
 def _extract_direct_debit_invoice_line_items(pdf_path: Path, data: dict) -> list[CandidateLineItem]:
+    config = _line_item_config("direct_debit")
     doc_type = (data.get("document_type") or "").lower()
     if doc_type not in _reconciliation_policy().supporting_doc_type_patterns:
+        return []
+    date_pattern = _config_regex(config, "date_pattern")
+    amount_pattern = _config_regex(config, "amount_pattern")
+    auth_pattern = _config_regex(config, "auth_pattern")
+    if date_pattern is None or amount_pattern is None:
         return []
 
     try:
@@ -1153,8 +1302,8 @@ def _extract_direct_debit_invoice_line_items(pdf_path: Path, data: dict) -> list
         return []
 
     normalized_text = strip_diacritics(text).upper()
-    date_match = _DIRECT_DEBIT_DATE_RE.search(normalized_text)
-    amount_match = _DIRECT_DEBIT_AMOUNT_RE.search(normalized_text)
+    date_match = date_pattern.search(normalized_text)
+    amount_match = amount_pattern.search(normalized_text)
     if not date_match or not amount_match:
         return []
 
@@ -1169,16 +1318,17 @@ def _extract_direct_debit_invoice_line_items(pdf_path: Path, data: dict) -> list
     except ValueError:
         return []
 
-    auth_match = _DIRECT_DEBIT_AUTH_RE.search(normalized_text)
+    auth_match = auth_pattern.search(normalized_text) if auth_pattern else None
     reference = auth_match.group(1) if auth_match else None
 
     line_items: list[CandidateLineItem] = []
     seen: set[tuple[str, float, str]] = set()
-    label = "Direct debit" if reference is None else f"Direct debit {reference}"
+    label_prefix = str(config.get("label", "Direct debit"))
+    label = label_prefix if reference is None else f"{label_prefix} {reference}"
     _append_line_item(
         line_items,
         seen,
-        category="supplier-payment",
+        category=str(config.get("category", "supplier-payment")),
         amount=amount,
         label=label,
         date_issued=debit_date,
@@ -1190,8 +1340,14 @@ def _extract_direct_debit_invoice_line_items(pdf_path: Path, data: dict) -> list
 
 
 def _extract_insurance_notice_line_items(pdf_path: Path, data: dict) -> list[CandidateLineItem]:
+    config = _line_item_config("insurance_notice")
     doc_type = (data.get("document_type") or "").lower()
-    if doc_type != "insurance-notice":
+    doc_types = {item.lower() for item in _config_sequence(config, "document_types")}
+    if doc_types and doc_type not in doc_types:
+        return []
+    period_pattern = _config_regex(config, "period_pattern", flags=re.DOTALL)
+    reference_pattern = _config_regex(config, "reference_pattern")
+    if period_pattern is None:
         return []
 
     amount = _coerce_amount(data.get("total_amount"))
@@ -1206,7 +1362,7 @@ def _extract_insurance_notice_line_items(pdf_path: Path, data: dict) -> list[Can
         return []
 
     normalized_text = strip_diacritics(text).upper()
-    period_match = _INSURANCE_PERIOD_RE.search(normalized_text)
+    period_match = period_pattern.search(normalized_text)
     if not period_match:
         return []
 
@@ -1216,16 +1372,17 @@ def _extract_insurance_notice_line_items(pdf_path: Path, data: dict) -> list[Can
     except ValueError:
         return []
 
-    adc_match = _DIRECT_DEBIT_ADC_RE.search(normalized_text)
+    adc_match = reference_pattern.search(normalized_text) if reference_pattern else None
     reference = adc_match.group(1) if adc_match else None
-    label = "Insurance direct debit" if reference is None else f"Insurance direct debit {reference}"
+    label_prefix = str(config.get("label", "Insurance direct debit"))
+    label = label_prefix if reference is None else f"{label_prefix} {reference}"
 
     line_items: list[CandidateLineItem] = []
     seen: set[tuple[str, float, str]] = set()
     _append_line_item(
         line_items,
         seen,
-        category="supplier-payment",
+        category=str(config.get("category", "supplier-payment")),
         amount=amount,
         label=label,
         date_issued=debit_date,
@@ -1660,8 +1817,8 @@ def _is_candidate_compatible_with_statement_bank(
         return True
 
     candidate_bank = _statement_bank_key(candidate.issuing_party)
-    if statement_bank == "bpi":
-        return candidate_bank == "bpi"
+    if statement_bank in set(_reconciliation_policy().strict_statement_banks):
+        return candidate_bank == statement_bank
     if not candidate_bank:
         return True
     return candidate_bank == statement_bank
@@ -1944,13 +2101,13 @@ def _link_line_item_documents(
 def _line_item_category_matches(category: str, line_item: CandidateLineItem) -> bool:
     if line_item.category == category:
         return True
-    if category == "bank-fee":
-        return line_item.category.startswith("bank-fee") or line_item.category == "bank-custody-fee"
-    if category == "bank-only":
-        return line_item.category.startswith("bank-transfer")
-    if category == "investment":
-        return line_item.category.startswith("stock-")
-    return False
+    aliases = _reconciliation_policy().line_item_category_aliases.get(category, {})
+    if line_item.category in set(_config_sequence(aliases, "categories")):
+        return True
+    return any(
+        line_item.category.startswith(prefix)
+        for prefix in _config_sequence(aliases, "prefixes")
+    )
 
 
 def _link_related_no_amount_documents(
@@ -2096,9 +2253,11 @@ def _link_evidence_counterparty_documents(
 
     for match in all_matches:
         category, rule = _classify_transaction(match.transaction, rules)
-        if rule is None or category not in {"supplier-payment", "bank-fee"}:
+        policy = _reconciliation_policy()
+        if rule is None or category not in set(policy.evidence_counterparty_categories):
             continue
-        if not any(engine.match_doc_type("invoice", pattern) for pattern in rule.required_types):
+        required_pattern = policy.evidence_counterparty_required_pattern
+        if not any(engine.match_doc_type(required_pattern, pattern) for pattern in rule.required_types):
             continue
         if category == "supplier-payment" and any(
             candidate.is_supplier_evidence for candidate in match.pdf_candidates
@@ -2401,12 +2560,14 @@ def _validate_required_documents(matches: list[MatchResult], rules: list) -> dic
     for match in matches:
         _, rule = _classify_transaction(match.transaction, rules)
         row_errors = engine.validate_match(match, rules)
-        if rule is not None and rule.name == "supplier-payment":
+        policy = _reconciliation_policy()
+        if rule is not None:
             row_errors = [
                 error
                 for error in row_errors
                 if not (
                     error.startswith("missing supplier-evidence")
+                    and rule.name in policy.shared_period_supplier_evidence_error_exempt_rule_names
                     and any(
                         candidate.is_bank_anchor and _is_shared_period_counterparty(candidate)
                         for candidate in match.pdf_candidates
@@ -2414,6 +2575,7 @@ def _validate_required_documents(matches: list[MatchResult], rules: list) -> dic
                 )
                 and not (
                     error.startswith("missing bank-anchor")
+                    and rule.name in policy.shared_period_bank_anchor_error_exempt_rule_names
                     and _is_via_verde_transaction(match.transaction)
                     and any(
                         _is_via_verde_shared_period_candidate(candidate)
@@ -2450,7 +2612,9 @@ def _validate_supporting_documents_have_bank_pair(
     matches: list[MatchResult],
     statement_issuing_party: Optional[str],
 ) -> dict[int, list[str]]:
-    if _statement_bank_key(statement_issuing_party) == "bpi":
+    if _statement_bank_key(statement_issuing_party) in set(
+        _reconciliation_policy().supporting_pair_exempt_statement_banks
+    ):
         return {}
 
     errors: dict[int, list[str]] = {}
@@ -2625,7 +2789,11 @@ def _link_via_verde_period_documents(
 
     for txn in all_txns:
         category, rule = _classify_transaction(txn, rules)
-        if rule is None or category != "supplier-payment" or not _is_via_verde_transaction(txn):
+        if (
+            rule is None
+            or category not in set(_reconciliation_policy().shared_period_link_categories)
+            or not _is_via_verde_transaction(txn)
+        ):
             continue
 
         txn_date = txn.date_posting or txn.date_value
@@ -2658,7 +2826,7 @@ def _link_via_verde_period_documents(
                 match.pdf_candidates.append(shared_candidate)
                 if match.method == "exact":
                     match.reasoning = (
-                        f"{match.reasoning}; shared Shared Toll period document: "
+                        f"{match.reasoning}; shared period document: "
                         f"{shared_candidate.pdf_filename}"
                     )
         elif txn.row_number in still_unmatched_rows:
@@ -2668,7 +2836,7 @@ def _link_via_verde_period_documents(
                     pdf_candidates=[shared_candidate],
                     method="shared",
                     confidence=1.0,
-                    reasoning=f"Shared Shared Toll period document: {shared_candidate.pdf_filename}",
+                    reasoning=f"Shared period document: {shared_candidate.pdf_filename}",
                 )
             )
             still_unmatched_rows.discard(txn.row_number)

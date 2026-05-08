@@ -17,13 +17,22 @@ from papertrail.reconciliation_defaults import (
     DEFAULT_BANK_GENERATED_DOC_TYPES,
     DEFAULT_COUNTERPARTY_ALIASES,
     DEFAULT_DATE_WINDOW_DAYS,
+    DEFAULT_EVIDENCE_COUNTERPARTY_CATEGORIES,
+    DEFAULT_EVIDENCE_COUNTERPARTY_REQUIRED_PATTERN,
+    DEFAULT_LINE_ITEM_CATEGORY_ALIASES,
+    DEFAULT_LINE_ITEM_EXTRACTORS,
     DEFAULT_SAME_MONTH_SHARED_RULE_NAMES,
+    DEFAULT_SHARED_PERIOD_BANK_ANCHOR_ERROR_EXEMPT_RULE_NAMES,
+    DEFAULT_SHARED_PERIOD_LINK_CATEGORIES,
+    DEFAULT_SHARED_PERIOD_SUPPLIER_EVIDENCE_ERROR_EXEMPT_RULE_NAMES,
     DEFAULT_SHARED_PERIOD_TITLE_TERMS,
     DEFAULT_SHARED_PERIOD_TRANSACTION_KEYWORDS,
     DEFAULT_STATEMENT_BANK_ISSUER_ALIASES,
     DEFAULT_STATEMENT_BANK_SCOPED_DOC_TYPES,
+    DEFAULT_STRICT_STATEMENT_BANKS,
     DEFAULT_SUPPORTING_DOC_TYPE_PATTERNS,
     DEFAULT_SUPPORTING_EXPORT_PREFIXES,
+    DEFAULT_SUPPORTING_PAIR_EXEMPT_STATEMENT_BANKS,
 )
 
 try:
@@ -103,6 +112,50 @@ class PasswordSettings(SettingsModel):
 
 class NIFAPISettings(SettingsModel):
     enabled: bool = False
+    enabled_locales: list[str] = Field(default_factory=lambda: ["pt-PT"])
+
+
+class DocumentTypeOverride(SettingsModel):
+    target: str
+    raw_types: list[str] = Field(default_factory=list)
+    context_all: list[str] = Field(default_factory=list)
+    context_any: list[str] = Field(default_factory=list)
+
+
+class ClassificationSettings(SettingsModel):
+    document_type_overrides: list[DocumentTypeOverride] = Field(
+        default_factory=lambda: [
+            {"target": "bank-note", "raw_types": ["movimento", "notadelancamento"]},
+            {
+                "target": "investment-acquisition-summary",
+                "context_all": ["mapa", "resumo", "datas", "valores", "aquisicao", "mobiliarios"],
+            },
+            {
+                "target": "loan-simulation",
+                "raw_types": ["simulacao", "simulation"],
+                "context_any": ["credito", "credit", "loan", "emprestimo", "financiamento"],
+            },
+            {"target": "bank-note", "context_all": ["concess", "cred", "empr"]},
+        ]
+    )
+    prompt_document_type_rules: list[str] = Field(
+        default_factory=lambda: [
+            "For a credit/loan product simulation (e.g. 'Simulação Crédito Digital Finance Desk'), use loan-simulation",
+            "For Millennium/BCP loan disbursement movement details with wording like 'CONCESS CRED EMPR MN', use bank-note, not bank-transfer. Do not treat navigation/counterparty text such as 'TRF P/ ... - BPI' as the issuer or title.",
+        ]
+    )
+    prompt_issuing_party_rules: list[str] = Field(
+        default_factory=lambda: [
+            "For bank notes, movements, and payment confirmations, issuing_party is the bank or financial institution that generated the document. Do not use the merchant, payee, beneficiary, destination bank, or counterparty as issuing_party; keep those details in document_title or reasoning instead",
+            "For Portuguese bank-generated documents, use Banco BPI/BPI -> bpi and Millennium bcp/Banco Comercial Português/BCP -> millennium-bcp when visible",
+        ]
+    )
+    issuer_tax_number_prefix_rule: str = (
+        "Include country prefix when visible (e.g., DETESTOWNER). "
+        "Omit prefix only for Portuguese documents where no prefix is shown. Null if the issuer tax number is not visible."
+    )
+    document_title_max_chars: int = 60
+    bank_statement_locale: str = "pt-PT"
 
 
 class ReconciliationRule(SettingsModel):
@@ -158,6 +211,37 @@ class ReconciliationSettings(SettingsModel):
     same_month_shared_rule_names: list[str] = Field(
         default_factory=lambda: list(DEFAULT_SAME_MONTH_SHARED_RULE_NAMES)
     )
+    strict_statement_banks: list[str] = Field(
+        default_factory=lambda: list(DEFAULT_STRICT_STATEMENT_BANKS)
+    )
+    supporting_pair_exempt_statement_banks: list[str] = Field(
+        default_factory=lambda: list(DEFAULT_SUPPORTING_PAIR_EXEMPT_STATEMENT_BANKS)
+    )
+    shared_period_link_categories: list[str] = Field(
+        default_factory=lambda: list(DEFAULT_SHARED_PERIOD_LINK_CATEGORIES)
+    )
+    shared_period_supplier_evidence_error_exempt_rule_names: list[str] = Field(
+        default_factory=lambda: list(DEFAULT_SHARED_PERIOD_SUPPLIER_EVIDENCE_ERROR_EXEMPT_RULE_NAMES)
+    )
+    shared_period_bank_anchor_error_exempt_rule_names: list[str] = Field(
+        default_factory=lambda: list(DEFAULT_SHARED_PERIOD_BANK_ANCHOR_ERROR_EXEMPT_RULE_NAMES)
+    )
+    evidence_counterparty_categories: list[str] = Field(
+        default_factory=lambda: list(DEFAULT_EVIDENCE_COUNTERPARTY_CATEGORIES)
+    )
+    evidence_counterparty_required_pattern: str = DEFAULT_EVIDENCE_COUNTERPARTY_REQUIRED_PATTERN
+    line_item_category_aliases: dict[str, dict[str, object]] = Field(
+        default_factory=lambda: {
+            name: dict(settings)
+            for name, settings in DEFAULT_LINE_ITEM_CATEGORY_ALIASES.items()
+        }
+    )
+    line_item_extractors: dict[str, dict[str, object]] = Field(
+        default_factory=lambda: {
+            name: dict(settings)
+            for name, settings in DEFAULT_LINE_ITEM_EXTRACTORS.items()
+        }
+    )
 
 
 class ExportRule(SettingsModel):
@@ -190,6 +274,7 @@ class ProfileSettings(SettingsModel):
     gmail: GmailSettings = Field(default_factory=GmailSettings)
     passwords: PasswordSettings = Field(default_factory=PasswordSettings)
     nif_api: NIFAPISettings = Field(default_factory=NIFAPISettings)
+    classification: ClassificationSettings = Field(default_factory=ClassificationSettings)
     reconciliation: ReconciliationSettings = Field(default_factory=ReconciliationSettings)
     export: ExportSettings = Field(default_factory=ExportSettings)
     profile_path: Path | None = Field(default=None, exclude=True)
@@ -218,6 +303,7 @@ def _normalize_profile_data(data: dict[str, object], profile_path: Path | None) 
         "gmail": {},
         "passwords": {},
         "nif_api": {},
+        "classification": {},
         "reconciliation": {},
         "export": {},
     }
@@ -243,6 +329,22 @@ def _normalize_profile_data(data: dict[str, object], profile_path: Path | None) 
     gmail.setdefault("skip_already_downloaded", True)
 
     normalized["nif_api"].setdefault("enabled", False)
+    normalized["nif_api"].setdefault("enabled_locales", ["pt-PT"])
+    normalized["classification"].setdefault("document_type_overrides", ClassificationSettings().document_type_overrides)
+    normalized["classification"].setdefault(
+        "prompt_document_type_rules",
+        ClassificationSettings().prompt_document_type_rules,
+    )
+    normalized["classification"].setdefault(
+        "prompt_issuing_party_rules",
+        ClassificationSettings().prompt_issuing_party_rules,
+    )
+    normalized["classification"].setdefault(
+        "issuer_tax_number_prefix_rule",
+        ClassificationSettings().issuer_tax_number_prefix_rule,
+    )
+    normalized["classification"].setdefault("document_title_max_chars", 60)
+    normalized["classification"].setdefault("bank_statement_locale", "pt-PT")
 
     paths = normalized["paths"]
     raw = paths.get("raw")
