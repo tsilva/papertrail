@@ -47,10 +47,70 @@ processing:
     include_last: true
     currency_by_country:
       PT: "EUR"
+    default_currency: "EUR"
+    document_type_codes:
+      FT: "invoice"
+      FS: "invoice"
+      FR: "invoice-receipt"
+      NC: "invoice-credit"
+      ND: "invoice-debit"
+      RC: "receipt"
+      RG: "receipt"
   hashing:
     fast_chunk_size: 8192
     content_dpi: 150
     text_min_chars: 50
+
+workflow:
+  default_months: 2
+  sync_workers: 1
+  metadata_load_workers: 16
+
+tools:
+  default_profile: "default"
+  preview_dpi: 150
+  xlsx_preview_max_rows: 100
+
+dependencies:
+  # Optional explicit zbar paths when ctypes cannot find the shared library.
+  zbar_library_paths: []
+
+bank_statements:
+  formats:
+    millennium_bcp:
+      header_row: 8
+      data_start_row: 9
+      scan_columns: 7
+      expected_headers: ["data lancamento", "descricao", "montante"]
+      date_formats: ["%d/%m/%Y", "%d-%m-%Y"]
+      account_cell: [2, 3]
+      period_start_cell: [3, 3]
+      period_end_cell: [4, 3]
+      account_currency_separator: " - "
+      default_currency: "EUR"
+      issuer_party: "MillenniumBCP"
+      issuer_party_raw: "Millennium BCP"
+      max_columns: 7
+      description_column: 3
+      amount_column: 4
+      currency_column: 5
+      notes_column: 6
+      treated_column: 7
+      untreated_values: ["nao", "não", ""]
+    bpi:
+      header_row: 18
+      data_start_row: 19
+      scan_columns: 7
+      expected_headers: ["data mov.", "descricao do movimento", "valor em eur"]
+      date_formats: ["%d-%m-%Y", "%d/%m/%Y"]
+      account_cell: [7, 3]
+      account_currency_pattern: '([\d\-.]+)\s*\((\w+)\)'
+      default_currency: "EUR"
+      issuer_party: "BPI"
+      issuer_party_raw: "BPI"
+      max_columns: 4
+      description_column: 3
+      amount_column: 4
 
 nif_api:
   enabled: false
@@ -62,6 +122,7 @@ nif_api:
 # Gmail integration (optional)
 gmail:
   enabled: true
+  default_months: 2
   # Defaults to ~/.config/papertrail/credentials/ when null.
   credentials_file: null  # Defaults to ~/.config/papertrail/credentials/gmail_credentials.json
   token_file: null  # Defaults to ~/.config/papertrail/credentials/gmail_token.json

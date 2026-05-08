@@ -67,13 +67,19 @@ class PortugueseInvoiceQR:
         self,
         *,
         currency_by_country: dict[str, str] | None = None,
+        default_currency: str = "EUR",
+        document_type_codes: dict[str, str] | None = None,
     ) -> QRExtractedMetadata:
         """Convert to QRExtractedMetadata for pipeline integration."""
         issue_date = None
         if self.document_date and len(self.document_date) == 8:
-            issue_date = f"{self.document_date[:4]}-{self.document_date[4:6]}-{self.document_date[6:8]}"
+            issue_date = (
+                f"{self.document_date[:4]}-"
+                f"{self.document_date[4:6]}-"
+                f"{self.document_date[6:8]}"
+            )
 
-        doc_type_map = {
+        doc_type_map = document_type_codes or {
             "FT": "invoice",
             "FS": "invoice",
             "FR": "invoice-receipt",
@@ -89,8 +95,12 @@ class PortugueseInvoiceQR:
         locale = None
         if self.country_code:
             locale = f"{self.country_code.lower()}-{self.country_code}"
-        currencies = currency_by_country or {"PT": "EUR"}
-        currency = currencies.get(self.country_code.upper(), "EUR") if self.country_code else "EUR"
+        currencies = currency_by_country or {"PT": default_currency}
+        currency = (
+            currencies.get(self.country_code.upper(), default_currency)
+            if self.country_code
+            else default_currency
+        )
 
         return QRExtractedMetadata(
             issue_date=issue_date,

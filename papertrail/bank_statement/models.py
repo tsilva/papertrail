@@ -59,9 +59,17 @@ class BankTransactionRecord(TypedDict):
 class BankStatementParser(Protocol):
     FORMAT: BankFormat
 
-    def can_parse(self, ws) -> bool: ...
-    def parse(self, xlsx_path) -> BankStatementData | None: ...
-    def load_transactions(self, xlsx_path) -> list[BankTransactionRecord] | None: ...
+    def can_parse(self, ws, config: dict[str, object] | None = None) -> bool: ...
+    def parse(
+        self,
+        xlsx_path,
+        config: dict[str, object] | None = None,
+    ) -> BankStatementData | None: ...
+    def load_transactions(
+        self,
+        xlsx_path,
+        config: dict[str, object] | None = None,
+    ) -> list[BankTransactionRecord] | None: ...
 
 
 def parse_bank_date(value: str, formats: tuple[str, ...]) -> str | None:

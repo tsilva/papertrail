@@ -190,7 +190,7 @@ class DocumentRepository:
         self,
         scope: str | Path = "processed",
         validate: bool = False,
-        max_workers: int = 16,
+        max_workers: int | None = None,
         show_progress: bool = False,
         progress_desc: str = "Loading metadata",
     ) -> list[tuple[Path, DocumentMetadata | dict]]:
@@ -205,6 +205,10 @@ class DocumentRepository:
                 logger.warning(f"Skipping invalid sidecar {json_path}: {exc}")
                 return None
 
+        if max_workers is None:
+            max_workers = int(
+                getattr(self.runtime.profile.workflow, "metadata_load_workers", 16) or 16
+            )
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
             raw_results = list(executor.map(_load_one, json_files))
 

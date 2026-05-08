@@ -9,10 +9,10 @@ from typing import Optional
 
 import typer
 
+from papertrail import commands
 from papertrail.config import ConfigError, ProfileNotFoundError
 from papertrail.logging_utils import get_logger
 from papertrail.runtime import Runtime, create_runtime
-from papertrail import commands
 
 logger = get_logger("cli")
 
@@ -117,6 +117,18 @@ def _resolve_dir(path_str: Optional[str], name: str, create: bool = False) -> Pa
     return p
 
 
+def _default_months(runtime: Runtime, section: str = "workflow") -> int:
+    profile = getattr(runtime, "profile", None)
+    if profile is None:
+        return 2
+    settings = getattr(profile, section, None)
+    value = getattr(settings, "default_months", None)
+    if value is None:
+        workflow = getattr(profile, "workflow", None)
+        value = getattr(workflow, "default_months", 2)
+    return int(value or 2)
+
+
 @contextmanager
 def _task_log_context(runtime: Runtime, processed_path: Path, task_name: str):
     log_file_path = commands.setup_task_logging(processed_path, task_name)
@@ -165,12 +177,19 @@ def main(
                 indent=False,
             )
             runtime.console.detail(
-                "Run an offline subcommand explicitly, or retry once the API base URL is reachable.",
+                "Run an offline subcommand explicitly, or retry once the API base URL is "
+                "reachable.",
                 indent=False,
             )
             typer.echo(ctx.get_help())
             return
-        _run_pipeline(ctx, months=2, export_date=None, profile=profile, verbose=verbose)
+        _run_pipeline(
+            ctx,
+            months=_default_months(runtime),
+            export_date=None,
+            profile=profile,
+            verbose=verbose,
+        )
 
 
 # ── Commands ─────────────────────────────────────────────────────
@@ -179,13 +198,23 @@ def main(
 @app.command("pipeline")
 def pipeline_cmd(
     ctx: typer.Context,
-    months: int = typer.Option(2, help="Months to process (default: 2)."),
+    months: Optional[int] = typer.Option(
+        None,
+        help="Months to process. Defaults to workflow.default_months.",
+    ),
     export_date: Optional[str] = typer.Option(None, help="Export date in YYYY-MM format."),
     profile: Optional[str] = typer.Option(None, help=PROFILE_OPTION_HELP),
     verbose: bool = typer.Option(False, "-v", "--verbose", help="Enable verbose output."),
 ):
     """Full end-to-end workflow (default)."""
-    _run_pipeline(ctx, months=months, export_date=export_date, profile=profile, verbose=verbose)
+    runtime = _resolve_runtime(ctx, profile=profile, verbose=verbose)
+    _run_pipeline(
+        ctx,
+        months=months or _default_months(runtime),
+        export_date=export_date,
+        profile=profile,
+        verbose=verbose,
+    )
 
 
 @app.command()
@@ -218,20 +247,26 @@ def sync(
     pattern: Optional[str] = typer.Option(None, help="Glob/regex pattern."),
     dry_run: bool = typer.Option(False, help="Preview without modifying."),
     all_unknown: bool = typer.Option(False, help="Re-extract all $UNKNOWN$ values."),
-    workers: int = typer.Option(1, "-w", "--workers", help="Parallel workers."),
+    workers: Optional[int] = typer.Option(
+        None,
+        "-w",
+        "--workers",
+        help="Parallel workers. Defaults to workflow.sync_workers.",
+    ),
     all_pdfs: bool = typer.Option(False, "--all", help="Process all PDFs, not just orphans."),
     profile: Optional[str] = typer.Option(None, help=PROFILE_OPTION_HELP),
     verbose: bool = typer.Option(False, "-v", "--verbose", help="Enable verbose output."),
 ):
     """Sync metadata."""
     runtime = _resolve_runtime(ctx, profile=profile, verbose=verbose)
+    resolved_workers = workers or int(getattr(runtime.profile.workflow, "sync_workers", 1) or 1)
     commands.sync(
         runtime,
         _resolve_processed(runtime, processed_path),
         dry_run=dry_run,
         all_unknown=all_unknown,
         pattern=pattern,
-        workers=workers,
+        workers=resolved_workers,
         all=all_pdfs,
     )
 
@@ -319,15 +354,20 @@ def regression(
 @app.command()
 def gmail(
     ctx: typer.Context,
-    months: int = typer.Option(2, help="Months to process (default: 2)."),
+    months: Optional[int] = typer.Option(
+        None,
+        help="Months to process. Defaults to gmail.default_months.",
+    ),
     profile: Optional[str] = typer.Option(None, help=PROFILE_OPTION_HELP),
     verbose: bool = typer.Option(False, "-v", "--verbose", help="Enable verbose output."),
 ):
     """Download email attachments from Gmail."""
-    if months < 1:
+    runtime = _resolve_runtime(ctx, profile=profile, verbose=verbose)
+    resolved_months = months or _default_months(runtime, "gmail")
+    if resolved_months < 1:
         _fail("--months must be >= 1.")
     try:
-        commands.gmail(_resolve_runtime(ctx, profile=profile, verbose=verbose), months=months)
+        commands.gmail(runtime, months=resolved_months)
     except RuntimeError:
         sys.exit(1)
 

@@ -25,7 +25,11 @@ def is_portuguese_invoice_qr(raw_content: str) -> bool:
     if not raw_content:
         return False
     content = raw_content.strip()
-    return content.startswith("A:") and "*" in content and ("*H:" in content or content.startswith("H:"))
+    return (
+        content.startswith("A:")
+        and "*" in content
+        and ("*H:" in content or content.startswith("H:"))
+    )
 
 
 def detect_qr_type(raw_content: str) -> QRCodeType:
@@ -47,6 +51,8 @@ def parse_portuguese_invoice_qr(
     qr_data: QRCodeData,
     *,
     currency_by_country: dict[str, str] | None = None,
+    default_currency: str = "EUR",
+    document_type_codes: dict[str, str] | None = None,
 ) -> tuple[Optional[QRExtractedMetadata], Optional[dict]]:
     """Parse Portuguese invoice QR code and extract metadata."""
     try:
@@ -103,7 +109,11 @@ def parse_portuguese_invoice_qr(
             "raw_content": qr_data.raw_content,
             "page_number": qr_data.page_number,
         }
-        return parsed.to_extracted_metadata(currency_by_country=currency_by_country), raw_data
+        return parsed.to_extracted_metadata(
+            currency_by_country=currency_by_country,
+            default_currency=default_currency,
+            document_type_codes=document_type_codes,
+        ), raw_data
     except Exception as e:
         logger.warning(f"Failed to parse Portuguese invoice QR: {e}")
         return None, None
@@ -111,6 +121,13 @@ def parse_portuguese_invoice_qr(
 # Lazy import pyzbar to allow graceful degradation
 _pyzbar_available = None
 _pyzbar_decode = None
+_configured_zbar_paths: list[str] = []
+
+
+def configure_zbar_library_paths(paths: list[str] | tuple[str, ...] | None) -> None:
+    """Set optional zbar shared-library paths from runtime configuration."""
+    global _configured_zbar_paths
+    _configured_zbar_paths = [str(path) for path in paths or [] if str(path)]
 
 
 def _find_zbar_library() -> Optional[str]:
@@ -120,6 +137,14 @@ def _find_zbar_library() -> Optional[str]:
     lib = ctypes.util.find_library('zbar')
     if lib:
         return lib
+
+    env_path = os.environ.get("PAPERTRAIL_ZBAR_LIBRARY")
+    if env_path and Path(env_path).exists():
+        return env_path
+
+    for lib_path in _configured_zbar_paths:
+        if Path(lib_path).exists():
+            return lib_path
 
     if sys.platform == 'darwin':
         zbar_paths = [
@@ -149,7 +174,7 @@ _original_find_library = None
 
 
 def _setup_pyzbar_library():
-    """Patch ctypes.util.find_library to return our zbar path. Must be called before importing pyzbar."""
+    """Patch ctypes.util.find_library to return our zbar path before importing pyzbar."""
     global _original_find_library
 
     lib_path = _find_zbar_library()
@@ -330,6 +355,8 @@ def extract_all_metadata_from_qr(
     include_last: bool = True,
     dpi: int = 300,
     currency_by_country: dict[str, str] | None = None,
+    default_currency: str = "EUR",
+    document_type_codes: dict[str, str] | None = None,
 ) -> list[tuple[QRExtractedMetadata, dict]]:
     """Extract metadata from ALL Portuguese invoice QR codes in a PDF.
 
@@ -351,6 +378,8 @@ def extract_all_metadata_from_qr(
             metadata, raw_data = parse_portuguese_invoice_qr(
                 qr_data,
                 currency_by_country=currency_by_country,
+                default_currency=default_currency,
+                document_type_codes=document_type_codes,
             )
             if metadata:
                 logger.debug(
@@ -361,7 +390,9 @@ def extract_all_metadata_from_qr(
                 results.append((metadata, raw_data))
 
     if len(results) >= 2:
-        logger.debug(f"[MULTI-QR] Found {len(results)} Portuguese invoice QR codes in {pdf_path.name}")
+        logger.debug(
+            f"[MULTI-QR] Found {len(results)} Portuguese invoice QR codes in {pdf_path.name}"
+        )
 
     return results
 
@@ -373,6 +404,8 @@ def extract_metadata_from_qr(
     include_last: bool = True,
     dpi: int = 300,
     currency_by_country: dict[str, str] | None = None,
+    default_currency: str = "EUR",
+    document_type_codes: dict[str, str] | None = None,
 ) -> tuple[Optional[QRExtractedMetadata], Optional[dict]]:
     """Extract metadata from QR codes in a PDF. Returns (metadata, raw_data) or (None, None)."""
     results = extract_all_metadata_from_qr(
@@ -381,5 +414,7 @@ def extract_metadata_from_qr(
         include_last=include_last,
         dpi=dpi,
         currency_by_country=currency_by_country,
+        default_currency=default_currency,
+        document_type_codes=document_type_codes,
     )
     return results[0] if results else (None, None)

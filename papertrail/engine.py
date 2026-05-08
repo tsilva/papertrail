@@ -36,7 +36,7 @@ from papertrail.pdf import (
     render_pdf_to_images,
     split_pdf_bundle,
 )
-from papertrail.qr.extractor import extract_all_metadata_from_qr
+from papertrail.qr.extractor import configure_zbar_library_paths, extract_all_metadata_from_qr
 from papertrail.qr.models import QRExtractedMetadata
 from papertrail.repository import DocumentRepository
 from papertrail.runtime import Runtime
@@ -74,12 +74,15 @@ def _extract_qr_with_runtime_settings(
     settings = runtime.profile.processing.qr
     if not settings.enabled:
         return []
+    configure_zbar_library_paths(runtime.profile.dependencies.zbar_library_paths)
     return extract_all_metadata_from_qr(
         pdf_path,
         max_pages=settings.max_pages,
         include_last=settings.include_last,
         dpi=settings.dpi,
         currency_by_country=settings.currency_by_country,
+        default_currency=settings.default_currency,
+        document_type_codes=settings.document_type_codes,
     )
 
 
@@ -808,6 +811,7 @@ class DocumentEngine:
                     source_path,
                     file_hash,
                     locale=self.runtime.profile.classification.bank_statement_locale,
+                    settings=self.runtime.profile.bank_statements,
                 )
             except BankStatementReadError as exc:
                 logger.error(f"Failed to read XLSX {source_path.name}: {exc}")

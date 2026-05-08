@@ -24,7 +24,27 @@ def _load_profile(profile_name: str):
 
 
 def _active_profile_name() -> str:
-    return os.environ.get("PAPERTRAIL_PROFILE", "default")
+    return (
+        os.environ.get("PAPERTRAIL_UI_PROFILE")
+        or os.environ.get("PAPERTRAIL_PROFILE")
+        or os.environ.get("PAPERTRAIL_DEFAULT_PROFILE")
+        or "default"
+    )
+
+
+def _tool_setting_int(name: str, default: int) -> int:
+    env_name = f"PAPERTRAIL_{name.upper()}"
+    try:
+        return int(os.environ.get(env_name) or "")
+    except ValueError:
+        pass
+    profile = _load_profile(_active_profile_name())
+    if profile is None:
+        return default
+    try:
+        return int(getattr(profile.tools, name.lower(), default) or default)
+    except (TypeError, ValueError):
+        return default
 
 
 @lru_cache(maxsize=8)
@@ -97,7 +117,7 @@ def render_pdf_page_html(pdf_path, page_num=0):
         with fitz.open(str(pdf_path)) as doc:
             total = len(doc)
             page_num = max(0, min(page_num, total - 1))
-            pix = doc[page_num].get_pixmap(dpi=150)
+            pix = doc[page_num].get_pixmap(dpi=_tool_setting_int("preview_dpi", 150))
             b64 = base64.b64encode(pix.tobytes("png")).decode("utf-8")
             html = f'<img src="data:image/png;base64,{b64}" class="preview-img"/>'
             return html, total, page_num
@@ -105,9 +125,11 @@ def render_pdf_page_html(pdf_path, page_num=0):
         return placeholder_html("Error rendering PDF."), 0, 0
 
 
-def render_xlsx_as_html(xlsx_path, max_rows=100):
+def render_xlsx_as_html(xlsx_path, max_rows=None):
     import openpyxl
 
+    if max_rows is None:
+        max_rows = _tool_setting_int("xlsx_preview_max_rows", 100)
     warnings.filterwarnings("ignore", message="Workbook contains no default style")
     try:
         workbook = openpyxl.load_workbook(str(xlsx_path), data_only=True)

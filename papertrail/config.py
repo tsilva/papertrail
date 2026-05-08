@@ -16,12 +16,9 @@ from papertrail.reconciliation_defaults import (
     DEFAULT_BANK_COUNTERPARTIES,
     DEFAULT_BANK_EXPORT_PREFIX,
     DEFAULT_BANK_GENERATED_DOC_TYPES,
-    DEFAULT_COUNTERPARTY_ALIASES,
     DEFAULT_DATE_WINDOW_DAYS,
     DEFAULT_EVIDENCE_COUNTERPARTY_CATEGORIES,
     DEFAULT_EVIDENCE_COUNTERPARTY_REQUIRED_PATTERN,
-    DEFAULT_LINE_ITEM_CATEGORY_ALIASES,
-    DEFAULT_LINE_ITEM_EXTRACTORS,
     DEFAULT_SAME_MONTH_SHARED_RULE_NAMES,
     DEFAULT_SHARED_PERIOD_BANK_ANCHOR_ERROR_EXEMPT_RULE_NAMES,
     DEFAULT_SHARED_PERIOD_LINK_CATEGORIES,
@@ -124,6 +121,7 @@ class OpenRouterSettings(SettingsModel):
 
 class GmailSettings(SettingsModel):
     enabled: bool = False
+    default_months: int = 2
     attachment_mime_types: list[str] = Field(default_factory=lambda: ["application/pdf"])
     label_filter: str | None = None
     max_results_per_query: int = 500
@@ -168,6 +166,18 @@ class QRSettings(SettingsModel):
     max_pages: int = 5
     include_last: bool = True
     currency_by_country: dict[str, str] = Field(default_factory=lambda: {"PT": "EUR"})
+    default_currency: str = "EUR"
+    document_type_codes: dict[str, str] = Field(
+        default_factory=lambda: {
+            "FT": "invoice",
+            "FS": "invoice",
+            "FR": "invoice-receipt",
+            "NC": "invoice-credit",
+            "ND": "invoice-debit",
+            "RC": "receipt",
+            "RG": "receipt",
+        }
+    )
 
 
 class HashingSettings(SettingsModel):
@@ -180,6 +190,65 @@ class ProcessingSettings(SettingsModel):
     render: RenderSettings = Field(default_factory=RenderSettings)
     qr: QRSettings = Field(default_factory=QRSettings)
     hashing: HashingSettings = Field(default_factory=HashingSettings)
+
+
+class WorkflowSettings(SettingsModel):
+    default_months: int = 2
+    sync_workers: int = 1
+    metadata_load_workers: int = 16
+
+
+class ToolSettings(SettingsModel):
+    default_profile: str = "default"
+    preview_dpi: int = 150
+    xlsx_preview_max_rows: int = 100
+
+
+class DependenciesSettings(SettingsModel):
+    zbar_library_paths: list[str] = Field(default_factory=list)
+
+
+class BankStatementsSettings(SettingsModel):
+    formats: dict[str, dict[str, object]] = Field(
+        default_factory=lambda: {
+            "millennium_bcp": {
+                "header_row": 8,
+                "data_start_row": 9,
+                "scan_columns": 7,
+                "expected_headers": ["data lancamento", "descricao", "montante"],
+                "date_formats": ["%d/%m/%Y", "%d-%m-%Y"],
+                "account_cell": [2, 3],
+                "period_start_cell": [3, 3],
+                "period_end_cell": [4, 3],
+                "account_currency_separator": " - ",
+                "default_currency": "EUR",
+                "issuer_party": "MillenniumBCP",
+                "issuer_party_raw": "Millennium BCP",
+                "max_columns": 7,
+                "description_column": 3,
+                "amount_column": 4,
+                "currency_column": 5,
+                "notes_column": 6,
+                "treated_column": 7,
+                "untreated_values": ["nao", "não", ""],
+            },
+            "bpi": {
+                "header_row": 18,
+                "data_start_row": 19,
+                "scan_columns": 7,
+                "expected_headers": ["data mov.", "descricao do movimento", "valor em eur"],
+                "date_formats": ["%d-%m-%Y", "%d/%m/%Y"],
+                "account_cell": [7, 3],
+                "account_currency_pattern": r"([\d\-.]+)\s*\((\w+)\)",
+                "default_currency": "EUR",
+                "issuer_party": "BPI",
+                "issuer_party_raw": "BPI",
+                "max_columns": 4,
+                "description_column": 3,
+                "amount_column": 4,
+            },
+        }
+    )
 
 
 class DocumentTypeOverride(SettingsModel):
@@ -333,6 +402,10 @@ class ProfileSettings(SettingsModel):
     passwords: PasswordSettings = Field(default_factory=PasswordSettings)
     nif_api: NIFAPISettings = Field(default_factory=NIFAPISettings)
     processing: ProcessingSettings = Field(default_factory=ProcessingSettings)
+    workflow: WorkflowSettings = Field(default_factory=WorkflowSettings)
+    tools: ToolSettings = Field(default_factory=ToolSettings)
+    dependencies: DependenciesSettings = Field(default_factory=DependenciesSettings)
+    bank_statements: BankStatementsSettings = Field(default_factory=BankStatementsSettings)
     classification: ClassificationSettings = Field(default_factory=ClassificationSettings)
     reconciliation: ReconciliationSettings = Field(default_factory=ReconciliationSettings)
     export: ExportSettings = Field(default_factory=ExportSettings)
@@ -363,6 +436,10 @@ def _normalize_profile_data(data: dict[str, object], profile_path: Path | None) 
         "passwords": {},
         "nif_api": {},
         "processing": {},
+        "workflow": {},
+        "tools": {},
+        "dependencies": {},
+        "bank_statements": {},
         "classification": {},
         "reconciliation": {},
         "export": {},
@@ -385,6 +462,7 @@ def _normalize_profile_data(data: dict[str, object], profile_path: Path | None) 
     openrouter.setdefault("requests", {})
 
     gmail.setdefault("enabled", False)
+    gmail.setdefault("default_months", 2)
     gmail.setdefault("attachment_mime_types", ["application/pdf"])
     gmail.setdefault("max_results_per_query", 500)
     gmail.setdefault("skip_already_downloaded", True)
@@ -411,11 +489,28 @@ def _normalize_profile_data(data: dict[str, object], profile_path: Path | None) 
     normalized["processing"]["qr"].setdefault("max_pages", 5)
     normalized["processing"]["qr"].setdefault("include_last", True)
     normalized["processing"]["qr"].setdefault("currency_by_country", {"PT": "EUR"})
+    normalized["processing"]["qr"].setdefault("default_currency", "EUR")
+    normalized["processing"]["qr"].setdefault(
+        "document_type_codes",
+        QRSettings().document_type_codes,
+    )
     normalized["processing"].setdefault("hashing", {})
     normalized["processing"]["hashing"].setdefault("fast_chunk_size", 8192)
     normalized["processing"]["hashing"].setdefault("content_dpi", 150)
     normalized["processing"]["hashing"].setdefault("text_min_chars", 50)
-    normalized["classification"].setdefault("document_type_overrides", ClassificationSettings().document_type_overrides)
+
+    normalized["workflow"].setdefault("default_months", 2)
+    normalized["workflow"].setdefault("sync_workers", 1)
+    normalized["workflow"].setdefault("metadata_load_workers", 16)
+    normalized["tools"].setdefault("default_profile", "default")
+    normalized["tools"].setdefault("preview_dpi", 150)
+    normalized["tools"].setdefault("xlsx_preview_max_rows", 100)
+    normalized["dependencies"].setdefault("zbar_library_paths", [])
+    normalized["bank_statements"].setdefault("formats", BankStatementsSettings().formats)
+    normalized["classification"].setdefault(
+        "document_type_overrides",
+        ClassificationSettings().document_type_overrides,
+    )
     normalized["classification"].setdefault(
         "prompt_document_type_rules",
         ClassificationSettings().prompt_document_type_rules,

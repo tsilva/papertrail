@@ -552,8 +552,14 @@ def _parse_date(value) -> Optional[str]:
     return text
 
 
-def _load_transactions(excel_path: Path) -> list[Transaction]:
-    return [Transaction(**data) for data in load_bank_statement_transactions(excel_path)]
+def _load_transactions(runtime: Runtime, excel_path: Path) -> list[Transaction]:
+    return [
+        Transaction(**data)
+        for data in load_bank_statement_transactions(
+            excel_path,
+            settings=runtime.profile.bank_statements,
+        )
+    ]
 
 
 def _load_statement_issuing_party(repository: DocumentRepository, excel_path: Path) -> Optional[str]:
@@ -3042,7 +3048,7 @@ def reconcile_single(
         "reconciliation_rate": 0.0,
     }
 
-    transactions = _load_transactions(excel_path)
+    transactions = _load_transactions(runtime, excel_path)
     if not transactions:
         if not quiet:
             console.warning("No untreated transactions found")
