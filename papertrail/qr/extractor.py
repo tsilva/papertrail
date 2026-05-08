@@ -10,7 +10,12 @@ import fitz  # PyMuPDF
 from PIL import Image
 
 from papertrail.logging_utils import get_logger
-from papertrail.qr.models import QRCodeData, QRCodeType, QRExtractedMetadata, PortugueseInvoiceQR
+from papertrail.qr.models import (
+    PortugueseInvoiceQR,
+    QRCodeData,
+    QRCodeType,
+    QRExtractedMetadata,
+)
 
 logger = get_logger('qr.extractor')
 
@@ -38,7 +43,11 @@ def detect_qr_type(raw_content: str) -> QRCodeType:
     return QRCodeType.UNKNOWN
 
 
-def parse_portuguese_invoice_qr(qr_data: QRCodeData) -> tuple[Optional[QRExtractedMetadata], Optional[dict]]:
+def parse_portuguese_invoice_qr(
+    qr_data: QRCodeData,
+    *,
+    currency_by_country: dict[str, str] | None = None,
+) -> tuple[Optional[QRExtractedMetadata], Optional[dict]]:
     """Parse Portuguese invoice QR code and extract metadata."""
     try:
         content = qr_data.raw_content.strip()
@@ -94,7 +103,7 @@ def parse_portuguese_invoice_qr(qr_data: QRCodeData) -> tuple[Optional[QRExtract
             "raw_content": qr_data.raw_content,
             "page_number": qr_data.page_number,
         }
-        return parsed.to_extracted_metadata(), raw_data
+        return parsed.to_extracted_metadata(currency_by_country=currency_by_country), raw_data
     except Exception as e:
         logger.warning(f"Failed to parse Portuguese invoice QR: {e}")
         return None, None
@@ -203,8 +212,8 @@ def check_pyzbar_available() -> tuple[bool, str]:
     _setup_pyzbar_library()
 
     try:
-        from pyzbar.pyzbar import decode
         from PIL import Image
+        from pyzbar.pyzbar import decode
         test_img = Image.new('RGB', (10, 10), color='white')
         decode(test_img)
         return True, ""
@@ -275,7 +284,13 @@ def extract_qr_codes_from_page(page: fitz.Page, dpi: int = 300) -> list[QRCodeDa
     return qr_codes
 
 
-def extract_all_qr_codes(pdf_path: Path, max_pages: int = 5, include_last: bool = True) -> list[QRCodeData]:
+def extract_all_qr_codes(
+    pdf_path: Path,
+    max_pages: int = 5,
+    include_last: bool = True,
+    *,
+    dpi: int = 300,
+) -> list[QRCodeData]:
     """Extract QR codes from first N pages and optionally the last page of a PDF."""
     if _get_pyzbar_decode() is None:
         return []
@@ -288,12 +303,12 @@ def extract_all_qr_codes(pdf_path: Path, max_pages: int = 5, include_last: bool 
             total_pages = len(doc)
 
             for i in range(min(max_pages, total_pages)):
-                qr_codes = extract_qr_codes_from_page(doc[i])
+                qr_codes = extract_qr_codes_from_page(doc[i], dpi=dpi)
                 all_qr_codes.extend(qr_codes)
                 pages_scanned.add(i)
 
             if include_last and (total_pages - 1) not in pages_scanned:
-                qr_codes = extract_qr_codes_from_page(doc[total_pages - 1])
+                qr_codes = extract_qr_codes_from_page(doc[total_pages - 1], dpi=dpi)
                 all_qr_codes.extend(qr_codes)
 
     except Exception as e:
@@ -308,20 +323,35 @@ def extract_all_qr_codes(pdf_path: Path, max_pages: int = 5, include_last: bool 
     return all_qr_codes
 
 
-def extract_all_metadata_from_qr(pdf_path: Path) -> list[tuple[QRExtractedMetadata, dict]]:
+def extract_all_metadata_from_qr(
+    pdf_path: Path,
+    *,
+    max_pages: int = 5,
+    include_last: bool = True,
+    dpi: int = 300,
+    currency_by_country: dict[str, str] | None = None,
+) -> list[tuple[QRExtractedMetadata, dict]]:
     """Extract metadata from ALL Portuguese invoice QR codes in a PDF.
 
     Returns list of (metadata, raw_data) tuples, one per successful parse.
     Empty list when no Portuguese invoice QR codes found.
     """
-    qr_codes = extract_all_qr_codes(pdf_path)
+    qr_codes = extract_all_qr_codes(
+        pdf_path,
+        max_pages=max_pages,
+        include_last=include_last,
+        dpi=dpi,
+    )
     if not qr_codes:
         return []
 
     results = []
     for qr_data in qr_codes:
         if is_portuguese_invoice_qr(qr_data.raw_content):
-            metadata, raw_data = parse_portuguese_invoice_qr(qr_data)
+            metadata, raw_data = parse_portuguese_invoice_qr(
+                qr_data,
+                currency_by_country=currency_by_country,
+            )
             if metadata:
                 logger.debug(
                     f"Extracted metadata from {qr_data.qr_type.value} QR: "
@@ -336,7 +366,20 @@ def extract_all_metadata_from_qr(pdf_path: Path) -> list[tuple[QRExtractedMetada
     return results
 
 
-def extract_metadata_from_qr(pdf_path: Path) -> tuple[Optional[QRExtractedMetadata], Optional[dict]]:
+def extract_metadata_from_qr(
+    pdf_path: Path,
+    *,
+    max_pages: int = 5,
+    include_last: bool = True,
+    dpi: int = 300,
+    currency_by_country: dict[str, str] | None = None,
+) -> tuple[Optional[QRExtractedMetadata], Optional[dict]]:
     """Extract metadata from QR codes in a PDF. Returns (metadata, raw_data) or (None, None)."""
-    results = extract_all_metadata_from_qr(pdf_path)
+    results = extract_all_metadata_from_qr(
+        pdf_path,
+        max_pages=max_pages,
+        include_last=include_last,
+        dpi=dpi,
+        currency_by_country=currency_by_country,
+    )
     return results[0] if results else (None, None)

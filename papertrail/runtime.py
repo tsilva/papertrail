@@ -16,6 +16,7 @@ from papertrail.config import (
     build_openai_client,
     check_api_accessibility,
     get_cache_dir,
+    get_config_root,
 )
 from papertrail.console import PapertrailConsole
 from papertrail.dependencies import validate_runtime_dependencies
@@ -122,7 +123,10 @@ def runtime_from_profile(
     api_accessible = False
     if enable_client:
         api_accessible = (
-            check_api_accessibility(profile.openrouter.base_url)
+            check_api_accessibility(
+                profile.openrouter.base_url,
+                timeout=profile.openrouter.requests.api_probe_timeout_seconds,
+            )
             if probe_api
             else bool(profile.openrouter.api_key)
         )
@@ -139,7 +143,16 @@ def runtime_from_profile(
     cache_dir = get_cache_dir()
     nif_cache = None
     if profile.nif_api.enabled:
-        nif_cache = NIFLookupCache(cache_dir / "nif_cache.yaml")
+        nif_cache_path = (
+            Path(profile.nif_api.cache_path)
+            if profile.nif_api.cache_path
+            else cache_dir / "nif_cache.yaml"
+        )
+        nif_cache = NIFLookupCache(
+            nif_cache_path,
+            web_url=profile.nif_api.base_url,
+            timeout_seconds=profile.nif_api.timeout_seconds,
+        )
 
     runtime = Runtime(
         profile=profile,
@@ -149,7 +162,7 @@ def runtime_from_profile(
             processed=Path(profile.paths.processed) if profile.paths.processed else None,
             export=Path(profile.paths.export) if profile.paths.export else None,
             cache=cache_dir,
-            profiles=profiles_dir or profile.profile_dir or Path.home() / ".config" / "papertrail" / "profiles",
+            profiles=profiles_dir or profile.profile_dir or get_config_root() / "profiles",
         ),
         model_id=profile.openrouter.model_id,
         openai_client=build_openai_client(profile) if enable_client and api_accessible else None,

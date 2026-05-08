@@ -63,7 +63,11 @@ class PortugueseInvoiceQR:
     certificate_number: str = ""
     extra_fields: dict = field(default_factory=dict)
 
-    def to_extracted_metadata(self) -> QRExtractedMetadata:
+    def to_extracted_metadata(
+        self,
+        *,
+        currency_by_country: dict[str, str] | None = None,
+    ) -> QRExtractedMetadata:
         """Convert to QRExtractedMetadata for pipeline integration."""
         issue_date = None
         if self.document_date and len(self.document_date) == 8:
@@ -85,12 +89,14 @@ class PortugueseInvoiceQR:
         locale = None
         if self.country_code:
             locale = f"{self.country_code.lower()}-{self.country_code}"
+        currencies = currency_by_country or {"PT": "EUR"}
+        currency = currencies.get(self.country_code.upper(), "EUR") if self.country_code else "EUR"
 
         return QRExtractedMetadata(
             issue_date=issue_date,
             document_type=document_type,
             total_amount=self.gross_total if self.gross_total > 0 else None,
-            total_amount_currency="EUR",
+            total_amount_currency=currency,
             issuer_nif=self.issuer_nif,
             issuer_tax_number=issuer_tax_number,
             atcud=self.atcud,

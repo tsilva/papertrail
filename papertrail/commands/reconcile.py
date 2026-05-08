@@ -22,6 +22,7 @@ from papertrail.reconciliation_defaults import (
     DEFAULT_BANK_COUNTERPARTIES,
     DEFAULT_BANK_EXPORT_PREFIX,
     DEFAULT_BANK_GENERATED_DOC_TYPES,
+    DEFAULT_COUNTERPARTY_ALIASES,
     DEFAULT_DATE_WINDOW_DAYS,
     DEFAULT_EVIDENCE_COUNTERPARTY_CATEGORIES,
     DEFAULT_EVIDENCE_COUNTERPARTY_REQUIRED_PATTERN,
@@ -174,6 +175,15 @@ def _settings_map(value, fallback: dict[str, dict[str, object]]) -> dict[str, di
     return merged
 
 
+def _settings_map_with_optional_builtin(
+    value,
+    fallback: dict[str, dict[str, object]],
+    *,
+    include_builtin: bool,
+) -> dict[str, dict[str, object]]:
+    return _settings_map(value, fallback if include_builtin else {})
+
+
 def _policy_from_profile(profile) -> ReconciliationPolicy:
     settings = profile.reconciliation
     statement_aliases = {
@@ -208,7 +218,12 @@ def _policy_from_profile(profile) -> ReconciliationPolicy:
             getattr(settings, "bank_counterparties", None),
             DEFAULT_BANK_COUNTERPARTIES,
         ),
-        counterparty_aliases=_string_map(getattr(settings, "counterparty_aliases", None)),
+        counterparty_aliases=_string_map(
+            getattr(settings, "counterparty_aliases", None),
+            DEFAULT_COUNTERPARTY_ALIASES
+            if getattr(settings, "include_builtin_counterparty_aliases", True)
+            else None,
+        ),
         shared_period_transaction_keywords=_keywords_map(
             getattr(settings, "shared_period_transaction_keywords", None),
             DEFAULT_SHARED_PERIOD_TRANSACTION_KEYWORDS,
@@ -256,9 +271,10 @@ def _policy_from_profile(profile) -> ReconciliationPolicy:
             getattr(settings, "line_item_category_aliases", None),
             DEFAULT_LINE_ITEM_CATEGORY_ALIASES,
         ),
-        line_item_extractors=_settings_map(
+        line_item_extractors=_settings_map_with_optional_builtin(
             getattr(settings, "line_item_extractors", None),
             DEFAULT_LINE_ITEM_EXTRACTORS,
+            include_builtin=getattr(settings, "include_builtin_line_item_extractors", True),
         ),
     )
 
@@ -271,6 +287,8 @@ def _reconciliation_rules() -> list[ReconciliationRule]:
 def _rules_from_profile(profile) -> list[ReconciliationRule]:
     configured_rules = getattr(profile.reconciliation, "rules", None) or []
     if not configured_rules:
+        if not getattr(profile.reconciliation, "include_builtin_rules", True):
+            return []
         return _reconciliation_rules()
     return [
         rule if isinstance(rule, ReconciliationRule) else ReconciliationRule.model_validate(rule)
@@ -2457,8 +2475,8 @@ Respond in JSON:
     try:
         response = runtime.openai_client.chat.completions.create(
             model=runtime.model_id,
-            max_tokens=4096,
-            temperature=0,
+            max_tokens=runtime.profile.openrouter.requests.reconciliation_max_tokens,
+            temperature=runtime.profile.openrouter.requests.reconciliation_temperature,
             messages=[{"role": "user", "content": prompt}],
         )
         content = response.choices[0].message.content

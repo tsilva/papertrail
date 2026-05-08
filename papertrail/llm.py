@@ -292,6 +292,9 @@ def normalize_issuing_party(
     client: openai.OpenAI | None,
     model_id: str | None,
     known_issuing_parties: list[str],
+    *,
+    max_tokens: int = 256,
+    temperature: float = 0.0,
 ) -> str:
     """Normalize a single issuing party name against the known canonical list."""
     if client is None:
@@ -310,8 +313,8 @@ def normalize_issuing_party(
     try:
         response = client.chat.completions.create(
             model=model_id,
-            max_tokens=256,
-            temperature=0,
+            max_tokens=max_tokens,
+            temperature=temperature,
             messages=[{"role": "user", "content": prompt}],
         )
         content = response.choices[0].message.content

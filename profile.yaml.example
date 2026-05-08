@@ -24,6 +24,40 @@ openrouter:
   # Use ${VAR} syntax to reference environment variables for security
   api_key: "${OPENROUTER_API_KEY}"
   base_url: "https://openrouter.ai/api/v1"
+  requests:
+    classification_max_tokens: 4096
+    classification_temperature: 0
+    normalization_max_tokens: 256
+    normalization_temperature: 0
+    reconciliation_max_tokens: 4096
+    reconciliation_temperature: 0
+    api_probe_timeout_seconds: 10
+
+# Processing defaults. Changing hashing.content_dpi changes future content hashes;
+# only change it intentionally and re-check existing sidecars afterward.
+processing:
+  render:
+    max_pages: 2
+    enhance_contrast: true
+    contrast_factor: 2.0
+  qr:
+    enabled: true
+    dpi: 300
+    max_pages: 5
+    include_last: true
+    currency_by_country:
+      PT: "EUR"
+  hashing:
+    fast_chunk_size: 8192
+    content_dpi: 150
+    text_min_chars: 50
+
+nif_api:
+  enabled: false
+  enabled_locales: ["pt-PT"]
+  base_url: "https://www.nif.pt/{nif}/"
+  timeout_seconds: 10
+  cache_path: null
 
 # Gmail integration (optional)
 gmail:
@@ -37,6 +71,20 @@ gmail:
     label_filter: null  # e.g., "Bills" to filter by label
     max_results_per_query: 500
     skip_already_downloaded: true
+    scopes: ["https://www.googleapis.com/auth/gmail.readonly"]
+    extension_mime_types:
+      ".pdf": "application/pdf"
+      ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+      ".xls": "application/vnd.ms-excel"
+    generic_mime_types:
+      - "application/octet-stream"
+      - "application/binary"
+      - "application/force-download"
+      - "application/x-download"
+    api_service: "gmail"
+    api_version: "v1"
+    api_page_size: 100
+    subject_slug_max_chars: 80
 
 # Passwords for ZIP extraction (inline - recommended)
 passwords:
@@ -99,6 +147,9 @@ export:
 # papertrail/reconciliation_defaults.py, or set rules here to replace them.
 reconciliation:
   exclude_prefixes: ["EXC_"]
+  include_builtin_rules: true
+  include_builtin_counterparty_aliases: true
+  include_builtin_line_item_extractors: true
   rules: []
   amount_tolerance: 0.01
   date_window_days: 30

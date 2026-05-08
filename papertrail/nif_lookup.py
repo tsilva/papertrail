@@ -2,11 +2,12 @@
 
 import re
 import threading
-import urllib.request
 import urllib.error
+import urllib.request
 from pathlib import Path
 from typing import Optional
 
+from papertrail.config import get_cache_dir
 from papertrail.logging_utils import get_logger
 from papertrail.utils import load_yaml, save_yaml
 
@@ -15,19 +16,27 @@ _CACHE_LOAD_EXCEPTIONS = (OSError, UnicodeDecodeError, ValueError)
 
 
 def _default_nif_cache_path() -> Path:
-    return Path.home() / ".config" / "papertrail" / "cache" / "nif_cache.yaml"
+    return get_cache_dir() / "nif_cache.yaml"
 
 
 class NIFLookupCache:
     """Cache NIF -> issuer name mappings (TIER 1: cache, TIER 2: nif.pt web scraping)."""
 
-    WEB_URL = "https://www.nif.pt/{nif}/"
+    DEFAULT_WEB_URL = "https://www.nif.pt/{nif}/"
 
-    def __init__(self, cache_path: Optional[Path] = None):
+    def __init__(
+        self,
+        cache_path: Optional[Path] = None,
+        *,
+        web_url: str | None = None,
+        timeout_seconds: int = 10,
+    ):
         self._lock = threading.Lock()
         if cache_path is None:
             cache_path = _default_nif_cache_path()
         self.path = cache_path
+        self.web_url = web_url or self.DEFAULT_WEB_URL
+        self.timeout_seconds = timeout_seconds
         self._cache: dict[str, str] = {}
         self._normalized: dict[str, str] = {}
         self._dirty = False
@@ -130,10 +139,10 @@ class NIFLookupCache:
 
     def _web_lookup(self, nif: str) -> tuple[Optional[str], Optional[str]]:
         """Scrape company name from nif.pt. Returns (company_name, error_message)."""
-        url = self.WEB_URL.format(nif=nif)
+        url = self.web_url.format(nif=nif)
 
         try:
-            with urllib.request.urlopen(url, timeout=10) as response:
+            with urllib.request.urlopen(url, timeout=self.timeout_seconds) as response:
                 html = response.read().decode('utf-8')
 
             match = re.search(r'class=[\'"]search-title[\'"][^>]*>([^<]+)</span>', html, re.DOTALL)

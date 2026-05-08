@@ -67,10 +67,26 @@ def _merge_qr_metadata(
     return llm_values
 
 
-def _phase0_qr_extract(pdf_path: Path, doc_logger: DocumentLogger | None):
+def _extract_qr_with_runtime_settings(
+    pdf_path: Path,
+    runtime: Runtime,
+) -> list[tuple[QRExtractedMetadata, dict]]:
+    settings = runtime.profile.processing.qr
+    if not settings.enabled:
+        return []
+    return extract_all_metadata_from_qr(
+        pdf_path,
+        max_pages=settings.max_pages,
+        include_last=settings.include_last,
+        dpi=settings.dpi,
+        currency_by_country=settings.currency_by_country,
+    )
+
+
+def _phase0_qr_extract(pdf_path: Path, runtime: Runtime, doc_logger: DocumentLogger | None):
     try:
         t0 = _time.monotonic()
-        all_results = extract_all_metadata_from_qr(pdf_path)
+        all_results = _extract_qr_with_runtime_settings(pdf_path, runtime)
         if doc_logger:
             doc_logger.log_timing("qr_extraction", _time.monotonic() - t0)
 
@@ -138,7 +154,13 @@ def _phase1_llm_extract(
     multi_qr_info: dict | None = None,
 ) -> DocumentMetadataRaw:
     t0 = _time.monotonic()
-    images_b64 = render_pdf_to_images(pdf_path)
+    render_settings = runtime.profile.processing.render
+    images_b64 = render_pdf_to_images(
+        pdf_path,
+        max_pages=render_settings.max_pages,
+        enhance_contrast=render_settings.enhance_contrast,
+        contrast_factor=render_settings.contrast_factor,
+    )
     if doc_logger:
         doc_logger.log_timing("pdf_render", _time.monotonic() - t0)
 
@@ -165,8 +187,8 @@ def _phase1_llm_extract(
     t0 = _time.monotonic()
     response = runtime.openai_client.chat.completions.create(
         model=runtime.model_id,
-        max_tokens=4096,
-        temperature=0,
+        max_tokens=runtime.profile.openrouter.requests.classification_max_tokens,
+        temperature=runtime.profile.openrouter.requests.classification_temperature,
         messages=messages,
         tools=build_extraction_tools(exclude_fields),
         tool_choice={"type": "function", "function": {"name": "extract_document_metadata"}},
@@ -246,6 +268,8 @@ def _enrich_nif(
         runtime.openai_client,
         runtime.model_id,
         repository.registry.issuing_parties(scope),
+        max_tokens=runtime.profile.openrouter.requests.normalization_max_tokens,
+        temperature=runtime.profile.openrouter.requests.normalization_temperature,
     )
     if nif_normalized != "$UNKNOWN$":
         canonical = repository.registry.register_issuing_party(nif_normalized)
@@ -453,7 +477,11 @@ class DocumentEngine:
         if doc_logger:
             doc_logger.start_document(pdf_path)
 
-        qr_metadata, qr_raw_data, all_qr_results = _phase0_qr_extract(pdf_path, doc_logger)
+        qr_metadata, qr_raw_data, all_qr_results = _phase0_qr_extract(
+            pdf_path,
+            self.runtime,
+            doc_logger,
+        )
         is_multi_qr = len(all_qr_results) >= 2
 
         exclude_fields, pre_extracted = set(), {}
@@ -681,11 +709,16 @@ class DocumentEngine:
                 data["file_size_kb"] = round(source_path.stat().st_size / 1024)
                 changed = True
             if "hash_text" not in data and source_path.exists():
-                data["hash_text"] = hash_file_text(source_path) if source_path.suffix.lower() == ".pdf" else None
+                hashing_settings = self.runtime.profile.processing.hashing
+                data["hash_text"] = (
+                    hash_file_text(source_path, min_chars=hashing_settings.text_min_chars)
+                    if source_path.suffix.lower() == ".pdf"
+                    else None
+                )
                 changed = True
             if data.get("sub_documents") is None and "sub_documents" not in data:
                 if source_path.exists() and source_path.suffix.lower() == ".pdf":
-                    all_results = extract_all_metadata_from_qr(source_path)
+                    all_results = _extract_qr_with_runtime_settings(source_path, self.runtime)
                     if len(all_results) >= 2:
                         data["sub_documents"] = _build_sub_documents(
                             all_results,
@@ -760,7 +793,11 @@ class DocumentEngine:
                 return result
 
         if suffix == ".xlsx":
-            file_hash = hash_file_fast(source_path)
+            hashing_settings = self.runtime.profile.processing.hashing
+            file_hash = hash_file_fast(
+                source_path,
+                chunk_size=hashing_settings.fast_chunk_size,
+            )
             if mode == "ingest" and file_hash in known_file_hashes:
                 result.duplicates = 1
                 result.reason = "hash_file"
@@ -815,15 +852,19 @@ class DocumentEngine:
         if existing_metadata:
             old_data = existing_metadata.model_dump() if isinstance(existing_metadata, DocumentMetadata) else existing_metadata
 
+        hashing_settings = self.runtime.profile.processing.hashing
         file_hash = old_data.get("hash_file") if old_data else None
         if not file_hash:
-            file_hash = hash_file_fast(source_path)
+            file_hash = hash_file_fast(
+                source_path,
+                chunk_size=hashing_settings.fast_chunk_size,
+            )
         if mode == "ingest" and file_hash in known_file_hashes:
             result.duplicates = 1
             result.reason = "hash_file"
             return result
 
-        text_hash = hash_file_text(source_path)
+        text_hash = hash_file_text(source_path, min_chars=hashing_settings.text_min_chars)
         if mode == "ingest" and text_hash and text_hash in known_text_hashes:
             result.duplicates = 1
             result.reason = "hash_text"
@@ -831,7 +872,10 @@ class DocumentEngine:
 
         content_hash = old_data.get("hash_content") if old_data else None
         if not content_hash:
-            content_hash = hash_file_content(source_path)
+            content_hash = hash_file_content(
+                source_path,
+                dpi=hashing_settings.content_dpi,
+            )
         if mode == "ingest" and content_hash in known_content_hashes:
             result.duplicates = 1
             result.reason = "hash_content"

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import shutil
 import urllib.error
 import urllib.request
@@ -89,10 +90,36 @@ ExportMatchValue = str | int | float | bool
 ExpectedPageCount = int | list[int]
 
 
+DEFAULT_OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
+DEFAULT_GMAIL_SCOPES = ["https://www.googleapis.com/auth/gmail.readonly"]
+DEFAULT_GMAIL_EXTENSION_MIME_TYPES = {
+    ".pdf": "application/pdf",
+    ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    ".xls": "application/vnd.ms-excel",
+}
+DEFAULT_GMAIL_GENERIC_MIME_TYPES = [
+    "application/octet-stream",
+    "application/binary",
+    "application/force-download",
+    "application/x-download",
+]
+
+
+class OpenRouterRequestSettings(SettingsModel):
+    classification_max_tokens: int = 4096
+    classification_temperature: float = 0.0
+    normalization_max_tokens: int = 256
+    normalization_temperature: float = 0.0
+    reconciliation_max_tokens: int = 4096
+    reconciliation_temperature: float = 0.0
+    api_probe_timeout_seconds: int = 10
+
+
 class OpenRouterSettings(SettingsModel):
     model_id: str | None = None
     api_key: str | None = None
-    base_url: str = "https://openrouter.ai/api/v1"
+    base_url: str = DEFAULT_OPENROUTER_BASE_URL
+    requests: OpenRouterRequestSettings = Field(default_factory=OpenRouterRequestSettings)
 
 
 class GmailSettings(SettingsModel):
@@ -103,6 +130,17 @@ class GmailSettings(SettingsModel):
     skip_already_downloaded: bool = True
     credentials_file: str | None = None
     token_file: str | None = None
+    scopes: list[str] = Field(default_factory=lambda: list(DEFAULT_GMAIL_SCOPES))
+    extension_mime_types: dict[str, str] = Field(
+        default_factory=lambda: dict(DEFAULT_GMAIL_EXTENSION_MIME_TYPES)
+    )
+    generic_mime_types: list[str] = Field(
+        default_factory=lambda: list(DEFAULT_GMAIL_GENERIC_MIME_TYPES)
+    )
+    api_service: str = "gmail"
+    api_version: str = "v1"
+    api_page_size: int = 100
+    subject_slug_max_chars: int = 80
 
 
 class PasswordSettings(SettingsModel):
@@ -113,6 +151,35 @@ class PasswordSettings(SettingsModel):
 class NIFAPISettings(SettingsModel):
     enabled: bool = False
     enabled_locales: list[str] = Field(default_factory=lambda: ["pt-PT"])
+    base_url: str = "https://www.nif.pt/{nif}/"
+    timeout_seconds: int = 10
+    cache_path: str | None = None
+
+
+class RenderSettings(SettingsModel):
+    max_pages: int = 2
+    enhance_contrast: bool = True
+    contrast_factor: float = 2.0
+
+
+class QRSettings(SettingsModel):
+    enabled: bool = True
+    dpi: int = 300
+    max_pages: int = 5
+    include_last: bool = True
+    currency_by_country: dict[str, str] = Field(default_factory=lambda: {"PT": "EUR"})
+
+
+class HashingSettings(SettingsModel):
+    fast_chunk_size: int = 8192
+    content_dpi: int = 150
+    text_min_chars: int = 50
+
+
+class ProcessingSettings(SettingsModel):
+    render: RenderSettings = Field(default_factory=RenderSettings)
+    qr: QRSettings = Field(default_factory=QRSettings)
+    hashing: HashingSettings = Field(default_factory=HashingSettings)
 
 
 class DocumentTypeOverride(SettingsModel):
@@ -172,6 +239,7 @@ class ReconciliationRule(SettingsModel):
 class ReconciliationSettings(SettingsModel):
     exclude_prefixes: list[str] = Field(default_factory=list)
     rules: list[ReconciliationRule] = Field(default_factory=list)
+    include_builtin_rules: bool = True
     amount_tolerance: float = DEFAULT_AMOUNT_TOLERANCE
     date_window_days: int = DEFAULT_DATE_WINDOW_DAYS
     bank_generated_doc_types: list[str] = Field(
@@ -193,9 +261,8 @@ class ReconciliationSettings(SettingsModel):
     bank_counterparties: list[str] = Field(
         default_factory=lambda: list(DEFAULT_BANK_COUNTERPARTIES)
     )
-    counterparty_aliases: dict[str, str] = Field(
-        default_factory=lambda: dict(DEFAULT_COUNTERPARTY_ALIASES)
-    )
+    include_builtin_counterparty_aliases: bool = True
+    counterparty_aliases: dict[str, str] = Field(default_factory=dict)
     shared_period_transaction_keywords: dict[str, list[str]] = Field(
         default_factory=lambda: {
             party: list(keywords)
@@ -230,18 +297,9 @@ class ReconciliationSettings(SettingsModel):
         default_factory=lambda: list(DEFAULT_EVIDENCE_COUNTERPARTY_CATEGORIES)
     )
     evidence_counterparty_required_pattern: str = DEFAULT_EVIDENCE_COUNTERPARTY_REQUIRED_PATTERN
-    line_item_category_aliases: dict[str, dict[str, object]] = Field(
-        default_factory=lambda: {
-            name: dict(settings)
-            for name, settings in DEFAULT_LINE_ITEM_CATEGORY_ALIASES.items()
-        }
-    )
-    line_item_extractors: dict[str, dict[str, object]] = Field(
-        default_factory=lambda: {
-            name: dict(settings)
-            for name, settings in DEFAULT_LINE_ITEM_EXTRACTORS.items()
-        }
-    )
+    line_item_category_aliases: dict[str, dict[str, object]] = Field(default_factory=dict)
+    include_builtin_line_item_extractors: bool = True
+    line_item_extractors: dict[str, dict[str, object]] = Field(default_factory=dict)
 
 
 class ExportRule(SettingsModel):
@@ -274,6 +332,7 @@ class ProfileSettings(SettingsModel):
     gmail: GmailSettings = Field(default_factory=GmailSettings)
     passwords: PasswordSettings = Field(default_factory=PasswordSettings)
     nif_api: NIFAPISettings = Field(default_factory=NIFAPISettings)
+    processing: ProcessingSettings = Field(default_factory=ProcessingSettings)
     classification: ClassificationSettings = Field(default_factory=ClassificationSettings)
     reconciliation: ReconciliationSettings = Field(default_factory=ReconciliationSettings)
     export: ExportSettings = Field(default_factory=ExportSettings)
@@ -303,6 +362,7 @@ def _normalize_profile_data(data: dict[str, object], profile_path: Path | None) 
         "gmail": {},
         "passwords": {},
         "nif_api": {},
+        "processing": {},
         "classification": {},
         "reconciliation": {},
         "export": {},
@@ -321,15 +381,40 @@ def _normalize_profile_data(data: dict[str, object], profile_path: Path | None) 
     profile.setdefault("description", "")
 
     openrouter = normalized["openrouter"]
-    openrouter.setdefault("base_url", "https://openrouter.ai/api/v1")
+    openrouter.setdefault("base_url", DEFAULT_OPENROUTER_BASE_URL)
+    openrouter.setdefault("requests", {})
 
     gmail.setdefault("enabled", False)
     gmail.setdefault("attachment_mime_types", ["application/pdf"])
     gmail.setdefault("max_results_per_query", 500)
     gmail.setdefault("skip_already_downloaded", True)
+    gmail.setdefault("scopes", list(DEFAULT_GMAIL_SCOPES))
+    gmail.setdefault("extension_mime_types", dict(DEFAULT_GMAIL_EXTENSION_MIME_TYPES))
+    gmail.setdefault("generic_mime_types", list(DEFAULT_GMAIL_GENERIC_MIME_TYPES))
+    gmail.setdefault("api_service", "gmail")
+    gmail.setdefault("api_version", "v1")
+    gmail.setdefault("api_page_size", 100)
+    gmail.setdefault("subject_slug_max_chars", 80)
 
     normalized["nif_api"].setdefault("enabled", False)
     normalized["nif_api"].setdefault("enabled_locales", ["pt-PT"])
+    normalized["nif_api"].setdefault("base_url", "https://www.nif.pt/{nif}/")
+    normalized["nif_api"].setdefault("timeout_seconds", 10)
+    normalized["nif_api"].setdefault("cache_path", None)
+    normalized["processing"].setdefault("render", {})
+    normalized["processing"]["render"].setdefault("max_pages", 2)
+    normalized["processing"]["render"].setdefault("enhance_contrast", True)
+    normalized["processing"]["render"].setdefault("contrast_factor", 2.0)
+    normalized["processing"].setdefault("qr", {})
+    normalized["processing"]["qr"].setdefault("enabled", True)
+    normalized["processing"]["qr"].setdefault("dpi", 300)
+    normalized["processing"]["qr"].setdefault("max_pages", 5)
+    normalized["processing"]["qr"].setdefault("include_last", True)
+    normalized["processing"]["qr"].setdefault("currency_by_country", {"PT": "EUR"})
+    normalized["processing"].setdefault("hashing", {})
+    normalized["processing"]["hashing"].setdefault("fast_chunk_size", 8192)
+    normalized["processing"]["hashing"].setdefault("content_dpi", 150)
+    normalized["processing"]["hashing"].setdefault("text_min_chars", 50)
     normalized["classification"].setdefault("document_type_overrides", ClassificationSettings().document_type_overrides)
     normalized["classification"].setdefault(
         "prompt_document_type_rules",
@@ -356,6 +441,10 @@ def _normalize_profile_data(data: dict[str, object], profile_path: Path | None) 
     reconciliation = normalized["reconciliation"]
     reconciliation.setdefault("exclude_prefixes", [])
     reconciliation.setdefault("rules", [])
+    reconciliation.setdefault("include_builtin_rules", True)
+    reconciliation.setdefault("include_builtin_counterparty_aliases", True)
+    reconciliation.setdefault("counterparty_aliases", {})
+    reconciliation.setdefault("include_builtin_line_item_extractors", True)
 
     export = normalized["export"]
     export.setdefault("file_mappings", {})
@@ -374,6 +463,10 @@ def _normalize_profile_data(data: dict[str, object], profile_path: Path | None) 
 
         passwords = normalized["passwords"]
         passwords["passwords_file"] = _resolve_path(passwords.get("passwords_file"), profile_path)
+        normalized["nif_api"]["cache_path"] = _resolve_path(
+            normalized["nif_api"].get("cache_path"),
+            profile_path,
+        )
         if gmail.get("credentials_file"):
             gmail["credentials_file"] = _resolve_path(gmail["credentials_file"], profile_path)
         if gmail.get("token_file"):
@@ -384,14 +477,24 @@ def _normalize_profile_data(data: dict[str, object], profile_path: Path | None) 
     return normalized
 
 
+def get_config_root() -> Path:
+    override = os.environ.get("PAPERTRAIL_HOME")
+    if override:
+        return Path(override).expanduser()
+    xdg_config_home = os.environ.get("XDG_CONFIG_HOME")
+    if xdg_config_home:
+        return Path(xdg_config_home).expanduser() / "papertrail"
+    return Path.home() / ".config" / "papertrail"
+
+
 def get_profiles_dir() -> Path:
-    profiles_dir = Path.home() / ".config" / "papertrail" / "profiles"
+    profiles_dir = get_config_root() / "profiles"
     profiles_dir.mkdir(parents=True, exist_ok=True)
     return profiles_dir
 
 
 def get_cache_dir() -> Path:
-    cache_dir = Path.home() / ".config" / "papertrail" / "cache"
+    cache_dir = get_config_root() / "cache"
     cache_dir.mkdir(parents=True, exist_ok=True)
     return cache_dir
 
@@ -465,7 +568,7 @@ def get_passwords_from_profile(profile: ProfileSettings) -> tuple[list[str], str
 
 
 def get_gmail_config_paths(profile: ProfileSettings | None = None) -> dict[str, Path]:
-    credentials_dir = Path.home() / ".config" / "papertrail" / "credentials"
+    credentials_dir = get_config_root() / "credentials"
     credentials_dir.mkdir(parents=True, exist_ok=True)
     paths = {
         "credentials": credentials_dir / "gmail_credentials.json",
@@ -510,9 +613,10 @@ def _migrate_from_repo() -> None:
     repo_cache = repo_root / ".cache"
     repo_credentials = repo_root / ".credentials"
 
-    user_profiles = Path.home() / ".config" / "papertrail" / "profiles"
-    user_cache = Path.home() / ".config" / "papertrail" / "cache"
-    user_credentials = Path.home() / ".config" / "papertrail" / "credentials"
+    config_root = get_config_root()
+    user_profiles = config_root / "profiles"
+    user_cache = config_root / "cache"
+    user_credentials = config_root / "credentials"
 
     migrated: list[str] = []
 

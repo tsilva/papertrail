@@ -12,6 +12,7 @@ from typing import Optional
 
 import fitz  # PyMuPDF
 
+from papertrail.config import get_cache_dir
 from papertrail.logging_utils import get_logger
 from papertrail.reconciliation_groundtruth import is_reconciliation_sidecar
 from papertrail.utils import load_yaml, save_yaml
@@ -25,7 +26,7 @@ class ContentHashError(RuntimeError):
 
 
 def _default_hash_cache_path() -> Path:
-    return Path.home() / ".config" / "papertrail" / "cache" / "hash_cache.yaml"
+    return get_cache_dir() / "hash_cache.yaml"
 
 
 class HashCache:
@@ -75,21 +76,21 @@ class HashCache:
         return len(self._cache)
 
 
-def hash_file_fast(path: Path) -> str:
+def hash_file_fast(path: Path, *, chunk_size: int = 8192) -> str:
     """Fast SHA256 hash of raw file bytes (first 8 hex chars)."""
     h = hashlib.sha256()
     with open(path, "rb") as f:
-        for chunk in iter(lambda: f.read(8192), b''):
+        for chunk in iter(lambda: f.read(chunk_size), b''):
             h.update(chunk)
     return h.hexdigest()[:8]
 
 
-def hash_file_content(path: Path) -> str:
-    """Content-based hash: renders all pages at 150 DPI, hashes pixels (first 8 hex chars)."""
+def hash_file_content(path: Path, *, dpi: int = 150) -> str:
+    """Content-based hash: renders all pages at the configured DPI, hashes pixels."""
     t0 = time.monotonic()
     try:
         page_hashes = []
-        zoom = 150 / 72
+        zoom = dpi / 72
         mat = fitz.Matrix(zoom, zoom)
 
         with fitz.open(str(path)) as doc:
@@ -119,10 +120,10 @@ def hash_file_content(path: Path) -> str:
         raise ContentHashError(f"content hashing failed for {path.name}: {e}") from e
 
 
-def _page_has_text(page) -> bool:
-    """Check if a PDF page has meaningful extractable text (>= 50 chars)."""
+def _page_has_text(page, *, min_chars: int = 50) -> bool:
+    """Check if a PDF page has meaningful extractable text."""
     text = page.get_text().strip()
-    return len(text) >= 50
+    return len(text) >= min_chars
 
 
 def _normalize_text_for_hash(pages_text: list[str]) -> str:
@@ -134,7 +135,7 @@ def _normalize_text_for_hash(pages_text: list[str]) -> str:
     return "".join(ascii_text.split())
 
 
-def hash_file_text(path: Path) -> Optional[str]:
+def hash_file_text(path: Path, *, min_chars: int = 50) -> Optional[str]:
     """Text-based hash: extracts text from all pages, normalizes, SHA256 (first 8 hex chars).
 
     Returns None if any page lacks extractable text (e.g., scanned/image-only PDFs).
@@ -148,7 +149,7 @@ def hash_file_text(path: Path) -> Optional[str]:
 
             pages_text = []
             for page in doc:
-                if not _page_has_text(page):
+                if not _page_has_text(page, min_chars=min_chars):
                     logger.debug(f"[HASH-TEXT] {path.name}: page {page.number} has insufficient text, skipping")
                     return None
                 pages_text.append(page.get_text())

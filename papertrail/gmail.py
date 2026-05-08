@@ -22,46 +22,27 @@ from papertrail.logging_utils import get_logger, setup_failure_logger
 
 logger = get_logger("gmail")
 
-SCOPES = ["https://www.googleapis.com/auth/gmail.readonly"]
-
-_DEFAULT_SETTINGS = {
-    "attachment_mime_types": ["application/pdf"],
-    "label_filter": None,
-    "max_results_per_query": 500,
-    "skip_already_downloaded": True,
-}
-
-_EXTENSION_TO_MIME = {
-    ".pdf": "application/pdf",
-    ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-    ".xls": "application/vnd.ms-excel",
-}
-
-_GENERIC_MIME_TYPES = {
-    "application/octet-stream",
-    "application/binary",
-    "application/force-download",
-    "application/x-download",
-}
+def _default_settings() -> dict:
+    return GmailSettings().model_dump()
 
 
-def _slugify(text: str) -> str:
+def _slugify(text: str, *, max_chars: int = 80) -> str:
     text = unicodedata.normalize("NFKD", text)
     text = text.encode("ascii", "ignore").decode("ascii").lower()
     text = re.sub(r"[^a-z0-9]+", "-", text)
     text = text.strip("-")
     text = re.sub(r"-{2,}", "-", text)
-    return text[:80] or "no-subject"
+    return text[:max_chars] or "no-subject"
 
 
 def _settings_to_dict(settings: GmailSettings | dict | None) -> dict:
     if settings is None:
-        return _DEFAULT_SETTINGS.copy()
+        return _default_settings()
     if isinstance(settings, GmailSettings):
         data = settings.model_dump()
     else:
         data = dict(settings)
-    merged = _DEFAULT_SETTINGS.copy()
+    merged = _default_settings()
     merged.update({key: value for key, value in data.items() if value is not None})
     return merged
 
@@ -96,12 +77,13 @@ class GmailDownloader:
         if self.settings_path.exists():
             with open(self.settings_path, "r", encoding="utf-8") as handle:
                 return _settings_to_dict(json.load(handle))
-        return _DEFAULT_SETTINGS.copy()
+        return _default_settings()
 
     def authenticate(self) -> bool:
         creds = None
+        scopes = list(self.settings.get("scopes") or GmailSettings().scopes)
         if self.token_path.exists():
-            creds = Credentials.from_authorized_user_file(str(self.token_path), SCOPES)
+            creds = Credentials.from_authorized_user_file(str(self.token_path), scopes)
 
         if not creds or not creds.valid:
             if creds and creds.expired and creds.refresh_token:
@@ -112,13 +94,17 @@ class GmailDownloader:
                         f"Gmail credentials not found at {self.credentials_path}. "
                         "Download from Google Cloud Console and save to this path."
                     )
-                flow = InstalledAppFlow.from_client_secrets_file(str(self.credentials_path), SCOPES)
+                flow = InstalledAppFlow.from_client_secrets_file(str(self.credentials_path), scopes)
                 creds = flow.run_local_server(port=0)
 
             with open(self.token_path, "w", encoding="utf-8") as token_file:
                 token_file.write(creds.to_json())
 
-        self.service = build("gmail", "v1", credentials=creds)
+        self.service = build(
+            str(self.settings.get("api_service") or "gmail"),
+            str(self.settings.get("api_version") or "v1"),
+            credentials=creds,
+        )
         return True
 
     def build_search_query(self, start_date: datetime, end_date: datetime) -> str:
@@ -133,6 +119,7 @@ class GmailDownloader:
         messages = []
         page_token = None
         max_results = self.settings.get("max_results_per_query", 500)
+        api_page_size = int(self.settings.get("api_page_size") or 100)
 
         while True:
             result = (
@@ -142,7 +129,7 @@ class GmailDownloader:
                     userId="me",
                     q=query,
                     pageToken=page_token,
-                    maxResults=min(100, max_results - len(messages)),
+                    maxResults=min(api_page_size, max_results - len(messages)),
                 )
                 .execute()
             )
@@ -168,9 +155,10 @@ class GmailDownloader:
                 attachments.extend(self._extract_attachments_from_parts(part["parts"], allowed_types))
 
             if attachment_id and filename and mime_type not in allowed_types:
-                if mime_type in _GENERIC_MIME_TYPES:
+                generic_mime_types = set(self.settings.get("generic_mime_types") or [])
+                if mime_type in generic_mime_types:
                     ext = Path(filename).suffix.lower()
-                    resolved_mime = _EXTENSION_TO_MIME.get(ext)
+                    resolved_mime = dict(self.settings.get("extension_mime_types") or {}).get(ext)
                     if resolved_mime and resolved_mime in allowed_types:
                         mime_type = resolved_mime
                         logger.info(f"[GMAIL] Accepted '{filename}' by extension ({ext} -> {resolved_mime})")
@@ -210,7 +198,8 @@ class GmailDownloader:
         else:
             date_str = "unknown-date"
         subject = headers.get("subject", "")
-        subject_slug = _slugify(subject) if subject else "no-subject"
+        max_chars = int(self.settings.get("subject_slug_max_chars") or 80)
+        subject_slug = _slugify(subject, max_chars=max_chars) if subject else "no-subject"
         return self.output_dir / f"{date_str} - {subject_slug}"
 
     def download_attachment(
