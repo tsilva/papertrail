@@ -1,7 +1,11 @@
 import unittest
+import tempfile
+from pathlib import Path
 from types import SimpleNamespace
 
+from papertrail.commands.reconcile import _policy_from_profile, _rules_from_profile
 from papertrail.rules import RuleEngine
+from tests.support import make_test_runtime
 
 
 class RuleEngineTests(unittest.TestCase):
@@ -160,6 +164,27 @@ class RuleEngineTests(unittest.TestCase):
         )
         match = SimpleNamespace(transaction=txn, pdf_candidates=[candidate])
         self.assertEqual(RuleEngine().validate_match(match, [rule]), [])
+
+    def test_reconciliation_policy_and_rules_can_come_from_profile(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            runtime = make_test_runtime(Path(tmpdir))
+            runtime.profile.reconciliation.amount_tolerance = 0.05
+            runtime.profile.reconciliation.bank_export_prefix = "BNK_"
+            runtime.profile.reconciliation.rules = [
+                {
+                    "name": "custom-debit",
+                    "direction": "debit",
+                    "required_types": {"supplier-evidence": 1},
+                }
+            ]
+
+            policy = _policy_from_profile(runtime.profile)
+            rules = _rules_from_profile(runtime.profile)
+
+        self.assertEqual(policy.amount_tolerance, 0.05)
+        self.assertEqual(policy.bank_export_prefix, "BNK_")
+        self.assertEqual(len(rules), 1)
+        self.assertEqual(rules[0].name, "custom-debit")
 
 
 if __name__ == "__main__":

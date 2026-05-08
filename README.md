@@ -52,6 +52,7 @@ make regression-golden PROFILE=personal                         # run golden rec
 - Profiles live under `~/.config/papertrail/profiles/<name>/profile.yaml`.
 - Caches live under `~/.config/papertrail/cache/`; Gmail credentials live under `~/.config/papertrail/credentials/`.
 - Logs are written to `{processed}/logs/` for extraction, sync, pipeline, and classification failures.
+- Reconciliation policy defaults can be overridden in `profile.yaml` under `reconciliation`.
 - QR extraction requires the `pyzbar` package and the system `zbar` library.
 - Duplicate detection uses `hash_content`; filenames use `hash_file`, so visually identical PDFs can still keep distinct byte-based names.
 - `$UNKNOWN$` is the fallback sentinel for unrecognized metadata.

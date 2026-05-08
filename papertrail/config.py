@@ -10,6 +10,22 @@ from pathlib import Path
 import openai
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from papertrail.reconciliation_defaults import (
+    DEFAULT_AMOUNT_TOLERANCE,
+    DEFAULT_BANK_COUNTERPARTIES,
+    DEFAULT_BANK_EXPORT_PREFIX,
+    DEFAULT_BANK_GENERATED_DOC_TYPES,
+    DEFAULT_COUNTERPARTY_ALIASES,
+    DEFAULT_DATE_WINDOW_DAYS,
+    DEFAULT_SAME_MONTH_SHARED_RULE_NAMES,
+    DEFAULT_SHARED_PERIOD_TITLE_TERMS,
+    DEFAULT_SHARED_PERIOD_TRANSACTION_KEYWORDS,
+    DEFAULT_STATEMENT_BANK_ISSUER_ALIASES,
+    DEFAULT_STATEMENT_BANK_SCOPED_DOC_TYPES,
+    DEFAULT_SUPPORTING_DOC_TYPE_PATTERNS,
+    DEFAULT_SUPPORTING_EXPORT_PREFIXES,
+)
+
 try:
     import yaml
 except ImportError:
@@ -102,6 +118,46 @@ class ReconciliationRule(SettingsModel):
 
 class ReconciliationSettings(SettingsModel):
     exclude_prefixes: list[str] = Field(default_factory=list)
+    rules: list[ReconciliationRule] = Field(default_factory=list)
+    amount_tolerance: float = DEFAULT_AMOUNT_TOLERANCE
+    date_window_days: int = DEFAULT_DATE_WINDOW_DAYS
+    bank_generated_doc_types: list[str] = Field(
+        default_factory=lambda: list(DEFAULT_BANK_GENERATED_DOC_TYPES)
+    )
+    statement_bank_scoped_doc_types: list[str] = Field(
+        default_factory=lambda: list(DEFAULT_STATEMENT_BANK_SCOPED_DOC_TYPES)
+    )
+    statement_bank_issuer_aliases: dict[str, str] = Field(
+        default_factory=lambda: dict(DEFAULT_STATEMENT_BANK_ISSUER_ALIASES)
+    )
+    bank_export_prefix: str = DEFAULT_BANK_EXPORT_PREFIX
+    supporting_export_prefixes: list[str] = Field(
+        default_factory=lambda: list(DEFAULT_SUPPORTING_EXPORT_PREFIXES)
+    )
+    supporting_doc_type_patterns: list[str] = Field(
+        default_factory=lambda: list(DEFAULT_SUPPORTING_DOC_TYPE_PATTERNS)
+    )
+    bank_counterparties: list[str] = Field(
+        default_factory=lambda: list(DEFAULT_BANK_COUNTERPARTIES)
+    )
+    counterparty_aliases: dict[str, str] = Field(
+        default_factory=lambda: dict(DEFAULT_COUNTERPARTY_ALIASES)
+    )
+    shared_period_transaction_keywords: dict[str, list[str]] = Field(
+        default_factory=lambda: {
+            party: list(keywords)
+            for party, keywords in DEFAULT_SHARED_PERIOD_TRANSACTION_KEYWORDS.items()
+        }
+    )
+    shared_period_title_terms: dict[str, list[str]] = Field(
+        default_factory=lambda: {
+            party: list(terms)
+            for party, terms in DEFAULT_SHARED_PERIOD_TITLE_TERMS.items()
+        }
+    )
+    same_month_shared_rule_names: list[str] = Field(
+        default_factory=lambda: list(DEFAULT_SAME_MONTH_SHARED_RULE_NAMES)
+    )
 
 
 class ExportRule(SettingsModel):
@@ -197,6 +253,7 @@ def _normalize_profile_data(data: dict[str, object], profile_path: Path | None) 
 
     reconciliation = normalized["reconciliation"]
     reconciliation.setdefault("exclude_prefixes", [])
+    reconciliation.setdefault("rules", [])
 
     export = normalized["export"]
     export.setdefault("file_mappings", {})

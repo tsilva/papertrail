@@ -463,6 +463,8 @@ When the user asks to "regression test", "run regression", "check the golden exp
 make regression-golden
 ```
 
+Every code change must pass `make regression-golden` before it is considered complete. This is especially important for large refactors, where behavior can drift even when unit tests still pass. If the golden regression test fails, treat the change as unfinished and either fix the regression or explicitly document why the approved golden baseline needs to change.
+
 `make regression-golden` checks the approved reconciliation groundtruth for export months `2026-01`, `2026-02`, `2026-03`, and `2026-04` using the `puzzle` profile by default. Treat failures as real regressions unless the user explicitly says the golden approvals should be updated. Only run `make regression-seed-golden` when the user explicitly asks to refresh or seed the golden baseline.
 
 ## Dependencies

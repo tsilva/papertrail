@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import re
+from contextvars import ContextVar
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
 from pathlib import Path
@@ -16,6 +17,21 @@ from papertrail.config import ReconciliationRule
 from papertrail.document_types import normalize_document_type
 from papertrail.llm import _extract_json_from_response
 from papertrail.logging_utils import get_logger
+from papertrail.reconciliation_defaults import (
+    DEFAULT_AMOUNT_TOLERANCE,
+    DEFAULT_BANK_COUNTERPARTIES,
+    DEFAULT_BANK_EXPORT_PREFIX,
+    DEFAULT_BANK_GENERATED_DOC_TYPES,
+    DEFAULT_DATE_WINDOW_DAYS,
+    DEFAULT_RECONCILIATION_RULES,
+    DEFAULT_SAME_MONTH_SHARED_RULE_NAMES,
+    DEFAULT_SHARED_PERIOD_TITLE_TERMS,
+    DEFAULT_SHARED_PERIOD_TRANSACTION_KEYWORDS,
+    DEFAULT_STATEMENT_BANK_ISSUER_ALIASES,
+    DEFAULT_STATEMENT_BANK_SCOPED_DOC_TYPES,
+    DEFAULT_SUPPORTING_DOC_TYPE_PATTERNS,
+    DEFAULT_SUPPORTING_EXPORT_PREFIXES,
+)
 from papertrail.reconciliation_evidence import build_document_evidence
 from papertrail.repository import DocumentRepository
 from papertrail.rules import RuleEngine
@@ -24,28 +40,11 @@ from papertrail.utils import strip_diacritics
 
 logger = get_logger("reconcile")
 
-_AMOUNT_TOLERANCE = 0.01
-_DATE_WINDOW_DAYS = 30
-_BANK_GENERATED_DOC_TYPES = {
-    "bank-card-transaction",
-    "bank-note",
-    "bank-transfer",
-    "bank-statement",
-    "bank-investment",
-}
-_STATEMENT_BANK_SCOPED_DOC_TYPES = {
-    "bank-card-transaction",
-    "bank-note",
-}
-_STATEMENT_BANK_ISSUER_ALIASES = {
-    "bancobpi": "bpi",
-    "bpi": "bpi",
-    "bancocomercialportugues": "millennium-bcp",
-    "bcp": "millennium-bcp",
-    "millennium": "millennium-bcp",
-    "millenniumbcp": "millennium-bcp",
-    "millennium-bcp": "millennium-bcp",
-}
+_AMOUNT_TOLERANCE = DEFAULT_AMOUNT_TOLERANCE
+_DATE_WINDOW_DAYS = DEFAULT_DATE_WINDOW_DAYS
+_BANK_GENERATED_DOC_TYPES = set(DEFAULT_BANK_GENERATED_DOC_TYPES)
+_STATEMENT_BANK_SCOPED_DOC_TYPES = set(DEFAULT_STATEMENT_BANK_SCOPED_DOC_TYPES)
+_STATEMENT_BANK_ISSUER_ALIASES = dict(DEFAULT_STATEMENT_BANK_ISSUER_ALIASES)
 _AMOUNT_LINE_RE = re.compile(r"^-?\d[\d\s.]*,\d{2}$")
 _PERIOD_TOKEN_RE = re.compile(
     r"\b(JAN|FEV|MAR|ABR|MAI|JUN|JUL|AGO|SET|OUT|NOV|DEZ)\s+(20\d{2})\b"
@@ -64,129 +63,147 @@ _BPI_TRANSFER_LINE_RE = re.compile(
     r"\b(?:TRF\s+CR\s+SEPA\+\s+|TRF\s+SEPA\+\s+INST\s+|TRANSFER[ÊE]NCIA\s+RECEBIDA\s+)(\d+)\b",
     re.IGNORECASE,
 )
-_BANK_EXPORT_PREFIX = "BNC_"
-_SUPPORTING_EXPORT_PREFIXES = ("CMP_", "DIV_")
-_SUPPORTING_DOC_TYPE_PATTERNS = [
-    "invoice",
-    "receipt",
-    "invoice-receipt",
-    "invoice-credit",
-    "invoice-debit",
-    "invoice-order",
-    "insurance-notice",
-    "receipt-reference",
-    "receipt-delivery",
-]
+_BANK_EXPORT_PREFIX = DEFAULT_BANK_EXPORT_PREFIX
+_SUPPORTING_EXPORT_PREFIXES = tuple(DEFAULT_SUPPORTING_EXPORT_PREFIXES)
+_SUPPORTING_DOC_TYPE_PATTERNS = list(DEFAULT_SUPPORTING_DOC_TYPE_PATTERNS)
+
+
+@dataclass(frozen=True)
+class ReconciliationPolicy:
+    amount_tolerance: float = DEFAULT_AMOUNT_TOLERANCE
+    date_window_days: int = DEFAULT_DATE_WINDOW_DAYS
+    bank_generated_doc_types: tuple[str, ...] = DEFAULT_BANK_GENERATED_DOC_TYPES
+    statement_bank_scoped_doc_types: tuple[str, ...] = DEFAULT_STATEMENT_BANK_SCOPED_DOC_TYPES
+    statement_bank_issuer_aliases: dict[str, str] = field(
+        default_factory=lambda: dict(DEFAULT_STATEMENT_BANK_ISSUER_ALIASES)
+    )
+    bank_export_prefix: str = DEFAULT_BANK_EXPORT_PREFIX
+    supporting_export_prefixes: tuple[str, ...] = DEFAULT_SUPPORTING_EXPORT_PREFIXES
+    supporting_doc_type_patterns: tuple[str, ...] = DEFAULT_SUPPORTING_DOC_TYPE_PATTERNS
+    bank_counterparties: tuple[str, ...] = DEFAULT_BANK_COUNTERPARTIES
+    counterparty_aliases: dict[str, str] = field(default_factory=dict)
+    shared_period_transaction_keywords: dict[str, tuple[str, ...]] = field(
+        default_factory=lambda: {
+            party: tuple(keywords)
+            for party, keywords in DEFAULT_SHARED_PERIOD_TRANSACTION_KEYWORDS.items()
+        }
+    )
+    shared_period_title_terms: dict[str, tuple[str, ...]] = field(
+        default_factory=lambda: {
+            party: tuple(terms)
+            for party, terms in DEFAULT_SHARED_PERIOD_TITLE_TERMS.items()
+        }
+    )
+    same_month_shared_rule_names: tuple[str, ...] = DEFAULT_SAME_MONTH_SHARED_RULE_NAMES
+
+
+_ACTIVE_RECONCILIATION_POLICY: ContextVar[ReconciliationPolicy] = ContextVar(
+    "papertrail_reconciliation_policy",
+    default=ReconciliationPolicy(),
+)
+
+
+def _reconciliation_policy() -> ReconciliationPolicy:
+    return _ACTIVE_RECONCILIATION_POLICY.get()
+
+
+def _amount_tolerance() -> float:
+    return _reconciliation_policy().amount_tolerance
+
+
+def _date_window_days() -> int:
+    return _reconciliation_policy().date_window_days
+
+
+def _sequence(value, fallback: tuple[str, ...] | list[str]) -> tuple[str, ...]:
+    if value is None:
+        return tuple(fallback)
+    return tuple(str(item) for item in value)
+
+
+def _string_map(value, fallback: dict[str, str] | None = None) -> dict[str, str]:
+    merged = dict(fallback or {})
+    if not value:
+        return merged
+    for key, item in dict(value).items():
+        if key and item:
+            merged[str(key)] = str(item)
+    return merged
+
+
+def _keywords_map(value, fallback: dict[str, tuple[str, ...]]) -> dict[str, tuple[str, ...]]:
+    merged = dict(fallback)
+    if not value:
+        return merged
+    for key, items in dict(value).items():
+        if key and items:
+            merged[str(key)] = tuple(str(item) for item in items)
+    return merged
+
+
+def _policy_from_profile(profile) -> ReconciliationPolicy:
+    settings = profile.reconciliation
+    statement_aliases = {
+        _normalize_for_match(alias): canonical
+        for alias, canonical in _string_map(
+            getattr(settings, "statement_bank_issuer_aliases", None),
+            DEFAULT_STATEMENT_BANK_ISSUER_ALIASES,
+        ).items()
+    }
+    return ReconciliationPolicy(
+        amount_tolerance=float(getattr(settings, "amount_tolerance", DEFAULT_AMOUNT_TOLERANCE)),
+        date_window_days=int(getattr(settings, "date_window_days", DEFAULT_DATE_WINDOW_DAYS)),
+        bank_generated_doc_types=_sequence(
+            getattr(settings, "bank_generated_doc_types", None),
+            DEFAULT_BANK_GENERATED_DOC_TYPES,
+        ),
+        statement_bank_scoped_doc_types=_sequence(
+            getattr(settings, "statement_bank_scoped_doc_types", None),
+            DEFAULT_STATEMENT_BANK_SCOPED_DOC_TYPES,
+        ),
+        statement_bank_issuer_aliases=statement_aliases,
+        bank_export_prefix=str(getattr(settings, "bank_export_prefix", DEFAULT_BANK_EXPORT_PREFIX)),
+        supporting_export_prefixes=_sequence(
+            getattr(settings, "supporting_export_prefixes", None),
+            DEFAULT_SUPPORTING_EXPORT_PREFIXES,
+        ),
+        supporting_doc_type_patterns=_sequence(
+            getattr(settings, "supporting_doc_type_patterns", None),
+            DEFAULT_SUPPORTING_DOC_TYPE_PATTERNS,
+        ),
+        bank_counterparties=_sequence(
+            getattr(settings, "bank_counterparties", None),
+            DEFAULT_BANK_COUNTERPARTIES,
+        ),
+        counterparty_aliases=_string_map(getattr(settings, "counterparty_aliases", None)),
+        shared_period_transaction_keywords=_keywords_map(
+            getattr(settings, "shared_period_transaction_keywords", None),
+            DEFAULT_SHARED_PERIOD_TRANSACTION_KEYWORDS,
+        ),
+        shared_period_title_terms=_keywords_map(
+            getattr(settings, "shared_period_title_terms", None),
+            DEFAULT_SHARED_PERIOD_TITLE_TERMS,
+        ),
+        same_month_shared_rule_names=_sequence(
+            getattr(settings, "same_month_shared_rule_names", None),
+            DEFAULT_SAME_MONTH_SHARED_RULE_NAMES,
+        ),
+    )
 
 
 def _reconciliation_rules() -> list[ReconciliationRule]:
-    """Broad reconciliation rules built on derived evidence families."""
-    raw_rules = [
-        {
-            "name": "investment",
-            "match_description": ["TRANSFERENCIA A CREDITO LIS"],
-            "required_types": {"bank-stock-sell": [1, None]},
-            "expected_page_count": {"bank-stock-sell": [1, 2]},
-        },
-        {
-            "name": "investment",
-            "match_description": ["TRANSFERENCIA A DEBITO LIS"],
-            "required_types": {"investment-evidence": [1, None]},
-            "shared_types": {"investment-evidence": "bpi"},
-            "shared_filters": {"investment-evidence": {"document_type": "bank-investment"}},
-            "expected_page_count": {"investment-evidence": [1, 2]},
-        },
-        {
-            "name": "loan-payment",
-            "match_description": ["CONCESS CRED EMPR"],
-            "required_types": {
-                "bank-anchor": [1, None],
-                "contract-evidence": [1, None],
-            },
-            "expected_page_count": {"bank-anchor": 1},
-        },
-        {
-            "name": "loan-payment",
-            "match_description": ["IMP ABERT CRED EMPRES"],
-            "required_types": {"bank-anchor": 1, "supplier-evidence": 1},
-            "expected_page_count": {"bank-anchor": 1, "supplier-evidence": 1},
-        },
-        {
-            "name": "loan-payment",
-            "match_description": ["PAGAMENT EMPRESTIMO"],
-            "required_types": {"bank-anchor": 1, "supplier-evidence": 1},
-            "shared_types": {"supplier-evidence": "millennium-bcp"},
-            "shared_filters": {"supplier-evidence": {"document_title": "Pagamento de Prestação"}},
-            "expected_page_count": {"bank-anchor": 1, "supplier-evidence": 1},
-        },
-        {
-            "name": "tax-payment",
-            "match_description": ["IGCP", "PAG.DUC"],
-            "required_types": {"bank-anchor": 1, "tax-evidence": 1},
-            "expected_page_count": {"bank-anchor": 1},
-        },
-        {
-            "name": "payroll-payment",
-            "match_description": ["TAXA SOCIAL UNICA"],
-            "required_types": {"bank-anchor": 1, "payroll-evidence": 1},
-            "expected_page_count": {"bank-anchor": 1},
-        },
-        {
-            "name": "payroll-payment",
-            "match_description": ["EMPLOYEE ONE", "EMPLOYEE TWO"],
-            "required_types": {"bank-anchor": 1, "payroll-evidence": 1},
-            "shared_types": {"payroll-evidence": None},
-            "shared_filters": {"payroll-evidence": {"document_type": "payroll-salary"}},
-            "expected_page_count": {"bank-anchor": 1},
-        },
-        {
-            "name": "bank-fee",
-            "match_description": [
-                "CUSTO DE SERVICO INTERNACIONAL",
-                "MANUTENCAO DE CONTA VALOR NEGOCIOS",
-                "PACOTE M EMPRESA",
-                "TITULOS CUSTODIA",
-                "OPERACOES COM TITULOS",
-                "IMPOSTO DO SELO",
-                "IMPOSTO SELO",
-                "IMPOSTO DE SELO",
-                "COMISSAO",
-                "COMISSÃO",
-            ],
-            "required_types": {"supplier-evidence": [1, None], "bank-anchor": [0, 1]},
-            "expected_page_count": {"supplier-evidence": [1, 2], "bank-anchor": 1},
-        },
-        {
-            "name": "bank-only",
-            "match_description": ["TRF SEPA+"],
-            "required_types": {"bank-anchor": [1, None]},
-            "expected_page_count": {},
-        },
-        {
-            "name": "bank-only",
-            "match_description": [
-                "TRF P/ EXAMPLE COMPANY - BPI",
-                "TRANSFERENCIA RECEBIDA",
-                "TRANSFERÊNCIA RECEBIDA",
-                "EXAMPLE COMPANY - BPI",
-            ],
-            "required_types": {"bank-anchor": 1},
-            "expected_page_count": {"bank-anchor": 1},
-        },
-        {
-            "name": "bank-only",
-            "direction": "credit",
-            "required_types": {"bank-anchor": [1, None]},
-            "expected_page_count": {"bank-anchor": 1},
-        },
-        {
-            "name": "supplier-payment",
-            "direction": "debit",
-            "required_types": {"bank-anchor": 1, "supplier-evidence": [1, None]},
-            "expected_page_count": {"bank-anchor": 1},
-        },
+    """Broad default reconciliation rules built on derived evidence families."""
+    return [ReconciliationRule.model_validate(rule) for rule in DEFAULT_RECONCILIATION_RULES]
+
+
+def _rules_from_profile(profile) -> list[ReconciliationRule]:
+    configured_rules = getattr(profile.reconciliation, "rules", None) or []
+    if not configured_rules:
+        return _reconciliation_rules()
+    return [
+        rule if isinstance(rule, ReconciliationRule) else ReconciliationRule.model_validate(rule)
+        for rule in configured_rules
     ]
-    return [ReconciliationRule.model_validate(rule) for rule in raw_rules]
 
 
 @dataclass(frozen=True)
@@ -290,8 +307,15 @@ def _build_candidate(
     is_sub_document: bool = False,
     exclude_from_matching: bool = False,
     line_items: list[CandidateLineItem] | None = None,
+    policy: ReconciliationPolicy | None = None,
 ) -> PDFCandidate:
-    evidence = build_document_evidence(data)
+    policy = policy or _reconciliation_policy()
+    evidence = build_document_evidence(
+        data,
+        counterparty_aliases=policy.counterparty_aliases,
+        bank_counterparties=policy.bank_counterparties,
+        shared_period_title_terms=policy.shared_period_title_terms,
+    )
     return PDFCandidate(
         json_path=json_path,
         pdf_filename=pdf_filename,
@@ -678,7 +702,7 @@ def _find_bpi_stamp_duty_pair(amounts: list[float]) -> tuple[float, float] | Non
             tax = round(gross - base, 2)
             if tax <= 0 or tax > 1:
                 continue
-            if abs(round(base * 0.04, 2) - tax) <= _AMOUNT_TOLERANCE:
+            if abs(round(base * 0.04, 2) - tax) <= _amount_tolerance():
                 pairs.append((gross_index, base, gross))
     if not pairs:
         return None
@@ -1118,7 +1142,7 @@ def _next_amount_line(lines: list[str], index: int) -> Optional[float]:
 
 def _extract_direct_debit_invoice_line_items(pdf_path: Path, data: dict) -> list[CandidateLineItem]:
     doc_type = (data.get("document_type") or "").lower()
-    if doc_type not in _SUPPORTING_DOC_TYPE_PATTERNS:
+    if doc_type not in _reconciliation_policy().supporting_doc_type_patterns:
         return []
 
     try:
@@ -1229,7 +1253,7 @@ def _candidate_matches_relevant_amounts(candidate: PDFCandidate, relevant_amount
         amounts.append(candidate.total_amount)
     amounts.extend(item.amount for item in candidate.line_items)
     return any(
-        abs(candidate_amount - amount) <= _AMOUNT_TOLERANCE
+        abs(candidate_amount - amount) <= _amount_tolerance()
         for candidate_amount in amounts
         for amount in relevant_amounts
     )
@@ -1267,8 +1291,8 @@ def _is_relevant_supplemental_candidate(
     if candidate_date is None or min_txn_date is None or max_txn_date is None:
         return False
 
-    window_start = min_txn_date - timedelta(days=_DATE_WINDOW_DAYS)
-    window_end = max_txn_date + timedelta(days=_DATE_WINDOW_DAYS)
+    window_start = min_txn_date - timedelta(days=_date_window_days())
+    window_end = max_txn_date + timedelta(days=_date_window_days())
     if candidate_date < window_start or candidate_date > window_end:
         return False
 
@@ -1323,6 +1347,7 @@ def _load_pdf_candidates(
     exclude_prefixes: list[str] | None = None,
 ) -> list[PDFCandidate]:
     exclude_prefixes = exclude_prefixes or []
+    policy = _reconciliation_policy()
     candidates: list[PDFCandidate] = []
     seen_candidate_ids: set[str] = set()
     for json_path, data in repository.iter_sidecars(export_path):
@@ -1349,6 +1374,7 @@ def _load_pdf_candidates(
                         sub_doc_index=index,
                         is_sub_document=True,
                         exclude_from_matching=excluded,
+                        policy=policy,
                     )
                 )
                 candidate = candidates[-1]
@@ -1366,6 +1392,7 @@ def _load_pdf_candidates(
             file_extension=doc_path.suffix.lower(),
             exclude_from_matching=excluded,
             line_items=_extract_reconciliation_line_items(doc_path, data),
+            policy=policy,
         )
         if candidate.candidate_id in seen_candidate_ids:
             continue
@@ -1485,7 +1512,7 @@ def _candidate_signature(cand: PDFCandidate) -> tuple[str, str]:
 
 def _candidate_date_rank(txn_date: Optional[str], cand: PDFCandidate) -> Optional[tuple[int, bool, int]]:
     days = _days_between(txn_date, cand.date_issued)
-    if days is None or days > _DATE_WINDOW_DAYS:
+    if days is None or days > _date_window_days():
         return None
     signed_days = _signed_days_between(txn_date, cand.date_issued) or 0
     return (days, signed_days > 0, abs(signed_days))
@@ -1503,7 +1530,7 @@ def _candidate_rank_for_transaction(
         if _line_item_category_matches(category, item)
         and (
             not item.amount_match_required
-            or abs(abs(txn.amount) - item.amount) <= _AMOUNT_TOLERANCE
+            or abs(abs(txn.amount) - item.amount) <= _amount_tolerance()
         )
     ]
     if relevant_line_items:
@@ -1523,7 +1550,7 @@ def _line_item_date_rank(
 ) -> Optional[tuple[int, bool, int]]:
     line_item_date = line_item.date_issued or candidate.date_issued
     days = _days_between(txn_date, line_item_date)
-    if days is None or days > _DATE_WINDOW_DAYS:
+    if days is None or days > _date_window_days():
         return None
     signed_days = _signed_days_between(txn_date, line_item_date) or 0
     return (days, signed_days > 0, abs(signed_days))
@@ -1541,26 +1568,38 @@ def _same_calendar_month(date_str1: Optional[str], date_str2: Optional[str]) -> 
 
 
 def _is_via_verde_transaction(txn: Transaction) -> bool:
-    return "SHAREDTOLL" in _normalize_for_match(txn.description).upper()
+    normalized = _normalize_for_match(txn.description).upper()
+    return any(
+        (normalized_keyword := _normalize_for_match(keyword).upper())
+        and normalized_keyword in normalized
+        for keywords in _reconciliation_policy().shared_period_transaction_keywords.values()
+        for keyword in keywords
+    )
 
 
 def _is_via_verde_shared_period_candidate(candidate: PDFCandidate) -> bool:
-    return candidate.is_shared_period_document and candidate.counterparty_id == "shared-toll"
+    return candidate.is_shared_period_document and _is_shared_period_counterparty(candidate)
+
+
+def _is_shared_period_counterparty(candidate: PDFCandidate) -> bool:
+    shared_parties = set(_reconciliation_policy().shared_period_transaction_keywords)
+    return candidate.counterparty_id in shared_parties
 
 
 def _is_bank_generated_candidate(candidate: PDFCandidate) -> bool:
     doc_type = candidate.effective_document_type or candidate.document_type
-    return bool(doc_type and doc_type.lower() in _BANK_GENERATED_DOC_TYPES)
+    return bool(doc_type and doc_type.lower() in _reconciliation_policy().bank_generated_doc_types)
 
 
 def _is_bank_export_candidate(candidate: PDFCandidate) -> bool:
-    return candidate.pdf_filename.startswith(_BANK_EXPORT_PREFIX)
+    return candidate.pdf_filename.startswith(_reconciliation_policy().bank_export_prefix)
 
 
 def _is_supporting_export_candidate(candidate: PDFCandidate) -> bool:
-    if not candidate.pdf_filename.startswith(_SUPPORTING_EXPORT_PREFIXES):
+    policy = _reconciliation_policy()
+    if not candidate.pdf_filename.startswith(policy.supporting_export_prefixes):
         return False
-    return _candidate_matches_patterns(candidate, _SUPPORTING_DOC_TYPE_PATTERNS)
+    return _candidate_matches_patterns(candidate, list(policy.supporting_doc_type_patterns))
 
 
 def _candidate_parties_match(left: PDFCandidate, right: PDFCandidate) -> bool:
@@ -1574,7 +1613,7 @@ def _is_paired_supporting_candidate(match: MatchResult, candidate: PDFCandidate)
         return False
     if candidate.total_amount is None:
         return False
-    if abs(abs(match.transaction.amount) - candidate.total_amount) > _AMOUNT_TOLERANCE:
+    if abs(abs(match.transaction.amount) - candidate.total_amount) > _amount_tolerance():
         return False
     txn_date = match.transaction.date_posting or match.transaction.date_value
     if _candidate_date_rank(txn_date, candidate) is None:
@@ -1595,13 +1634,18 @@ def _transfer_line_item_count(candidate: PDFCandidate) -> int:
 
 def _is_statement_bank_scoped_candidate(candidate: PDFCandidate) -> bool:
     doc_type = candidate.effective_document_type or candidate.document_type
-    return bool(doc_type and doc_type.lower() in _STATEMENT_BANK_SCOPED_DOC_TYPES)
+    return bool(
+        doc_type
+        and doc_type.lower() in _reconciliation_policy().statement_bank_scoped_doc_types
+    )
 
 
 def _statement_bank_key(issuing_party: Optional[str]) -> Optional[str]:
     if not issuing_party or issuing_party == "$UNKNOWN$":
         return None
-    return _STATEMENT_BANK_ISSUER_ALIASES.get(_normalize_for_match(issuing_party))
+    return _reconciliation_policy().statement_bank_issuer_aliases.get(
+        _normalize_for_match(issuing_party)
+    )
 
 
 def _is_candidate_compatible_with_statement_bank(
@@ -1628,7 +1672,7 @@ def _rule_allowed_patterns(rule) -> list[str]:
 
 
 def _is_same_month_shared_candidate(rule, txn_date: Optional[str], candidate: PDFCandidate) -> bool:
-    if rule.name != "vendor-sharedtoll":
+    if rule.name not in _reconciliation_policy().same_month_shared_rule_names:
         return True
     return _same_calendar_month(txn_date, candidate.date_issued)
 
@@ -1743,7 +1787,7 @@ def _phase1_deterministic_match(
                 continue
             if cand.total_amount is None:
                 continue
-            if abs(abs_amount - cand.total_amount) <= _AMOUNT_TOLERANCE:
+            if abs(abs_amount - cand.total_amount) <= _amount_tolerance():
                 rank = _candidate_rank_for_transaction(txn, cand, category)
                 if rank is not None:
                     amount_matches.append((cand, rank))
@@ -1833,7 +1877,7 @@ def _link_line_item_documents(
                     continue
                 if (
                     line_item.amount_match_required
-                    and abs(line_item.amount - abs_amount) > _AMOUNT_TOLERANCE
+                    and abs(line_item.amount - abs_amount) > _amount_tolerance()
                 ):
                     continue
                 if not _line_item_matches_transaction_context(txn, line_item):
@@ -2011,7 +2055,7 @@ def _link_paired_supporting_documents(
                 continue
             if candidate.total_amount is None:
                 continue
-            if abs(abs(match.transaction.amount) - candidate.total_amount) > _AMOUNT_TOLERANCE:
+            if abs(abs(match.transaction.amount) - candidate.total_amount) > _amount_tolerance():
                 continue
             if _candidate_rank_for_transaction(match.transaction, candidate, category) is None:
                 continue
@@ -2122,7 +2166,7 @@ def _link_evidence_counterparty_documents(
 def _candidate_amount_matches_transaction(match: MatchResult, candidate: PDFCandidate) -> bool:
     if candidate.total_amount is None:
         return False
-    return abs(abs(match.transaction.amount) - candidate.total_amount) <= _AMOUNT_TOLERANCE
+    return abs(abs(match.transaction.amount) - candidate.total_amount) <= _amount_tolerance()
 
 
 def _amount_distance(match: MatchResult, candidate: PDFCandidate) -> float:
@@ -2197,7 +2241,8 @@ def _phase2_llm_match(
         label = chr(ord("A") + index) if index < 26 else f"P{index}"
         cand_labels[label] = candidates[index]
 
-    prompt = f"""You are a bank reconciliation assistant. Match bank transactions to their supporting PDF documents.
+    date_window_days = _date_window_days()
+    prompt = f"""You are a bank reconciliation assistant. Match bank transactions to supporting PDF documents.
 
 UNMATCHED TRANSACTIONS:
 {chr(10).join(txn_lines)}
@@ -2208,7 +2253,7 @@ AVAILABLE PDF DOCUMENTS:
 Match transactions to PDFs. Consider:
 - Bank descriptions are abbreviated; match to issuing_party and document_title
 - Amounts may differ slightly (fees, taxes included)
-- Dates may differ by up to 30 days
+- Dates may differ by up to {date_window_days} days
 - Some transactions may have NO match — do not force matches
 - One transaction CAN match multiple PDFs (e.g., bank note + vendor invoice)
 
@@ -2259,7 +2304,7 @@ Respond in JSON:
         abs_amount = abs(txn.amount)
         has_amount_match = any(
             candidate.total_amount is not None
-            and abs(abs_amount - candidate.total_amount) <= _AMOUNT_TOLERANCE
+            and abs(abs_amount - candidate.total_amount) <= _amount_tolerance()
             for candidate in matched_pdfs
         )
         if not has_amount_match:
@@ -2363,7 +2408,7 @@ def _validate_required_documents(matches: list[MatchResult], rules: list) -> dic
                 if not (
                     error.startswith("missing supplier-evidence")
                     and any(
-                        candidate.is_bank_anchor and candidate.counterparty_id == "shared-toll"
+                        candidate.is_bank_anchor and _is_shared_period_counterparty(candidate)
                         for candidate in match.pdf_candidates
                     )
                 )
@@ -2411,20 +2456,30 @@ def _validate_supporting_documents_have_bank_pair(
     errors: dict[int, list[str]] = {}
     for match in matches:
         has_supporting_doc = any(
-            candidate.pdf_filename.startswith(_SUPPORTING_EXPORT_PREFIXES)
+            candidate.pdf_filename.startswith(_reconciliation_policy().supporting_export_prefixes)
             for candidate in match.pdf_candidates
         )
         has_bank_doc = any(
-            candidate.pdf_filename.startswith(_BANK_EXPORT_PREFIX)
+            candidate.pdf_filename.startswith(_reconciliation_policy().bank_export_prefix)
             for candidate in match.pdf_candidates
         )
         has_via_verde_shared_doc = _is_via_verde_transaction(match.transaction) and any(
             _is_via_verde_shared_period_candidate(candidate)
             for candidate in match.pdf_candidates
         )
-        if has_supporting_doc and not has_bank_doc and not match.line_items and not has_via_verde_shared_doc:
+        if (
+            has_supporting_doc
+            and not has_bank_doc
+            and not match.line_items
+            and not has_via_verde_shared_doc
+        ):
+            policy = _reconciliation_policy()
+            supporting_prefixes = "/".join(
+                prefix.rstrip("_") for prefix in policy.supporting_export_prefixes
+            )
+            bank_prefix = policy.bank_export_prefix.rstrip("_")
             errors[match.transaction.row_number] = [
-                "missing BNC document for CMP/DIV support file"
+                f"missing {bank_prefix} document for {supporting_prefixes} support file"
             ]
     return errors
 
@@ -2682,10 +2737,10 @@ def _link_companion_documents(
                     continue
                 if cand.total_amount is None:
                     continue
-                if abs(group_sum - cand.total_amount) > _AMOUNT_TOLERANCE:
+                if abs(group_sum - cand.total_amount) > _amount_tolerance():
                     continue
                 days = _days_between(date, cand.date_issued)
-                if days is not None and days <= _DATE_WINDOW_DAYS:
+                if days is not None and days <= _date_window_days():
                     matched_cand = cand
                     break
 
@@ -2783,7 +2838,8 @@ def reconcile_single(
         return empty_stats
 
     profile = runtime.profile
-    rules = _reconciliation_rules()
+    policy_token = _ACTIVE_RECONCILIATION_POLICY.set(_policy_from_profile(profile))
+    rules = _rules_from_profile(profile)
     exclude_prefixes = profile.reconciliation.exclude_prefixes
     statement_issuing_party = _load_statement_issuing_party(repository, excel_path)
     candidates = _load_reconciliation_candidates(
@@ -2812,7 +2868,11 @@ def reconcile_single(
         matchable,
         rules,
     )
-    p2_matches = _phase2_llm_match(runtime, unmatched_txns, remaining_cands) if unmatched_txns and remaining_cands else []
+    p2_matches = (
+        _phase2_llm_match(runtime, unmatched_txns, remaining_cands)
+        if unmatched_txns and remaining_cands
+        else []
+    )
     all_matches = p1_matches + p2_matches
 
     p2_matched_rows = {match.transaction.row_number for match in p2_matches}
@@ -2944,7 +3004,7 @@ def reconcile_single(
                     amount_str = f" ({cand.total_amount:.2f} {currency})"
                 console.detail(f"{cand.pdf_filename}{amount_str}")
 
-    return {
+    result = {
         "total": total_txns,
         "reconciled": total_reconciled,
         "unmatched": total_unmatched,
@@ -2953,3 +3013,5 @@ def reconcile_single(
         "reconciliation_rate": pct,
         "matches": all_matches,
     }
+    _ACTIVE_RECONCILIATION_POLICY.reset(policy_token)
+    return result

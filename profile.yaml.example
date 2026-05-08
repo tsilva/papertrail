@@ -95,7 +95,49 @@ export:
     - target_type: "at-ss*"        # Social security payment proof
       attach_type: "bank-note"
 
-# Reconciliation uses built-in evidence rules from the codebase. Profile
-# settings only control matching exclusions.
+# Reconciliation policy. Leave rules empty to use the built-in defaults from
+# papertrail/reconciliation_defaults.py, or set rules here to replace them.
 reconciliation:
   exclude_prefixes: ["EXC_"]
+  rules: []
+  amount_tolerance: 0.01
+  date_window_days: 30
+  bank_export_prefix: "BNC_"
+  supporting_export_prefixes: ["CMP_", "DIV_"]
+  supporting_doc_type_patterns:
+    - "invoice"
+    - "receipt"
+    - "invoice-receipt"
+    - "invoice-credit"
+    - "invoice-debit"
+    - "invoice-order"
+    - "insurance-notice"
+    - "receipt-reference"
+    - "receipt-delivery"
+  bank_generated_doc_types:
+    - "bank-card-transaction"
+    - "bank-note"
+    - "bank-transfer"
+    - "bank-statement"
+    - "bank-investment"
+  statement_bank_scoped_doc_types:
+    - "bank-card-transaction"
+    - "bank-note"
+  statement_bank_issuer_aliases:
+    bancobpi: "bpi"
+    bpi: "bpi"
+    bancocomercialportugues: "millennium-bcp"
+    bcp: "millennium-bcp"
+    millennium: "millennium-bcp"
+    millenniumbcp: "millennium-bcp"
+  bank_counterparties: ["bpi", "millennium-bcp"]
+  # Add profile-specific tax numbers or issuer aliases here.
+  # counterparty_aliases:
+  #   "TESTOWNER": "my-company"
+  counterparty_aliases: {}
+  shared_period_transaction_keywords:
+    shared-toll: ["SHAREDTOLL"]
+  shared_period_title_terms:
+    shared-toll: ["pagamentosdeservicos", "extratorecibo"]
+    "$bank": ["comissoes", "manctapacote", "operacaocartoes", "impostodoselo"]
+  same_month_shared_rule_names: ["vendor-sharedtoll"]

@@ -11,6 +11,11 @@ from dataclasses import dataclass
 from typing import Any
 
 from papertrail.models import clean_enum_string
+from papertrail.reconciliation_defaults import (
+    DEFAULT_BANK_COUNTERPARTIES,
+    DEFAULT_COUNTERPARTY_ALIASES,
+    DEFAULT_SHARED_PERIOD_TITLE_TERMS,
+)
 from papertrail.utils import strip_diacritics
 
 
@@ -58,65 +63,11 @@ _INVESTMENT_TYPES = {
     "bank-stock-sell",
 }
 _IGNORE_TYPES = {"investment-key-information-document", "loan-simulation"}
-_BANK_COUNTERPARTIES = {"bpi", "millennium-bcp"}
-
-_COUNTERPARTY_ALIASES = {
-    "TESTBANKALPHATAX": "millennium-bcp",
-    "ptTESTBANKALPHATAX": "millennium-bcp",
-    "bancocomercialportugues": "millennium-bcp",
-    "millenniumbcp": "millennium-bcp",
-    "millenniumbcpsa": "millennium-bcp",
-    "millenniumbcpbancocomercialportugues": "millennium-bcp",
-    "millennium": "millennium-bcp",
-    "millenniumbanco": "millennium-bcp",
-    "bcp": "millennium-bcp",
-    "TESTBANKBETATAX": "bpi",
-    "ptTESTBANKBETATAX": "bpi",
-    "bpi": "bpi",
-    "bancobpi": "bpi",
-    "bancobpisa": "bpi",
-    "TESTSHAREDTOLL": "shared-toll",
-    "ptTESTSHAREDTOLL": "shared-toll",
-    "sharedtoll": "shared-toll",
-    "sharedtollportugal": "shared-toll",
-    "google": "google",
-    "googlecommerce": "google",
-    "googlecommercelimited": "google",
-    "googley": "google",
-    "ie9825613n": "google",
-    "TESTUTILITY": "utility-provider",
-    "ptTESTUTILITY": "utility-provider",
-    "utility-provider": "utility-provider",
-    "utility-providerportugal": "utility-provider",
-    "utility-providerportugalcomunicacoespessoais": "utility-provider",
-    "TESTINSURER": "insurance-provider",
-    "ptTESTINSURER": "insurance-provider",
-    "insurance-provider": "insurance-provider",
-    "companhiadesegurosinsurance-providerportugal": "insurance-provider",
-    "companhiadesegurosinsurance-providerportugalsa": "insurance-provider",
-    "ISSUER-TAX-ID": "melo-nadais",
-    "ptISSUER-TAX-ID": "melo-nadais",
-    "melonadais": "melo-nadais",
-    "melonadaisassociados": "melo-nadais",
-    "500918880": "fidelidade",
-    "pt500918880": "fidelidade",
-    "fidelidade": "fidelidade",
-    "companhiades": "fidelidade",
-    "companhiadessegurosfidelidade": "fidelidade",
-    "segurancasocial": "seguranca-social",
-    "at": "at",
-    "atautoridadetributariaeaduaneira": "at",
-    "benefits-provider": "benefits-provider",
-    "TESTCOMPANY": "example-company",
-    "ptTESTCOMPANY": "example-company",
-    "examplecompany": "example-company",
-    "examplecompanyunipessoalltda": "example-company",
-    "examplecompanyunipessoallda": "example-company",
-    "digitalocean": "digitalocean",
-    "digitaloceanllc": "digitalocean",
-    "eu528002224": "digitalocean",
-    "wisdomtree": "wisdomtree",
-    "wisdomtreeuklimited": "wisdomtree",
+_BANK_COUNTERPARTIES = set(DEFAULT_BANK_COUNTERPARTIES)
+_COUNTERPARTY_ALIASES = dict(DEFAULT_COUNTERPARTY_ALIASES)
+_SHARED_PERIOD_TITLE_TERMS = {
+    party: tuple(terms)
+    for party, terms in DEFAULT_SHARED_PERIOD_TITLE_TERMS.items()
 }
 
 
@@ -174,14 +125,18 @@ def document_type_matches_family(doc_type: str | None, family_pattern: str) -> b
     return document_family_for_type(doc_type) in families
 
 
-def counterparty_id(metadata: dict[str, Any]) -> str:
+def counterparty_id(
+    metadata: dict[str, Any],
+    *,
+    counterparty_aliases: dict[str, str] | None = None,
+) -> str:
     candidates = [
         metadata.get("issuer_tax_number"),
         metadata.get("issuing_party"),
         metadata.get("issuing_party_raw"),
     ]
     for value in candidates:
-        alias = _alias_for_value(value)
+        alias = _alias_for_value(value, counterparty_aliases)
         if alias:
             return alias
 
@@ -196,15 +151,28 @@ def counterparty_id(metadata: dict[str, Any]) -> str:
     return "$UNKNOWN$"
 
 
-def build_document_evidence(metadata: dict[str, Any]) -> DocumentEvidence:
+def build_document_evidence(
+    metadata: dict[str, Any],
+    *,
+    counterparty_aliases: dict[str, str] | None = None,
+    bank_counterparties: list[str] | tuple[str, ...] | set[str] | None = None,
+    shared_period_title_terms: dict[str, list[str]] | dict[str, tuple[str, ...]] | None = None,
+) -> DocumentEvidence:
     family = document_family_for_type(metadata.get("document_type"), metadata)
-    party = counterparty_id(metadata)
-    source_bank = party if family == BANK_ANCHOR and party in _BANK_COUNTERPARTIES else None
+    party = counterparty_id(metadata, counterparty_aliases=counterparty_aliases)
+    bank_parties = set(bank_counterparties or _BANK_COUNTERPARTIES)
+    source_bank = party if family == BANK_ANCHOR and party in bank_parties else None
     return DocumentEvidence(
         document_family=family,
         counterparty_id=party,
         source_bank=source_bank,
-        is_shared_period_document=_is_shared_period_document(metadata, family, party),
+        is_shared_period_document=_is_shared_period_document(
+            metadata,
+            family,
+            party,
+            bank_counterparties=bank_parties,
+            shared_period_title_terms=shared_period_title_terms,
+        ),
     )
 
 
@@ -217,26 +185,55 @@ def _is_zero_amount_supplier_doc(doc_type: str, amount: Any) -> bool:
         return False
 
 
-def _is_shared_period_document(metadata: dict[str, Any], family: str, party: str) -> bool:
+def _is_shared_period_document(
+    metadata: dict[str, Any],
+    family: str,
+    party: str,
+    *,
+    bank_counterparties: set[str] | None = None,
+    shared_period_title_terms: dict[str, list[str]] | dict[str, tuple[str, ...]] | None = None,
+) -> bool:
     if family != SUPPLIER_EVIDENCE:
         return False
     title = _compact(metadata.get("document_title"))
     raw_type = _compact(metadata.get("document_type_raw"))
-    if party == "shared-toll" and any(term in title for term in ("pagamentosdeservicos", "extratorecibo")):
+    terms_by_party = _shared_period_terms(shared_period_title_terms)
+    text = f"{title} {raw_type}"
+    if any(term in text for term in terms_by_party.get(party, ())):
         return True
-    if party in _BANK_COUNTERPARTIES and any(
-        term in f"{title} {raw_type}"
-        for term in ("comissoes", "manctapacote", "operacaocartoes", "impostodoselo")
-    ):
+    bank_parties = bank_counterparties or _BANK_COUNTERPARTIES
+    if party in bank_parties and any(term in text for term in terms_by_party.get("$bank", ())):
         return True
     return False
 
 
-def _alias_for_value(value: Any) -> str | None:
+def _alias_for_value(value: Any, counterparty_aliases: dict[str, str] | None = None) -> str | None:
     normalized = _compact(value)
     if not normalized:
         return None
-    return _COUNTERPARTY_ALIASES.get(normalized)
+    return _counterparty_aliases(counterparty_aliases).get(normalized)
+
+
+def _counterparty_aliases(counterparty_aliases: dict[str, str] | None = None) -> dict[str, str]:
+    if not counterparty_aliases:
+        return _COUNTERPARTY_ALIASES
+    merged = dict(_COUNTERPARTY_ALIASES)
+    for alias, canonical in counterparty_aliases.items():
+        normalized = _compact(alias)
+        if normalized and canonical:
+            merged[normalized] = canonical
+    return merged
+
+
+def _shared_period_terms(
+    terms: dict[str, list[str]] | dict[str, tuple[str, ...]] | None = None,
+) -> dict[str, tuple[str, ...]]:
+    if not terms:
+        return _SHARED_PERIOD_TITLE_TERMS
+    merged = dict(_SHARED_PERIOD_TITLE_TERMS)
+    for party, values in terms.items():
+        merged[party] = tuple(_compact(value) for value in values if _compact(value))
+    return merged
 
 
 def _normalize_tax_number(value: Any) -> str:
