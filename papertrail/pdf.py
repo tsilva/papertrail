@@ -55,25 +55,44 @@ def get_page_count(pdf_path: Path) -> int:
         return len(doc)
 
 IMAGE_EXTENSIONS = ('.png', '.jpg', '.jpeg', '.tiff', '.tif', '.bmp', '.webp')
+DOCUMENT_EXTENSIONS = ('.pdf', '.xlsx') + IMAGE_EXTENSIONS
 
 
-def is_image_file(path: Path) -> bool:
+def _normalized_extensions(extensions) -> tuple[str, ...]:
+    return tuple(str(extension).lower() for extension in extensions)
+
+
+def is_image_file(path: Path, image_extensions=IMAGE_EXTENSIONS) -> bool:
     """Check if a file path has an image extension."""
-    return path.suffix.lower() in IMAGE_EXTENSIONS
+    return path.suffix.lower() in _normalized_extensions(image_extensions)
 
 
-def _walk_folders(folder_paths, ext_set):
+def _walk_folders(
+    folder_paths,
+    ext_set,
+    *,
+    skip_dirs=("logs",),
+    skip_dir_prefixes=("_dupes",),
+    skip_hidden_files: bool = True,
+):
     """Yield matching files from one or multiple folders."""
     if isinstance(folder_paths, (str, Path)):
         folder_paths = [folder_paths]
+    skip_dirs_set = set(skip_dirs or ())
+    skip_prefixes = tuple(skip_dir_prefixes or ())
     for folder_path in folder_paths:
         folder_path = Path(folder_path)
         if not folder_path.exists():
             continue
         for root, dirs, files in os.walk(folder_path):
-            dirs[:] = [d for d in dirs if not d.startswith("_dupes") and d != "logs"]
+            dirs[:] = [
+                directory
+                for directory in dirs
+                if directory not in skip_dirs_set
+                and not any(directory.startswith(prefix) for prefix in skip_prefixes)
+            ]
             for file in files:
-                if file.startswith('.'):
+                if skip_hidden_files and file.startswith('.'):
                     continue
                 if not any(file.lower().endswith(e) for e in ext_set):
                     continue
@@ -82,18 +101,44 @@ def _walk_folders(folder_paths, ext_set):
                     yield fp
 
 
-def find_document_files(folder_paths, extensions=('.pdf', '.xlsx') + IMAGE_EXTENSIONS) -> list[Path]:
+def find_document_files(
+    folder_paths,
+    extensions=DOCUMENT_EXTENSIONS,
+    *,
+    skip_dirs=("logs",),
+    skip_dir_prefixes=("_dupes",),
+    skip_hidden_files: bool = True,
+) -> list[Path]:
     """Return all document files with given extensions within one or multiple folders."""
-    return list(_walk_folders(folder_paths, {e.lower() for e in extensions}))
+    return list(
+        _walk_folders(
+            folder_paths,
+            {e.lower() for e in extensions},
+            skip_dirs=skip_dirs,
+            skip_dir_prefixes=skip_dir_prefixes,
+            skip_hidden_files=skip_hidden_files,
+        )
+    )
 
-_PAGINATION_RE = re.compile(r'P[aá]g\.?\s*(\d+)\s*/\s*(\d+)')
+_PAGINATION_PATTERNS = (r'P[aá]g\.?\s*(\d+)\s*/\s*(\d+)',)
 
 
-def is_splittable_bundle(pdf_path: Path) -> bool:
+def is_splittable_bundle(
+    pdf_path: Path,
+    *,
+    enabled: bool = True,
+    pagination_patterns=_PAGINATION_PATTERNS,
+) -> bool:
     """Check if a PDF is a bundle of independent single-page documents.
 
     Returns True only if ALL pages have pagination matching "Pág. 1/1".
     """
+    if not enabled:
+        return False
+    compiled_patterns = [
+        re.compile(pattern)
+        for pattern in pagination_patterns or _PAGINATION_PATTERNS
+    ]
     try:
         doc = fitz.open(pdf_path)
     except Exception:
@@ -102,7 +147,12 @@ def is_splittable_bundle(pdf_path: Path) -> bool:
         if doc.page_count <= 1:
             return False
         for page in doc:
-            match = _PAGINATION_RE.search(page.get_text())
+            text = page.get_text()
+            match = None
+            for pattern in compiled_patterns:
+                match = pattern.search(text)
+                if match:
+                    break
             if not match:
                 return False
             current, total = int(match.group(1)), int(match.group(2))

@@ -27,6 +27,7 @@ openrouter:
   requests:
     classification_max_tokens: 4096
     classification_temperature: 0
+    classification_retries: 2
     normalization_max_tokens: 256
     normalization_temperature: 0
     reconciliation_max_tokens: 4096
@@ -36,6 +37,16 @@ openrouter:
 # Processing defaults. Changing hashing.content_dpi changes future content hashes;
 # only change it intentionally and re-check existing sidecars afterward.
 processing:
+  input:
+    extensions: [".pdf", ".xlsx", ".png", ".jpg", ".jpeg", ".tiff", ".tif", ".bmp", ".webp"]
+    image_extensions: [".png", ".jpg", ".jpeg", ".tiff", ".tif", ".bmp", ".webp"]
+    skip_dirs: ["logs"]
+    skip_dir_prefixes: ["_dupes"]
+    skip_hidden_files: true
+  bundle:
+    enabled: true
+    pagination_patterns:
+      - 'P[aá]g\.?\s*(\d+)\s*/\s*(\d+)'
   render:
     max_pages: 2
     enhance_contrast: true
@@ -70,6 +81,7 @@ tools:
   default_profile: "default"
   preview_dpi: 150
   xlsx_preview_max_rows: 100
+  llm_high_confidence_threshold: 0.8
 
 naming:
   component_max_chars: 80
@@ -125,10 +137,33 @@ nif_api:
   cache_path: null
   country_prefixes: ["PT"]
 
+classification:
+  document_title_max_chars: 60
+  bank_statement_locale: "pt-PT"
+  legal_suffixes:
+    - inc
+    - incorporated
+    - ltd
+    - limited
+    - llc
+    - llp
+    - plc
+    - corp
+    - corporation
+    - company
+    - co
+    - sa
+    - lda
+    - pbc
+
 # Gmail integration (optional)
 gmail:
   enabled: true
   default_months: 2
+  output_subdir: "gmail"
+  output_raw_path: null
+  tracking_dir: null
+  tracking_subdir: "gmail_tracking"
   # Defaults to ~/.config/papertrail/credentials/ when null.
   credentials_file: null  # Defaults to ~/.config/papertrail/credentials/gmail_credentials.json
   token_file: null  # Defaults to ~/.config/papertrail/credentials/gmail_token.json
@@ -165,6 +200,10 @@ passwords:
 export:
   # Warn during export when a file exceeds this size (in MB). null = no warning.
   max_file_size_mb: 3
+  compression:
+    enabled: true
+    quality: "ebook"
+    min_size_mb: null
   file_mappings:
     enabled: true
     default_prefix: "DIV_"
@@ -262,3 +301,9 @@ reconciliation:
     shared-toll: ["pagamentosdeservicos", "extratorecibo"]
     "$bank": ["comissoes", "manctapacote", "operacaocartoes", "impostodoselo"]
   same_month_shared_rule_names: ["vendor-sharedtoll"]
+  evidence_counterparty_categories: [supplier-payment, bank-fee]
+  evidence_counterparty_required_pattern: invoice
+  evidence_counterparty_skip_if_supplier_present_categories: [supplier-payment, bank-fee]
+  evidence_counterparty_amount_optional_categories: [bank-fee]
+  default_currency: "EUR"
+  llm_default_confidence: 0.5

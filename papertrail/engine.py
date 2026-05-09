@@ -272,6 +272,7 @@ def _enrich_nif(
         repository.registry.issuing_parties(scope),
         max_tokens=runtime.profile.openrouter.requests.normalization_max_tokens,
         temperature=runtime.profile.openrouter.requests.normalization_temperature,
+        legal_suffixes=runtime.profile.classification.legal_suffixes,
     )
     if nif_normalized != "$UNKNOWN$":
         canonical = repository.registry.register_issuing_party(nif_normalized)
@@ -503,7 +504,11 @@ class DocumentEngine:
 
         try:
             raw_metadata = None
-            for attempt in range(2):
+            max_attempts = max(
+                1,
+                int(getattr(self.runtime.profile.openrouter.requests, "classification_retries", 2) or 2),
+            )
+            for attempt in range(max_attempts):
                 try:
                     raw_metadata = _phase1_llm_extract(
                         pdf_path,
@@ -517,13 +522,15 @@ class DocumentEngine:
                     )
                     break
                 except Exception as exc:
-                    if attempt == 0:
+                    if attempt < max_attempts - 1:
                         logger.warning(
-                            f"LLM classification attempt 1 failed for {pdf_path.name}, retrying: {exc}"
+                            f"LLM classification attempt {attempt + 1} failed for {pdf_path.name}, "
+                            f"retrying: {exc}"
                         )
                     else:
                         raise RuntimeError(
-                            f"LLM classification failed after 2 attempts for {pdf_path.name}: {exc}"
+                            f"LLM classification failed after {max_attempts} attempts for "
+                            f"{pdf_path.name}: {exc}"
                         ) from exc
 
             assert raw_metadata is not None
@@ -764,7 +771,11 @@ class DocumentEngine:
         )
 
         suffix = source_path.suffix.lower()
-        if mode == "ingest" and is_image_file(source_path):
+        input_settings = self.runtime.profile.processing.input
+        if mode == "ingest" and is_image_file(
+            source_path,
+            image_extensions=input_settings.image_extensions,
+        ):
             with tempfile.TemporaryDirectory() as tmp_dir:
                 converted_path = convert_image_to_pdf(source_path, Path(tmp_dir))
                 result.images_converted = 1
@@ -782,7 +793,12 @@ class DocumentEngine:
                     )
                 )
 
-        if mode == "ingest" and suffix == ".pdf" and is_splittable_bundle(source_path):
+        bundle_settings = self.runtime.profile.processing.bundle
+        if mode == "ingest" and suffix == ".pdf" and is_splittable_bundle(
+            source_path,
+            enabled=bundle_settings.enabled,
+            pagination_patterns=bundle_settings.pagination_patterns,
+        ):
             with tempfile.TemporaryDirectory() as tmp_dir:
                 split_paths = split_pdf_bundle(source_path, Path(tmp_dir))
                 result.bundles_split = 1
@@ -942,12 +958,24 @@ class DocumentEngine:
         known_text_hashes = set(known_text_hashes_idx.keys())
         hashes_before = set(known_content_hashes)
 
-        all_doc_paths = find_document_files(raw_paths)
+        input_settings = self.runtime.profile.processing.input
+        all_doc_paths = find_document_files(
+            raw_paths,
+            extensions=input_settings.extensions,
+            skip_dirs=input_settings.skip_dirs,
+            skip_dir_prefixes=input_settings.skip_dir_prefixes,
+            skip_hidden_files=input_settings.skip_hidden_files,
+        )
         pdf_scanned = sum(1 for path in all_doc_paths if path.suffix.lower() == ".pdf")
         xlsx_scanned = sum(1 for path in all_doc_paths if path.suffix.lower() == ".xlsx")
+        image_scanned = sum(
+            1
+            for path in all_doc_paths
+            if is_image_file(path, image_extensions=input_settings.image_extensions)
+        )
         logger.debug(
             f"Found {pdf_scanned} PDFs, {xlsx_scanned} XLSX, and "
-            f"{sum(1 for path in all_doc_paths if is_image_file(path))} images in raw directories"
+            f"{image_scanned} images in raw directories"
         )
 
         totals = {

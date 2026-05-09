@@ -25,10 +25,14 @@ from papertrail.reconciliation_defaults import (
     DEFAULT_COUNTERPARTY_ALIASES,
     DEFAULT_DATE_WINDOW_DAYS,
     DEFAULT_DOCUMENT_FAMILIES,
+    DEFAULT_EVIDENCE_COUNTERPARTY_AMOUNT_OPTIONAL_CATEGORIES,
     DEFAULT_EVIDENCE_COUNTERPARTY_CATEGORIES,
     DEFAULT_EVIDENCE_COUNTERPARTY_REQUIRED_PATTERN,
+    DEFAULT_EVIDENCE_COUNTERPARTY_SKIP_IF_SUPPLIER_PRESENT_CATEGORIES,
     DEFAULT_LINE_ITEM_CATEGORY_ALIASES,
     DEFAULT_LINE_ITEM_EXTRACTORS,
+    DEFAULT_LLM_MATCH_CONFIDENCE,
+    DEFAULT_RECONCILIATION_CURRENCY,
     DEFAULT_RECONCILIATION_RULES,
     DEFAULT_SAME_MONTH_SHARED_RULE_NAMES,
     DEFAULT_SHARED_PERIOD_BANK_ANCHOR_ERROR_EXEMPT_RULE_NAMES,
@@ -116,6 +120,14 @@ class ReconciliationPolicy:
     )
     evidence_counterparty_categories: tuple[str, ...] = DEFAULT_EVIDENCE_COUNTERPARTY_CATEGORIES
     evidence_counterparty_required_pattern: str = DEFAULT_EVIDENCE_COUNTERPARTY_REQUIRED_PATTERN
+    evidence_counterparty_skip_if_supplier_present_categories: tuple[str, ...] = (
+        DEFAULT_EVIDENCE_COUNTERPARTY_SKIP_IF_SUPPLIER_PRESENT_CATEGORIES
+    )
+    evidence_counterparty_amount_optional_categories: tuple[str, ...] = (
+        DEFAULT_EVIDENCE_COUNTERPARTY_AMOUNT_OPTIONAL_CATEGORIES
+    )
+    default_currency: str = DEFAULT_RECONCILIATION_CURRENCY
+    llm_default_confidence: float = DEFAULT_LLM_MATCH_CONFIDENCE
     line_item_category_aliases: dict[str, dict[str, object]] = field(
         default_factory=lambda: {
             name: dict(settings)
@@ -150,6 +162,10 @@ def _amount_tolerance() -> float:
 
 def _date_window_days() -> int:
     return _reconciliation_policy().date_window_days
+
+
+def _default_currency() -> str:
+    return _reconciliation_policy().default_currency
 
 
 def _sequence(value, fallback: tuple[str, ...] | list[str]) -> tuple[str, ...]:
@@ -292,6 +308,22 @@ def _policy_from_profile(profile) -> ReconciliationPolicy:
                 "evidence_counterparty_required_pattern",
                 DEFAULT_EVIDENCE_COUNTERPARTY_REQUIRED_PATTERN,
             )
+        ),
+        evidence_counterparty_skip_if_supplier_present_categories=_sequence(
+            getattr(settings, "evidence_counterparty_skip_if_supplier_present_categories", None),
+            DEFAULT_EVIDENCE_COUNTERPARTY_SKIP_IF_SUPPLIER_PRESENT_CATEGORIES,
+        ),
+        evidence_counterparty_amount_optional_categories=_sequence(
+            getattr(settings, "evidence_counterparty_amount_optional_categories", None),
+            DEFAULT_EVIDENCE_COUNTERPARTY_AMOUNT_OPTIONAL_CATEGORIES,
+        ),
+        default_currency=str(
+            getattr(settings, "default_currency", DEFAULT_RECONCILIATION_CURRENCY)
+            or DEFAULT_RECONCILIATION_CURRENCY
+        ),
+        llm_default_confidence=float(
+            getattr(settings, "llm_default_confidence", DEFAULT_LLM_MATCH_CONFIDENCE)
+            or DEFAULT_LLM_MATCH_CONFIDENCE
         ),
         line_item_category_aliases=_settings_map(
             getattr(settings, "line_item_category_aliases", None),
@@ -1406,7 +1438,7 @@ def _extract_direct_debit_invoice_line_items(pdf_path: Path, data: dict) -> list
         label=label,
         date_issued=debit_date,
         reference=reference,
-        amount_currency=data.get("total_amount_currency") or "EUR",
+        amount_currency=data.get("total_amount_currency") or _default_currency(),
         document_type=data.get("document_type"),
     )
     return line_items
@@ -1460,7 +1492,7 @@ def _extract_insurance_notice_line_items(pdf_path: Path, data: dict) -> list[Can
         label=label,
         date_issued=debit_date,
         reference=reference,
-        amount_currency=data.get("total_amount_currency") or "EUR",
+        amount_currency=data.get("total_amount_currency") or _default_currency(),
         document_type=data.get("document_type"),
     )
     return line_items
@@ -2336,11 +2368,10 @@ def _link_evidence_counterparty_documents(
         required_pattern = policy.evidence_counterparty_required_pattern
         if not any(engine.match_doc_type(required_pattern, pattern) for pattern in rule.required_types):
             continue
-        if category == "supplier-payment" and any(
-            candidate.is_supplier_evidence for candidate in match.pdf_candidates
-        ):
-            continue
-        if category == "bank-fee" and any(
+        skip_supplier_present_categories = set(
+            policy.evidence_counterparty_skip_if_supplier_present_categories
+        )
+        if category in skip_supplier_present_categories and any(
             candidate.is_supplier_evidence for candidate in match.pdf_candidates
         ):
             continue
@@ -2367,7 +2398,7 @@ def _link_evidence_counterparty_documents(
                 and _same_calendar_month(txn_date, candidate.date_issued)
                 and (
                     candidate.is_shared_period_document
-                    or category == "bank-fee"
+                    or category in set(policy.evidence_counterparty_amount_optional_categories)
                     or _candidate_amount_matches_transaction(match, candidate)
                 )
             ]
@@ -2447,7 +2478,7 @@ def _format_candidate_for_llm(idx: int, cand: PDFCandidate) -> str:
     if cand.document_title:
         parts.append(cand.document_title)
     if cand.total_amount is not None:
-        currency = cand.total_amount_currency or "EUR"
+        currency = cand.total_amount_currency or _default_currency()
         parts.append(f"{cand.total_amount:.2f} {currency}")
     if cand.date_issued and cand.date_issued != "$UNKNOWN$":
         parts.append(cand.date_issued)
@@ -2550,7 +2581,7 @@ Respond in JSON:
             )
             continue
 
-        confidence = match.get("confidence", 0.5)
+        confidence = match.get("confidence", _reconciliation_policy().llm_default_confidence)
         reasoning = match.get("reasoning", "")
         logger.debug(
             f"[PHASE-2] Row {txn.row_number}: {txn.description[:50]} -> "
@@ -3245,7 +3276,7 @@ def reconcile_single(
             for cand in unmatched_files:
                 amount_str = ""
                 if cand.total_amount is not None:
-                    currency = cand.total_amount_currency or "EUR"
+                    currency = cand.total_amount_currency or _default_currency()
                     amount_str = f" ({cand.total_amount:.2f} {currency})"
                 console.detail(f"{cand.pdf_filename}{amount_str}")
 

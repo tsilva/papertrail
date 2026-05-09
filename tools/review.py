@@ -32,7 +32,9 @@ if __package__:
         get_export_dir,
         iter_sidecars,
         placeholder_html,
+        profile_setting_float,
         profile_setting_int,
+        profile_setting_str,
         render_document_preview,
     )
 else:
@@ -44,7 +46,9 @@ else:
         get_export_dir,
         iter_sidecars,
         placeholder_html,
+        profile_setting_float,
         profile_setting_int,
+        profile_setting_str,
         render_document_preview,
     )
 
@@ -630,7 +634,8 @@ def _match_status(m):
     if m.get("method") == "exact":
         return "exact"
     if m.get("method") == "llm":
-        return "llm_high" if m.get("confidence", 0) >= 0.8 else "llm_low"
+        threshold = profile_setting_float("tools", "llm_high_confidence_threshold", 0.8)
+        return "llm_high" if m.get("confidence", 0) >= threshold else "llm_low"
     return "exact"
 
 
@@ -756,7 +761,11 @@ def _render_unmatched_files_html(unmatched_files, file_index, data=None):
         party = html_lib.escape(uf.get("issuing_party", "") or "")
         doc_type = html_lib.escape(uf.get("document_type", "") or "")
         amt = uf.get("total_amount")
-        currency = uf.get("currency", "EUR") or "EUR"
+        currency = uf.get("currency") or profile_setting_str(
+            "reconciliation",
+            "default_currency",
+            "EUR",
+        )
         amt_str = f"{amt:.2f} {currency}" if amt is not None else "-"
 
         file_cell = _render_file_link(fname)

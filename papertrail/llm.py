@@ -61,19 +61,30 @@ def _ascii_fold(value: str) -> str:
     return unicodedata.normalize("NFKD", value).encode("ascii", "ignore").decode("ascii")
 
 
-def _simplify_company_name(value: str) -> str:
+def _legal_suffixes(legal_suffixes: list[str] | tuple[str, ...] | set[str] | None = None) -> set[str]:
+    return {suffix.lower() for suffix in (legal_suffixes or _LEGAL_SUFFIXES)}
+
+
+def _simplify_company_name(
+    value: str,
+    legal_suffixes: list[str] | tuple[str, ...] | set[str] | None = None,
+) -> str:
     normalized = _ascii_fold(value).lower()
     normalized = re.sub(r"[^a-z0-9]+", " ", normalized)
     tokens = [token for token in normalized.split() if token]
-    while tokens and tokens[-1] in _LEGAL_SUFFIXES:
+    suffixes = _legal_suffixes(legal_suffixes)
+    while tokens and tokens[-1] in suffixes:
         tokens.pop()
     while len(tokens) >= 2 and " ".join(tokens[-2:]) == "s a":
         tokens = tokens[:-2]
     return " ".join(tokens)
 
 
-def _slugify_company_name(value: str) -> str:
-    simplified = _simplify_company_name(value)
+def _slugify_company_name(
+    value: str,
+    legal_suffixes: list[str] | tuple[str, ...] | set[str] | None = None,
+) -> str:
+    simplified = _simplify_company_name(value, legal_suffixes)
     if not simplified:
         return "$UNKNOWN$"
     return re.sub(r"\s+", "-", simplified).strip("-") or "$UNKNOWN$"
@@ -84,7 +95,12 @@ def _canonical_known_party(value: str, known_issuing_parties: list[str]) -> str 
     return matches.get(value.lower())
 
 
-def _heuristic_normalize_issuing_party(raw_name: str, known_issuing_parties: list[str]) -> str:
+def _heuristic_normalize_issuing_party(
+    raw_name: str,
+    known_issuing_parties: list[str],
+    *,
+    legal_suffixes: list[str] | tuple[str, ...] | set[str] | None = None,
+) -> str:
     raw_name = raw_name.strip()
     if not raw_name:
         return "$UNKNOWN$"
@@ -93,12 +109,12 @@ def _heuristic_normalize_issuing_party(raw_name: str, known_issuing_parties: lis
     if canonical:
         return canonical
 
-    raw_key = _simplify_company_name(raw_name)
+    raw_key = _simplify_company_name(raw_name, legal_suffixes)
     if not raw_key:
         return "$UNKNOWN$"
 
     exact_matches = {
-        _simplify_company_name(known): known
+        _simplify_company_name(known, legal_suffixes): known
         for known in known_issuing_parties
         if known != "$UNKNOWN$"
     }
@@ -109,12 +125,15 @@ def _heuristic_normalize_issuing_party(raw_name: str, known_issuing_parties: lis
         known
         for known in known_issuing_parties
         if known != "$UNKNOWN$"
-        and (raw_key in _simplify_company_name(known) or _simplify_company_name(known) in raw_key)
+        and (
+            raw_key in _simplify_company_name(known, legal_suffixes)
+            or _simplify_company_name(known, legal_suffixes) in raw_key
+        )
     ]
     if partial_matches:
         return max(partial_matches, key=len)
 
-    return _slugify_company_name(raw_name)
+    return _slugify_company_name(raw_name, legal_suffixes)
 
 
 def _parse_issuing_party_response(content: str) -> str | None:
@@ -205,6 +224,8 @@ def get_system_prompt_classify(
     """Build the single-call document classification prompt."""
     document_type_rules = list(getattr(classification_settings, "prompt_document_type_rules", []) or [])
     issuing_party_rules = list(getattr(classification_settings, "prompt_issuing_party_rules", []) or [])
+    legal_suffixes = sorted(_legal_suffixes(getattr(classification_settings, "legal_suffixes", None)))
+    legal_suffix_text = ", ".join(legal_suffixes)
     issuer_tax_number_rule = getattr(
         classification_settings,
         "issuer_tax_number_prefix_rule",
@@ -241,7 +262,7 @@ def get_system_prompt_classify(
         f"- Known parties: {', '.join(p for p in known_issuing_parties if p != '$UNKNOWN$')}\n"
         "- If a known party matches, use it EXACTLY (case-sensitive)\n"
         "- If no match, produce a clean short name: lowercase, strip legal suffixes "
-        "(Inc., Ltd., S.A., Lda., PBC), use the most recognizable form "
+        f"({legal_suffix_text}), use the most recognizable form "
         "(e.g., 'Anthropic, PBC' -> 'anthropic', 'Amazon Web Services' -> 'amazon')\n"
         f"{issuing_party_rule_text}"
         "- Only use '$UNKNOWN$' if the raw value is empty or truly unidentifiable\n\n"
@@ -295,17 +316,24 @@ def normalize_issuing_party(
     *,
     max_tokens: int = 256,
     temperature: float = 0.0,
+    legal_suffixes: list[str] | tuple[str, ...] | set[str] | None = None,
 ) -> str:
     """Normalize a single issuing party name against the known canonical list."""
     if client is None:
-        return _heuristic_normalize_issuing_party(raw_name, known_issuing_parties)
+        return _heuristic_normalize_issuing_party(
+            raw_name,
+            known_issuing_parties,
+            legal_suffixes=legal_suffixes,
+        )
+
+    suffix_examples = ", ".join(sorted(_legal_suffixes(legal_suffixes)))
 
     prompt = (
         "Normalize this company name to a canonical slug form.\n\n"
         f'Raw name: "{raw_name}"\n\n'
         f"Known parties: {', '.join(p for p in known_issuing_parties if p != '$UNKNOWN$')}\n\n"
         "If a known party matches, use it EXACTLY. Otherwise produce a clean short name: "
-        "lowercase, strip legal suffixes (Inc., Ltd., S.A., Lda., PBC), use the most "
+        f"lowercase, strip legal suffixes ({suffix_examples}), use the most "
         "recognizable form.\n\n"
         'Respond in JSON: {"issuing_party": "normalized_name"}'
     )
@@ -319,11 +347,23 @@ def normalize_issuing_party(
         )
         content = response.choices[0].message.content
         if not content:
-            return _heuristic_normalize_issuing_party(raw_name, known_issuing_parties)
+            return _heuristic_normalize_issuing_party(
+                raw_name,
+                known_issuing_parties,
+                legal_suffixes=legal_suffixes,
+            )
         parsed = _parse_issuing_party_response(content)
         if parsed:
-            return _heuristic_normalize_issuing_party(parsed, known_issuing_parties)
+            return _heuristic_normalize_issuing_party(
+                parsed,
+                known_issuing_parties,
+                legal_suffixes=legal_suffixes,
+            )
     except Exception as exc:
         logger.error(f"NIF normalization failed: {exc}")
 
-    return _heuristic_normalize_issuing_party(raw_name, known_issuing_parties)
+    return _heuristic_normalize_issuing_party(
+        raw_name,
+        known_issuing_parties,
+        legal_suffixes=legal_suffixes,
+    )

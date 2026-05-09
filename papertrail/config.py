@@ -25,8 +25,12 @@ from papertrail.reconciliation_defaults import (
     DEFAULT_BANK_GENERATED_DOC_TYPES,
     DEFAULT_DATE_WINDOW_DAYS,
     DEFAULT_DOCUMENT_FAMILIES,
+    DEFAULT_EVIDENCE_COUNTERPARTY_AMOUNT_OPTIONAL_CATEGORIES,
     DEFAULT_EVIDENCE_COUNTERPARTY_CATEGORIES,
     DEFAULT_EVIDENCE_COUNTERPARTY_REQUIRED_PATTERN,
+    DEFAULT_EVIDENCE_COUNTERPARTY_SKIP_IF_SUPPLIER_PRESENT_CATEGORIES,
+    DEFAULT_LLM_MATCH_CONFIDENCE,
+    DEFAULT_RECONCILIATION_CURRENCY,
     DEFAULT_SAME_MONTH_SHARED_RULE_NAMES,
     DEFAULT_SHARED_PERIOD_BANK_ANCHOR_ERROR_EXEMPT_RULE_NAMES,
     DEFAULT_SHARED_PERIOD_LINK_CATEGORIES,
@@ -114,6 +118,7 @@ DEFAULT_GMAIL_GENERIC_MIME_TYPES = [
 class OpenRouterRequestSettings(SettingsModel):
     classification_max_tokens: int = 4096
     classification_temperature: float = 0.0
+    classification_retries: int = 2
     normalization_max_tokens: int = 256
     normalization_temperature: float = 0.0
     reconciliation_max_tokens: int = 4096
@@ -131,6 +136,10 @@ class OpenRouterSettings(SettingsModel):
 class GmailSettings(SettingsModel):
     enabled: bool = False
     default_months: int = 2
+    output_subdir: str = "gmail"
+    output_raw_path: str | None = None
+    tracking_dir: str | None = None
+    tracking_subdir: str = "gmail_tracking"
     attachment_mime_types: list[str] = Field(default_factory=lambda: ["application/pdf"])
     label_filter: str | None = None
     max_results_per_query: int = 500
@@ -170,6 +179,43 @@ class RenderSettings(SettingsModel):
     contrast_factor: float = 2.0
 
 
+class InputSettings(SettingsModel):
+    extensions: list[str] = Field(
+        default_factory=lambda: [
+            ".pdf",
+            ".xlsx",
+            ".png",
+            ".jpg",
+            ".jpeg",
+            ".tiff",
+            ".tif",
+            ".bmp",
+            ".webp",
+        ]
+    )
+    image_extensions: list[str] = Field(
+        default_factory=lambda: [
+            ".png",
+            ".jpg",
+            ".jpeg",
+            ".tiff",
+            ".tif",
+            ".bmp",
+            ".webp",
+        ]
+    )
+    skip_dirs: list[str] = Field(default_factory=lambda: ["logs"])
+    skip_dir_prefixes: list[str] = Field(default_factory=lambda: ["_dupes"])
+    skip_hidden_files: bool = True
+
+
+class BundleSettings(SettingsModel):
+    enabled: bool = True
+    pagination_patterns: list[str] = Field(
+        default_factory=lambda: [r"P[aá]g\.?\s*(\d+)\s*/\s*(\d+)"]
+    )
+
+
 class QRSettings(SettingsModel):
     enabled: bool = True
     dpi: int = 300
@@ -191,6 +237,8 @@ class HashingSettings(SettingsModel):
 
 
 class ProcessingSettings(SettingsModel):
+    input: InputSettings = Field(default_factory=InputSettings)
+    bundle: BundleSettings = Field(default_factory=BundleSettings)
     render: RenderSettings = Field(default_factory=RenderSettings)
     qr: QRSettings = Field(default_factory=QRSettings)
     hashing: HashingSettings = Field(default_factory=HashingSettings)
@@ -206,6 +254,7 @@ class ToolSettings(SettingsModel):
     default_profile: str = "default"
     preview_dpi: int = 150
     xlsx_preview_max_rows: int = 100
+    llm_high_confidence_threshold: float = 0.8
 
 
 class NamingSettings(SettingsModel):
@@ -302,6 +351,24 @@ class ClassificationSettings(SettingsModel):
     )
     document_title_max_chars: int = 60
     bank_statement_locale: str = "pt-PT"
+    legal_suffixes: list[str] = Field(
+        default_factory=lambda: [
+            "inc",
+            "incorporated",
+            "ltd",
+            "limited",
+            "llc",
+            "llp",
+            "plc",
+            "corp",
+            "corporation",
+            "company",
+            "co",
+            "sa",
+            "lda",
+            "pbc",
+        ]
+    )
 
 
 class ReconciliationRule(SettingsModel):
@@ -385,6 +452,16 @@ class ReconciliationSettings(SettingsModel):
         default_factory=lambda: list(DEFAULT_EVIDENCE_COUNTERPARTY_CATEGORIES)
     )
     evidence_counterparty_required_pattern: str = DEFAULT_EVIDENCE_COUNTERPARTY_REQUIRED_PATTERN
+    evidence_counterparty_skip_if_supplier_present_categories: list[str] = Field(
+        default_factory=lambda: list(
+            DEFAULT_EVIDENCE_COUNTERPARTY_SKIP_IF_SUPPLIER_PRESENT_CATEGORIES
+        )
+    )
+    evidence_counterparty_amount_optional_categories: list[str] = Field(
+        default_factory=lambda: list(DEFAULT_EVIDENCE_COUNTERPARTY_AMOUNT_OPTIONAL_CATEGORIES)
+    )
+    default_currency: str = DEFAULT_RECONCILIATION_CURRENCY
+    llm_default_confidence: float = DEFAULT_LLM_MATCH_CONFIDENCE
     line_item_category_aliases: dict[str, dict[str, object]] = Field(default_factory=dict)
     include_builtin_line_item_extractors: bool = True
     line_item_extractors: dict[str, dict[str, object]] = Field(default_factory=dict)
@@ -407,10 +484,17 @@ class MergeRule(SettingsModel):
     attach_type: str
 
 
+class CompressionSettings(SettingsModel):
+    enabled: bool = True
+    quality: str = "ebook"
+    min_size_mb: float | None = None
+
+
 class ExportSettings(SettingsModel):
     file_mappings: FileMappingSettings = Field(default_factory=FileMappingSettings)
     merge_rules: list[MergeRule] = Field(default_factory=list)
     max_file_size_mb: float | None = None
+    compression: CompressionSettings = Field(default_factory=CompressionSettings)
 
 
 class ProfileSettings(SettingsModel):
@@ -538,9 +622,14 @@ def _normalize_profile_data(data: dict[str, object], profile_path: Path | None) 
     openrouter = normalized["openrouter"]
     openrouter.setdefault("base_url", DEFAULT_OPENROUTER_BASE_URL)
     openrouter.setdefault("requests", {})
+    openrouter["requests"].setdefault("classification_retries", 2)
 
     gmail.setdefault("enabled", False)
     gmail.setdefault("default_months", 2)
+    gmail.setdefault("output_subdir", "gmail")
+    gmail.setdefault("output_raw_path", None)
+    gmail.setdefault("tracking_dir", None)
+    gmail.setdefault("tracking_subdir", "gmail_tracking")
     gmail.setdefault("attachment_mime_types", ["application/pdf"])
     gmail.setdefault("max_results_per_query", 500)
     gmail.setdefault("skip_already_downloaded", True)
@@ -558,6 +647,21 @@ def _normalize_profile_data(data: dict[str, object], profile_path: Path | None) 
     normalized["nif_api"].setdefault("timeout_seconds", 10)
     normalized["nif_api"].setdefault("cache_path", None)
     normalized["nif_api"].setdefault("country_prefixes", [DEFAULT_QR_COUNTRY_CODE])
+    normalized["processing"].setdefault("input", {})
+    normalized["processing"]["input"].setdefault("extensions", InputSettings().extensions)
+    normalized["processing"]["input"].setdefault(
+        "image_extensions",
+        InputSettings().image_extensions,
+    )
+    normalized["processing"]["input"].setdefault("skip_dirs", ["logs"])
+    normalized["processing"]["input"].setdefault("skip_dir_prefixes", ["_dupes"])
+    normalized["processing"]["input"].setdefault("skip_hidden_files", True)
+    normalized["processing"].setdefault("bundle", {})
+    normalized["processing"]["bundle"].setdefault("enabled", True)
+    normalized["processing"]["bundle"].setdefault(
+        "pagination_patterns",
+        BundleSettings().pagination_patterns,
+    )
     normalized["processing"].setdefault("render", {})
     normalized["processing"]["render"].setdefault("max_pages", 2)
     normalized["processing"]["render"].setdefault("enhance_contrast", True)
@@ -587,6 +691,7 @@ def _normalize_profile_data(data: dict[str, object], profile_path: Path | None) 
     normalized["tools"].setdefault("default_profile", "default")
     normalized["tools"].setdefault("preview_dpi", 150)
     normalized["tools"].setdefault("xlsx_preview_max_rows", 100)
+    normalized["tools"].setdefault("llm_high_confidence_threshold", 0.8)
     normalized["naming"].setdefault("component_max_chars", 80)
     normalized["naming"].setdefault("pdf_export_max_chars", 60)
     normalized["naming"].setdefault("filename_warning_max_chars", 60)
@@ -610,6 +715,10 @@ def _normalize_profile_data(data: dict[str, object], profile_path: Path | None) 
     )
     normalized["classification"].setdefault("document_title_max_chars", 60)
     normalized["classification"].setdefault("bank_statement_locale", "pt-PT")
+    normalized["classification"].setdefault(
+        "legal_suffixes",
+        ClassificationSettings().legal_suffixes,
+    )
 
     paths = normalized["paths"]
     raw = paths.get("raw")
@@ -626,6 +735,16 @@ def _normalize_profile_data(data: dict[str, object], profile_path: Path | None) 
     reconciliation.setdefault("include_builtin_counterparty_aliases", True)
     reconciliation.setdefault("counterparty_aliases", {})
     reconciliation.setdefault("include_builtin_line_item_extractors", True)
+    reconciliation.setdefault(
+        "evidence_counterparty_skip_if_supplier_present_categories",
+        list(DEFAULT_EVIDENCE_COUNTERPARTY_SKIP_IF_SUPPLIER_PRESENT_CATEGORIES),
+    )
+    reconciliation.setdefault(
+        "evidence_counterparty_amount_optional_categories",
+        list(DEFAULT_EVIDENCE_COUNTERPARTY_AMOUNT_OPTIONAL_CATEGORIES),
+    )
+    reconciliation.setdefault("default_currency", DEFAULT_RECONCILIATION_CURRENCY)
+    reconciliation.setdefault("llm_default_confidence", DEFAULT_LLM_MATCH_CONFIDENCE)
 
     export = normalized["export"]
     export.setdefault("file_mappings", {})
@@ -635,6 +754,10 @@ def _normalize_profile_data(data: dict[str, object], profile_path: Path | None) 
     export["file_mappings"].setdefault("filename_fields", [])
     export.setdefault("merge_rules", [])
     export.setdefault("max_file_size_mb", None)
+    export.setdefault("compression", {})
+    export["compression"].setdefault("enabled", True)
+    export["compression"].setdefault("quality", "ebook")
+    export["compression"].setdefault("min_size_mb", None)
 
     if profile_path:
         if paths.get("raw"):
@@ -652,6 +775,10 @@ def _normalize_profile_data(data: dict[str, object], profile_path: Path | None) 
             gmail["credentials_file"] = _resolve_path(gmail["credentials_file"], profile_path)
         if gmail.get("token_file"):
             gmail["token_file"] = _resolve_path(gmail["token_file"], profile_path)
+        if gmail.get("output_raw_path"):
+            gmail["output_raw_path"] = _resolve_path(gmail["output_raw_path"], profile_path)
+        if gmail.get("tracking_dir"):
+            gmail["tracking_dir"] = _resolve_path(gmail["tracking_dir"], profile_path)
 
     normalized["profile_path"] = profile_path
     normalized["profile_dir"] = profile_path.parent if profile_path else None

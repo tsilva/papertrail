@@ -49,7 +49,7 @@ from .reconcile import (
 )
 
 logger = get_logger("commands")
-_PDFPRESS_COMPRESSOR = None
+_PDFPRESS_COMPRESSORS = {}
 _EXPORT_FILENAME_OMITTED_FIELDS = {"document_title"}
 _DEFAULT_PDF_EXPORT_FILENAME_MAX_CHARS = 60
 _DEFAULT_FILENAME_COMPONENT_MAX_CHARS = 80
@@ -345,7 +345,7 @@ def _copy_document_to_export(
     _check_file_size(doc_path, max_file_size_mb)
     shutil.copy2(doc_path, dest_doc)
     if dest_doc.suffix.lower() == ".pdf":
-        _compress_pdf_export(dest_doc)
+        _compress_pdf_export_maybe_configured(dest_doc, export_config)
     metadata_copy = dict(export_metadata_dict)
     metadata_copy["source_filename"] = doc_path.name
     repository.save_json(dest_json, metadata_copy)
@@ -511,7 +511,10 @@ def _run_export_period(
         def merge_pdfs(step):
             with suppress_console_logging():
                 merged_outputs = merge_all_pdfs(str(export_date_dir))
-                _compress_exported_pdfs(list(merged_outputs.values()))
+                _compress_exported_pdfs(
+                    list(merged_outputs.values()),
+                    export_config=export_file_config,
+                )
             merged_files = list(export_date_dir.glob("merged_*.pdf"))
             if merged_files:
                 prefixes = sorted(
@@ -724,25 +727,42 @@ def _check_file_size(src: Path, max_file_size_mb: float | None) -> None:
         logger.warning(f"Large file: {src.name} ({size_mb:.1f} MB exceeds {max_file_size_mb} MB threshold)")
 
 
-def _get_pdfpress_compressor():
-    global _PDFPRESS_COMPRESSOR
-    if _PDFPRESS_COMPRESSOR is None:
+def _compression_settings(export_config=None):
+    return getattr(export_config, "compression", None) if export_config is not None else None
+
+
+def _compression_enabled(pdf_path: Path, export_config=None) -> bool:
+    settings = _compression_settings(export_config)
+    if settings is not None and not getattr(settings, "enabled", True):
+        return False
+    min_size_mb = getattr(settings, "min_size_mb", None) if settings is not None else None
+    if min_size_mb is not None and pdf_path.stat().st_size < float(min_size_mb) * 1024 * 1024:
+        return False
+    return True
+
+
+def _get_pdfpress_compressor(export_config=None):
+    settings = _compression_settings(export_config)
+    quality = str(getattr(settings, "quality", "ebook") or "ebook")
+    if quality not in _PDFPRESS_COMPRESSORS:
         try:
             from pdfpress import PDFCompressor
         except ImportError as exc:
             raise RuntimeError(
                 "pdfpress is required for export PDF compression. Install the project dependencies again."
             ) from exc
-        _PDFPRESS_COMPRESSOR = PDFCompressor(quality="ebook")
-    return _PDFPRESS_COMPRESSOR
+        _PDFPRESS_COMPRESSORS[quality] = PDFCompressor(quality=quality)
+    return _PDFPRESS_COMPRESSORS[quality]
 
 
-def _compress_pdf_export(pdf_path: Path) -> None:
+def _compress_pdf_export(pdf_path: Path, *, export_config=None) -> None:
     if pdf_path.suffix.lower() != ".pdf" or not pdf_path.exists():
+        return
+    if not _compression_enabled(pdf_path, export_config):
         return
 
     original_size = pdf_path.stat().st_size
-    compressor = _get_pdfpress_compressor()
+    compressor = _get_pdfpress_compressor(export_config)
 
     with tempfile.TemporaryDirectory() as tmp_dir:
         tmp_output = Path(tmp_dir) / pdf_path.name
@@ -756,9 +776,19 @@ def _compress_pdf_export(pdf_path: Path) -> None:
     )
 
 
-def _compress_exported_pdfs(pdf_paths: list[Path]) -> None:
+def _compress_exported_pdfs(pdf_paths: list[Path], *, export_config=None) -> None:
     for pdf_path in pdf_paths:
+        if export_config is None:
+            _compress_pdf_export(pdf_path)
+        else:
+            _compress_pdf_export(pdf_path, export_config=export_config)
+
+
+def _compress_pdf_export_maybe_configured(pdf_path: Path, export_config=None) -> None:
+    if export_config is None:
         _compress_pdf_export(pdf_path)
+    else:
+        _compress_pdf_export(pdf_path, export_config=export_config)
 
 
 def _long_filename_warning(path: Path, *, naming_settings=None) -> str:
@@ -870,7 +900,7 @@ def copy_matching(
         _check_file_size(doc_path, max_file_size_mb)
         shutil.copy2(doc_path, dest_doc)
         if dest_doc.suffix.lower() == ".pdf":
-            _compress_pdf_export(dest_doc)
+            _compress_pdf_export_maybe_configured(dest_doc, export_config)
         metadata_copy = dict(export_metadata_dict)
         metadata_copy["source_filename"] = doc_path.name
         repository.save_json(dest_json, metadata_copy)
@@ -1066,7 +1096,10 @@ def export_dates(
             for export_dir in runtime.console.track(changed_directories, "Merging PDFs"):
                 try:
                     merged_outputs = merge_all_pdfs(str(export_dir))
-                    _compress_exported_pdfs(list(merged_outputs.values()))
+                    _compress_exported_pdfs(
+                        list(merged_outputs.values()),
+                        export_config=export_config,
+                    )
                     validate_merged_pdf(export_dir)
                 except Exception as exc:
                     logger.error(f"Merge failed: {exc}")
@@ -1095,20 +1128,26 @@ def archive(runtime: Runtime, processed_path: Path, digests: list[str], *, dry_r
 def gmail(runtime: Runtime, *, months: int = 2) -> None:
     raw_paths = runtime.profile.paths.raw
     processed_path_str = runtime.profile.paths.processed
+    gmail_settings = runtime.profile.gmail
 
     if processed_path_str:
         setup_task_logging(Path(processed_path_str), "gmail_download")
 
-    if not raw_paths or not processed_path_str:
+    has_gmail_output = bool(raw_paths or gmail_settings.output_raw_path)
+    if not has_gmail_output or not processed_path_str:
         missing = []
-        if not raw_paths:
-            missing.append("paths.raw")
+        if not has_gmail_output:
+            missing.append("paths.raw or gmail.output_raw_path")
         if not processed_path_str:
             missing.append("paths.processed")
         runtime.console.error(f"Missing required profile settings: {', '.join(missing)}", indent=False)
         raise RuntimeError(f"Missing required profile settings: {', '.join(missing)}")
 
-    raw_path = Path(raw_paths[0])
+    raw_path = (
+        Path(gmail_settings.output_raw_path)
+        if gmail_settings.output_raw_path
+        else Path(raw_paths[0])
+    )
     export_dates_list = compute_month_range(months)
     totals = {
         "messages_found": 0,
@@ -1118,8 +1157,14 @@ def gmail(runtime: Runtime, *, months: int = 2) -> None:
         "attachments_failed": 0,
         "bytes_downloaded": 0,
     }
-    gmail_dir = raw_path / "gmail"
-    tracking_dir = Path(processed_path_str) / "logs" / "gmail_tracking"
+    gmail_dir = raw_path / (gmail_settings.output_subdir or "gmail")
+    tracking_dir = (
+        Path(gmail_settings.tracking_dir)
+        if gmail_settings.tracking_dir
+        else Path(processed_path_str)
+        / "logs"
+        / (gmail_settings.tracking_subdir or "gmail_tracking")
+    )
     tracking_dir.mkdir(parents=True, exist_ok=True)
     paths = get_gmail_config_paths(runtime.profile)
 
@@ -1237,7 +1282,7 @@ def merge_reconciled_attachments(runtime: Runtime, export_path: Path, all_matche
                     f"[MERGE] Failed to append {attachment.pdf_filename} to {target.pdf_filename}: {exc}"
                 )
 
-    _compress_exported_pdfs(sorted(modified_targets))
+    _compress_exported_pdfs(sorted(modified_targets), export_config=runtime.profile.export)
 
     return stats
 

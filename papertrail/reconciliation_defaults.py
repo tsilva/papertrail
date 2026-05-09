@@ -70,6 +70,14 @@ DEFAULT_EVIDENCE_COUNTERPARTY_CATEGORIES = _tuple("evidence_counterparty_categor
 DEFAULT_EVIDENCE_COUNTERPARTY_REQUIRED_PATTERN = str(
     _POLICY.get("evidence_counterparty_required_pattern", "invoice")
 )
+DEFAULT_EVIDENCE_COUNTERPARTY_SKIP_IF_SUPPLIER_PRESENT_CATEGORIES = _tuple(
+    "evidence_counterparty_skip_if_supplier_present_categories"
+)
+DEFAULT_EVIDENCE_COUNTERPARTY_AMOUNT_OPTIONAL_CATEGORIES = _tuple(
+    "evidence_counterparty_amount_optional_categories"
+)
+DEFAULT_RECONCILIATION_CURRENCY = str(_POLICY.get("default_currency", "EUR"))
+DEFAULT_LLM_MATCH_CONFIDENCE = float(_POLICY.get("llm_default_confidence", 0.5))
 DEFAULT_LINE_ITEM_CATEGORY_ALIASES = _dict("line_item_category_aliases")
 DEFAULT_LINE_ITEM_EXTRACTORS = _dict("line_item_extractors")
 DEFAULT_RECONCILIATION_RULES = tuple(_POLICY.get("rules", ()))
