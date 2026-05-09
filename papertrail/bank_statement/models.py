@@ -3,7 +3,8 @@
 from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum
-from typing import Protocol, TypedDict
+from pathlib import Path
+from typing import Mapping, Protocol, TypedDict
 
 
 class BankFormat(Enum):
@@ -59,16 +60,16 @@ class BankTransactionRecord(TypedDict):
 class BankStatementParser(Protocol):
     FORMAT: BankFormat
 
-    def can_parse(self, ws, config: dict[str, object] | None = None) -> bool: ...
+    def can_parse(self, ws, config: Mapping[str, object] | None = None) -> bool: ...
     def parse(
         self,
-        xlsx_path,
-        config: dict[str, object] | None = None,
+        xlsx_path: Path,
+        config: Mapping[str, object] | None = None,
     ) -> BankStatementData | None: ...
     def load_transactions(
         self,
-        xlsx_path,
-        config: dict[str, object] | None = None,
+        xlsx_path: Path,
+        config: Mapping[str, object] | None = None,
     ) -> list[BankTransactionRecord] | None: ...
 
 

@@ -28,9 +28,6 @@ app.add_typer(export_app, name="export")
 PROFILE_OPTION_HELP = "Configuration profile to use. Required."
 
 
-# ── Helpers ──────────────────────────────────────────────────────
-
-
 def _fail(msg: str):
     typer.echo(f"Error: {msg}", err=True)
     raise typer.Exit(1)
@@ -155,9 +152,6 @@ def _run_pipeline(
     )
 
 
-# ── App callback (global options + default command) ──────────────
-
-
 @app.callback()
 def main(
     ctx: typer.Context,
@@ -190,9 +184,6 @@ def main(
             profile=profile,
             verbose=verbose,
         )
-
-
-# ── Commands ─────────────────────────────────────────────────────
 
 
 @app.command("pipeline")
@@ -417,9 +408,6 @@ def archive(
     """Archive documents by hash digest."""
     runtime = _resolve_runtime(ctx, profile=profile, verbose=verbose)
     commands.archive(runtime, _resolve_processed(runtime, processed_path), digest, dry_run=dry_run)
-
-
-# ── Export subcommands ───────────────────────────────────────────
 
 
 @export_app.command("excel")

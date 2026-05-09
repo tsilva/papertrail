@@ -15,6 +15,8 @@ from papertrail.reconciliation_groundtruth import (
     GROUNDTRUTH_SUFFIX,
     RECONCILIATION_SUFFIX,
     approval_map,
+    document_matches_approval,
+    document_sets_match,
     groundtruth_path_for_document,
     load_groundtruth,
     rows_with_transaction_keys,
@@ -181,34 +183,11 @@ def _candidate_identity(repository: DocumentRepository, candidate) -> dict:
 
 
 def _document_sets_match_strict(current_documents: list[dict], approved_documents: list[dict]) -> bool:
-    if len(current_documents) != len(approved_documents):
-        return False
-    remaining = list(current_documents)
-    for approved in approved_documents:
-        match_index = next(
-            (
-                index
-                for index, current in enumerate(remaining)
-                if _document_matches_strict(current, approved)
-            ),
-            None,
-        )
-        if match_index is None:
-            return False
-        remaining.pop(match_index)
-    return True
+    return document_sets_match(current_documents, approved_documents, strict_hash=True)
 
 
 def _document_matches_strict(current: dict, approved: dict) -> bool:
-    if approved.get("hash_file") or approved.get("hash_content"):
-        return bool(
-            (approved.get("hash_file") and current.get("hash_file") == approved.get("hash_file"))
-            or (
-                approved.get("hash_content")
-                and current.get("hash_content") == approved.get("hash_content")
-            )
-        )
-    return bool(approved.get("filename") and current.get("filename") == approved.get("filename"))
+    return document_matches_approval(current, approved, strict_hash=True)
 
 
 def _build_file_index(repository: DocumentRepository, export_path: Path) -> dict[str, dict]:

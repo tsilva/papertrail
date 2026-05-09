@@ -12,7 +12,7 @@ from typing import Optional
 
 import fitz
 
-from papertrail.bank_statement import load_transactions as load_bank_statement_transactions
+from papertrail.bank_statement.extractor import load_transactions as load_bank_statement_transactions
 from papertrail.config import ReconciliationRule
 from papertrail.document_types import normalize_document_type
 from papertrail.llm import _extract_json_from_response
@@ -52,24 +52,21 @@ from papertrail.reconciliation_evidence import build_document_evidence
 from papertrail.repository import DocumentRepository
 from papertrail.rules import RuleEngine
 from papertrail.runtime import Runtime
-from papertrail.utils import strip_diacritics
+from papertrail.utils import compact_match_key, strip_diacritics
 
 logger = get_logger("reconcile")
 
-_AMOUNT_TOLERANCE = DEFAULT_AMOUNT_TOLERANCE
-_DATE_WINDOW_DAYS = DEFAULT_DATE_WINDOW_DAYS
-_BANK_GENERATED_DOC_TYPES = set(DEFAULT_BANK_GENERATED_DOC_TYPES)
-_STATEMENT_BANK_SCOPED_DOC_TYPES = set(DEFAULT_STATEMENT_BANK_SCOPED_DOC_TYPES)
-_STATEMENT_BANK_ISSUER_ALIASES = dict(DEFAULT_STATEMENT_BANK_ISSUER_ALIASES)
+
+class LineItemExtractionError(RuntimeError):
+    """Raised when a relevant PDF cannot be read for line-item extraction."""
+
+
 _AMOUNT_LINE_RE = re.compile(r"^-?\d[\d\s.]*,\d{2}$")
 _PERIOD_TOKEN_RE = re.compile(
     r"\b(JAN|FEV|MAR|ABR|MAI|JUN|JUL|AGO|SET|OUT|NOV|DEZ)\s+(20\d{2})\b"
 )
 _DATE_DMY_RE = re.compile(r"\b(\d{2})[/-](\d{2})[/-](20\d{2})\b")
 _DATE_DM_RE = re.compile(r"\b(\d{2})[/-](\d{2})\b")
-_BANK_EXPORT_PREFIX = DEFAULT_BANK_EXPORT_PREFIX
-_SUPPORTING_EXPORT_PREFIXES = tuple(DEFAULT_SUPPORTING_EXPORT_PREFIXES)
-_SUPPORTING_DOC_TYPE_PATTERNS = list(DEFAULT_SUPPORTING_DOC_TYPE_PATTERNS)
 
 
 @dataclass(frozen=True)
@@ -262,9 +259,7 @@ def _policy_from_profile(profile) -> ReconciliationPolicy:
         ),
         counterparty_aliases=_string_map(
             getattr(settings, "counterparty_aliases", None),
-            DEFAULT_COUNTERPARTY_ALIASES
-            if getattr(settings, "include_builtin_counterparty_aliases", True)
-            else None,
+            DEFAULT_COUNTERPARTY_ALIASES,
         ),
         shared_period_transaction_keywords=_keywords_map(
             getattr(settings, "shared_period_transaction_keywords", None),
@@ -618,6 +613,7 @@ def _load_transactions(runtime: Runtime, excel_path: Path) -> list[Transaction]:
         for data in load_bank_statement_transactions(
             excel_path,
             settings=runtime.profile.bank_statements,
+            strict=True,
         )
     ]
 
@@ -982,8 +978,7 @@ def _extract_bpi_fee_invoice_line_items(pdf_path: Path, data: dict) -> list[Cand
         with fitz.open(pdf_path) as pdf:
             lines = [line.strip() for page in pdf for line in page.get_text().splitlines() if line.strip()]
     except Exception as exc:
-        logger.debug(f"[LINE-ITEMS] Failed to read {pdf_path.name}: {exc}")
-        return []
+        raise LineItemExtractionError(f"Failed to read {pdf_path.name}: {exc}") from exc
 
     normalized_lines = [strip_diacritics(line).upper() for line in lines]
     line_items: list[CandidateLineItem] = []
@@ -1152,8 +1147,7 @@ def _extract_bpi_stock_invoice_line_items(pdf_path: Path, data: dict) -> list[Ca
             ]
             page_texts = ["\n".join(lines) for lines in page_lines]
     except Exception as exc:
-        logger.debug(f"[LINE-ITEMS] Failed to read {pdf_path.name}: {exc}")
-        return []
+        raise LineItemExtractionError(f"Failed to read {pdf_path.name}: {exc}") from exc
 
     line_items: list[CandidateLineItem] = []
     seen: set[tuple[str, float, str]] = set()
@@ -1263,8 +1257,7 @@ def _extract_bpi_transfer_line_items(pdf_path: Path, data: dict) -> list[Candida
             ]
             page_texts = ["\n".join(lines) for lines in page_lines]
     except Exception as exc:
-        logger.debug(f"[LINE-ITEMS] Failed to read {pdf_path.name}: {exc}")
-        return []
+        raise LineItemExtractionError(f"Failed to read {pdf_path.name}: {exc}") from exc
 
     line_items: list[CandidateLineItem] = []
     seen: set[tuple[str, float, str]] = set()
@@ -1318,8 +1311,7 @@ def _extract_millennium_fee_invoice_line_items(pdf_path: Path, data: dict) -> li
         with fitz.open(pdf_path) as pdf:
             lines = [line.strip() for page in pdf for line in page.get_text().splitlines() if line.strip()]
     except Exception as exc:
-        logger.debug(f"[LINE-ITEMS] Failed to read {pdf_path.name}: {exc}")
-        return []
+        raise LineItemExtractionError(f"Failed to read {pdf_path.name}: {exc}") from exc
 
     normalized_lines = [strip_diacritics(line).upper() for line in lines]
     movement_date = _extract_millennium_movement_date(lines, normalized_lines) or data.get("date_issued")
@@ -1403,8 +1395,7 @@ def _extract_direct_debit_invoice_line_items(pdf_path: Path, data: dict) -> list
         with fitz.open(pdf_path) as pdf:
             text = "\n".join(page.get_text() for page in pdf)
     except Exception as exc:
-        logger.debug(f"[LINE-ITEMS] Failed to read {pdf_path.name}: {exc}")
-        return []
+        raise LineItemExtractionError(f"Failed to read {pdf_path.name}: {exc}") from exc
 
     normalized_text = strip_diacritics(text).upper()
     date_match = date_pattern.search(normalized_text)
@@ -1463,8 +1454,7 @@ def _extract_insurance_notice_line_items(pdf_path: Path, data: dict) -> list[Can
         with fitz.open(pdf_path) as pdf:
             text = "\n".join(page.get_text() for page in pdf)
     except Exception as exc:
-        logger.debug(f"[LINE-ITEMS] Failed to read {pdf_path.name}: {exc}")
-        return []
+        raise LineItemExtractionError(f"Failed to read {pdf_path.name}: {exc}") from exc
 
     normalized_text = strip_diacritics(text).upper()
     period_match = period_pattern.search(normalized_text)
@@ -2602,7 +2592,7 @@ Respond in JSON:
 
 
 def _normalize_for_match(text: str) -> str:
-    return "".join(char for char in strip_diacritics(text).lower() if char.isalnum())
+    return compact_match_key(text)
 
 
 def _classify_transaction(txn: Transaction, rules: list) -> tuple[str, object | None]:

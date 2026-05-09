@@ -150,7 +150,6 @@ class PapertrailConsole:
                 try:
                     yield ctx
                 except Exception:
-                    # If an exception occurs and no status was set, mark as error
                     if ctx.result.status == "pending":
                         ctx.error("Failed with exception")
                     raise

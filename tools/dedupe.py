@@ -9,7 +9,7 @@ from pathlib import Path
 import gradio as gr
 
 from papertrail.hashing import PLAN_FILENAME, scan_directory
-from papertrail.reconciliation_groundtruth import GROUNDTRUTH_SUFFIX
+from papertrail.repository import associated_document_files
 if __package__:
     from .shared import (
         FULLSCREEN_CSS,
@@ -385,22 +385,13 @@ def on_confirm():
                 errors.append(f"{json_name}: not found")
                 continue
 
-            files_to_move = [json_path]
-
             try:
                 with open(json_path, "r", encoding="utf-8") as f:
                     data = json.load(f)
                 companion = find_companion(json_path, data)
-                if companion and companion.exists():
-                    files_to_move.append(companion)
             except (OSError, UnicodeDecodeError, json.JSONDecodeError):
-                pass
-
-            stem = json_path.stem
-            for extra_suffix in (".reconciliation.json", GROUNDTRUTH_SUFFIX):
-                extra = json_path.parent / (stem + extra_suffix)
-                if extra.exists():
-                    files_to_move.append(extra)
+                companion = None
+            files_to_move = associated_document_files(json_path, companion)
 
             for src in files_to_move:
                 dst = dupes_dir / src.name

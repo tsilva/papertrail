@@ -22,6 +22,14 @@ from papertrail.qr.models import (
 logger = get_logger('qr.extractor')
 
 
+class QRExtractionError(RuntimeError):
+    """Raised when QR extraction fails for reasons other than unavailable dependencies."""
+
+
+class QRParseError(QRExtractionError):
+    """Raised when a detected QR code cannot be parsed."""
+
+
 def is_portuguese_invoice_qr(raw_content: str) -> bool:
     """Check if content matches Portuguese invoice QR format (Portaria 195/2020)."""
     if not raw_content:
@@ -117,8 +125,7 @@ def parse_portuguese_invoice_qr(
             document_type_codes=document_type_codes,
         ), raw_data
     except Exception as e:
-        logger.warning(f"Failed to parse Portuguese invoice QR: {e}")
-        return None, None
+        raise QRParseError(f"Failed to parse Portuguese invoice QR: {e}") from e
 
 # Lazy import pyzbar to allow graceful degradation
 _pyzbar_available = None
@@ -286,8 +293,7 @@ def extract_qr_codes_from_page(page: fitz.Page, dpi: int = 300) -> list[QRCodeDa
             os.close(old_stderr)
             os.close(devnull)
     except Exception as e:
-        logger.debug(f"pyzbar decode failed: {e}")
-        return []
+        raise QRExtractionError(f"pyzbar decode failed on page {page.number}: {e}") from e
 
     for obj in decoded_objects:
         try:
@@ -295,9 +301,8 @@ def extract_qr_codes_from_page(page: fitz.Page, dpi: int = 300) -> list[QRCodeDa
         except UnicodeDecodeError:
             try:
                 raw_content = obj.data.decode("latin-1")
-            except Exception:
-                logger.debug(f"Could not decode QR content: {obj.data[:50]}...")
-                continue
+            except Exception as exc:
+                raise QRParseError(f"Could not decode QR content: {obj.data[:50]}...") from exc
 
         qr_type = detect_qr_type(raw_content)
 
@@ -338,9 +343,10 @@ def extract_all_qr_codes(
                 qr_codes = extract_qr_codes_from_page(doc[total_pages - 1], dpi=dpi)
                 all_qr_codes.extend(qr_codes)
 
+    except QRExtractionError:
+        raise
     except Exception as e:
-        logger.warning(f"QR extraction failed for {pdf_path.name}: {e}")
-        return []
+        raise QRExtractionError(f"QR extraction failed for {pdf_path.name}: {e}") from e
 
     if all_qr_codes:
         logger.debug(f"Found {len(all_qr_codes)} QR code(s) in {pdf_path.name}")

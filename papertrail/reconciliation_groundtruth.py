@@ -259,7 +259,15 @@ def remove_unmatched_file_approval(groundtruth_path: Path, *, document: dict) ->
     return changed
 
 
-def document_matches_approval(current: dict, approved: dict) -> bool:
+def document_matches_approval(current: dict, approved: dict, *, strict_hash: bool = False) -> bool:
+    if strict_hash and (approved.get("hash_file") or approved.get("hash_content")):
+        return bool(
+            (approved.get("hash_file") and current.get("hash_file") == approved.get("hash_file"))
+            or (
+                approved.get("hash_content")
+                and current.get("hash_content") == approved.get("hash_content")
+            )
+        )
     if approved.get("hash_file") and current.get("hash_file") == approved.get("hash_file"):
         return True
     if approved.get("hash_content") and current.get("hash_content") == approved.get("hash_content"):
@@ -267,7 +275,12 @@ def document_matches_approval(current: dict, approved: dict) -> bool:
     return bool(approved.get("filename") and current.get("filename") == approved.get("filename"))
 
 
-def document_sets_match(current_documents: list[dict], approved_documents: list[dict]) -> bool:
+def document_sets_match(
+    current_documents: list[dict],
+    approved_documents: list[dict],
+    *,
+    strict_hash: bool = False,
+) -> bool:
     if len(current_documents) != len(approved_documents):
         return False
 
@@ -277,7 +290,7 @@ def document_sets_match(current_documents: list[dict], approved_documents: list[
             (
                 index
                 for index, current in enumerate(remaining)
-                if document_matches_approval(current, approved)
+                if document_matches_approval(current, approved, strict_hash=strict_hash)
             ),
             None,
         )

@@ -18,7 +18,7 @@ from papertrail.reconciliation_defaults import (
     DEFAULT_SHARED_PERIOD_TITLE_TERMS,
     DEFAULT_TAX_NUMBER_DEFAULT_COUNTRY_PREFIX,
 )
-from papertrail.utils import strip_diacritics
+from papertrail.utils import compact_match_key, strip_diacritics
 
 BANK_ANCHOR = "bank_anchor"
 SUPPLIER_EVIDENCE = "supplier_evidence"
@@ -284,7 +284,7 @@ def _normalize_tax_number(
 
 
 def _compact(value: Any) -> str:
-    return "".join(char for char in strip_diacritics(str(value or "")).lower() if char.isalnum())
+    return compact_match_key(value)
 
 
 def _slug(value: Any) -> str:

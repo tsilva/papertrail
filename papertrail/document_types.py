@@ -65,45 +65,6 @@ def match_document_type_override(
     return None
 
 
-def is_bank_note_raw_type(raw_value: str | None) -> bool:
-    return match_document_type_override(
-        raw_value,
-        overrides=[{"target": "bank-note", "raw_types": ("movimento", "notadelancamento")}],
-    ) == "bank-note"
-
-
-def is_investment_acquisition_summary(
-    raw_value: str | None,
-    document_title: str | None = None,
-) -> bool:
-    return match_document_type_override(
-        raw_value,
-        document_title,
-        overrides=[DEFAULT_DOCUMENT_TYPE_OVERRIDES[1]],
-    ) == "investment-acquisition-summary"
-
-
-def is_loan_simulation(raw_value: str | None, document_title: str | None = None) -> bool:
-    if raw_value is None:
-        return False
-    return match_document_type_override(
-        raw_value,
-        document_title,
-        overrides=[DEFAULT_DOCUMENT_TYPE_OVERRIDES[2]],
-    ) == "loan-simulation"
-
-
-def is_loan_disbursement_movement(
-    raw_value: str | None,
-    document_title: str | None = None,
-) -> bool:
-    return match_document_type_override(
-        raw_value,
-        document_title,
-        overrides=[DEFAULT_DOCUMENT_TYPE_OVERRIDES[3]],
-    ) == "bank-note"
-
-
 def _override_get(override: object, key: str, default=None):
     if isinstance(override, dict):
         return override.get(key, default)

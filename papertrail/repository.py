@@ -25,6 +25,19 @@ def _load_json_fast(path: Path) -> dict:
         return orjson.loads(handle.read())
 
 
+def associated_document_files(json_path: Path, companion: Path | None = None) -> list[Path]:
+    files = [json_path]
+    if companion and companion.exists():
+        files.append(companion)
+
+    stem = json_path.stem
+    for extra_suffix in (".reconciliation.json", GROUNDTRUTH_SUFFIX):
+        extra = json_path.parent / f"{stem}{extra_suffix}"
+        if extra.exists():
+            files.append(extra)
+    return files
+
+
 _JSON_LOAD_EXCEPTIONS = (OSError, UnicodeDecodeError, ValueError)
 _SIDECAR_EXCEPTIONS = _JSON_LOAD_EXCEPTIONS + (ValidationError,)
 
@@ -352,16 +365,8 @@ class DocumentRepository:
             except _SIDECAR_EXCEPTIONS:
                 pass
 
-            files_to_move = [json_path]
             companion = self.find_companion(json_path, data)
-            if companion and companion.exists():
-                files_to_move.append(companion)
-
-            stem = json_path.stem
-            for extra_suffix in (".reconciliation.json", GROUNDTRUTH_SUFFIX):
-                extra = json_path.parent / f"{stem}{extra_suffix}"
-                if extra.exists():
-                    files_to_move.append(extra)
+            files_to_move = associated_document_files(json_path, companion)
 
             for src in files_to_move:
                 dst = archive_dir / src.name

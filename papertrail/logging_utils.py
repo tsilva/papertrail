@@ -17,13 +17,11 @@ def setup_failure_logger(log_path: Optional[Path] = None) -> logging.Logger:
     logger = logging.getLogger("papertrail.failures")
     logger.setLevel(logging.ERROR)
 
-    # Clear existing handlers
     logger.handlers.clear()
 
     if log_path is None:
         log_path = Path.cwd() / "classification_failures.log"
 
-    # File handler with detailed format
     file_handler = logging.FileHandler(log_path, mode='a', encoding='utf-8')
     file_handler.setLevel(logging.ERROR)
     formatter = logging.Formatter(
@@ -184,9 +182,6 @@ class DocumentLogger:
             if val is not None:
                 parts.append(f'{key}="{val}"' if isinstance(val, str) else f"{key}={val}")
         self._logger.debug(f"[RAW] {' '.join(parts)}")
-
-    def log_normalization(self, field: str, raw: str, normalized: str) -> None:
-        self._logger.debug(f"[NORM] {field}: '{raw}' -> '{normalized}'")
 
     def log_timing(self, operation: str, seconds: float) -> None:
         self._timings[operation] = seconds

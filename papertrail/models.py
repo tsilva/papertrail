@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import re
 from datetime import datetime
-from typing import NotRequired, Optional, TypedDict
+from typing import Optional, TypedDict
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -53,20 +53,6 @@ class QRCodePayload(TypedDict, total=False):
 BankStatementPayload = BankStatementSidecar
 
 
-class SubDocumentPayload(TypedDict, total=False):
-    date_issued: str | None
-    document_type: str | None
-    total_amount: float | None
-    total_amount_currency: str | None
-    issuer_tax_number: str | None
-    issuing_party: str | None
-    issuing_party_raw: str | None
-    document_number: str | None
-    atcud: str | None
-    locale: str | None
-    qrcode: NotRequired[QRCodePayload | None]
-
-
 class DocumentMetadataRaw(BaseModel):
     """Single-call extraction: raw text plus normalized forms from the LLM."""
 
@@ -109,6 +95,9 @@ class SubDocumentMetadata(BaseModel):
     locale: Optional[str] = None
     qrcode: QRCodePayload | None = None
 
+    def __getitem__(self, key: str):
+        return getattr(self, key)
+
 
 class DocumentMetadata(BaseModel):
     """Full document metadata with hashes and validated field formats."""
@@ -135,7 +124,7 @@ class DocumentMetadata(BaseModel):
     qrcode: QRCodePayload | None = Field(default=None)
     bank_statement: BankStatementSidecar | None = Field(default=None)
     source_extension: Optional[str] = Field(default=None)
-    sub_documents: Optional[list[SubDocumentPayload]] = Field(default=None)
+    sub_documents: Optional[list[SubDocumentMetadata]] = Field(default=None)
 
     @field_validator("date_issued", mode="before")
     @classmethod

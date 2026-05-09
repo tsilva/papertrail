@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import os
-import shutil
 import urllib.error
 import urllib.request
 from copy import deepcopy
@@ -12,6 +11,7 @@ from pathlib import Path
 import openai
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from papertrail.document_types import DEFAULT_DOCUMENT_TYPE_OVERRIDES
 from papertrail.qr.models import (
     DEFAULT_PORTUGUESE_INVOICE_DOCUMENT_TYPE_CODES,
     DEFAULT_QR_COUNTRY_CODE,
@@ -251,7 +251,6 @@ class WorkflowSettings(SettingsModel):
 
 
 class ToolSettings(SettingsModel):
-    default_profile: str = "default"
     preview_dpi: int = 150
     xlsx_preview_max_rows: int = 100
     llm_high_confidence_threshold: float = 0.8
@@ -319,19 +318,7 @@ class DocumentTypeOverride(SettingsModel):
 
 class ClassificationSettings(SettingsModel):
     document_type_overrides: list[DocumentTypeOverride] = Field(
-        default_factory=lambda: [
-            {"target": "bank-note", "raw_types": ["movimento", "notadelancamento"]},
-            {
-                "target": "investment-acquisition-summary",
-                "context_all": ["mapa", "resumo", "datas", "valores", "aquisicao", "mobiliarios"],
-            },
-            {
-                "target": "loan-simulation",
-                "raw_types": ["simulacao", "simulation"],
-                "context_any": ["credito", "credit", "loan", "emprestimo", "financiamento"],
-            },
-            {"target": "bank-note", "context_all": ["concess", "cred", "empr"]},
-        ]
+        default_factory=lambda: [dict(override) for override in DEFAULT_DOCUMENT_TYPE_OVERRIDES]
     )
     prompt_document_type_rules: list[str] = Field(
         default_factory=lambda: [
@@ -416,7 +403,6 @@ class ReconciliationSettings(SettingsModel):
     bank_counterparties: list[str] = Field(
         default_factory=lambda: list(DEFAULT_BANK_COUNTERPARTIES)
     )
-    include_builtin_counterparty_aliases: bool = True
     counterparty_aliases: dict[str, str] = Field(default_factory=dict)
     shared_period_transaction_keywords: dict[str, list[str]] = Field(
         default_factory=lambda: {
@@ -688,7 +674,6 @@ def _normalize_profile_data(data: dict[str, object], profile_path: Path | None) 
     normalized["workflow"].setdefault("default_months", 2)
     normalized["workflow"].setdefault("sync_workers", 1)
     normalized["workflow"].setdefault("metadata_load_workers", 16)
-    normalized["tools"].setdefault("default_profile", "default")
     normalized["tools"].setdefault("preview_dpi", 150)
     normalized["tools"].setdefault("xlsx_preview_max_rows", 100)
     normalized["tools"].setdefault("llm_high_confidence_threshold", 0.8)
@@ -732,7 +717,6 @@ def _normalize_profile_data(data: dict[str, object], profile_path: Path | None) 
     reconciliation.setdefault("exclude_prefixes", [])
     reconciliation.setdefault("rules", [])
     reconciliation.setdefault("include_builtin_rules", True)
-    reconciliation.setdefault("include_builtin_counterparty_aliases", True)
     reconciliation.setdefault("counterparty_aliases", {})
     reconciliation.setdefault("include_builtin_line_item_extractors", True)
     reconciliation.setdefault(
@@ -816,8 +800,6 @@ class ProfileLoader:
 
     def list_available_profiles(self) -> list[str]:
         profiles_dir = self.profiles_dir
-        if not list(profiles_dir.iterdir()):
-            _migrate_from_repo()
         if not profiles_dir.exists():
             return []
         return sorted(
@@ -910,83 +892,3 @@ def check_api_accessibility(base_url: str, timeout: int = 10) -> bool:
         return True
     except (urllib.error.URLError, TimeoutError):
         return False
-
-
-def _migrate_from_repo() -> None:
-    import logging
-
-    logger = logging.getLogger("papertrail.migration")
-    repo_root = Path(__file__).parent.parent
-    repo_profiles = repo_root / "profiles"
-    repo_cache = repo_root / ".cache"
-    repo_credentials = repo_root / ".credentials"
-
-    config_root = get_config_root()
-    user_profiles = config_root / "profiles"
-    user_cache = config_root / "cache"
-    user_credentials = config_root / "credentials"
-
-    migrated: list[str] = []
-
-    if repo_profiles.exists() and user_profiles.exists():
-        profile_dirs = [
-            directory
-            for directory in repo_profiles.iterdir()
-            if directory.is_dir() and (directory / "profile.yaml").exists()
-        ]
-        if profile_dirs and not list(user_profiles.iterdir()):
-            logger.info(
-                "[MIGRATION] Migrating profiles from repo to ~/.config/papertrail/profiles/"
-            )
-            for profile_dir in profile_dirs:
-                destination = user_profiles / profile_dir.name
-                shutil.copytree(profile_dir, destination)
-                shutil.rmtree(profile_dir)
-                migrated.append(f"profile: {profile_dir.name}")
-
-            template = repo_profiles / "profile.yaml.example"
-            if template.exists():
-                shutil.copy2(template, user_profiles / "profile.yaml.example")
-                template.unlink()
-                migrated.append("profile.yaml.example")
-
-            try:
-                repo_profiles.rmdir()
-            except OSError:
-                pass
-
-    if repo_cache.exists():
-        user_cache.mkdir(parents=True, exist_ok=True)
-        for cache_file in ["hash_cache.yaml", "nif_cache.yaml", ".extract.lock"]:
-            src = repo_cache / cache_file
-            if src.exists():
-                shutil.copy2(src, user_cache / cache_file)
-                src.unlink()
-                migrated.append(f"cache: {cache_file}")
-
-        try:
-            remaining = [path for path in repo_cache.iterdir() if not path.name.endswith(".example")]
-            if not remaining:
-                for path in repo_cache.iterdir():
-                    path.unlink()
-                repo_cache.rmdir()
-        except OSError:
-            pass
-
-    if repo_credentials.exists():
-        user_credentials.mkdir(parents=True, exist_ok=True)
-        for credential in ["gmail_credentials.json", "gmail_token.json", "gmail_settings.json"]:
-            src = repo_credentials / credential
-            if src.exists():
-                shutil.copy2(src, user_credentials / credential)
-                src.unlink()
-                migrated.append(f"credentials: {credential}")
-
-        try:
-            if not list(repo_credentials.iterdir()):
-                repo_credentials.rmdir()
-        except OSError:
-            pass
-
-    if migrated:
-        logger.info(f"[MIGRATION] Complete. Migrated: {', '.join(migrated)}")

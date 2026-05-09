@@ -33,7 +33,6 @@ dependencies = [
 requires-python = ">=3.12"
 
 [project.optional-dependencies]
-similarity = ["cohere>=5.0", "numpy"]
 dev = ["pytest"]
 
 [project.scripts]

@@ -21,7 +21,7 @@ from papertrail.llm import (
     build_extraction_tools,
     get_qr_exclusions,
     get_system_prompt_classify,
-    normalize_issuing_party,
+    normalize_issuing_party_with_status,
 )
 from papertrail.logging_utils import DocumentLogger, get_logger, log_failure
 from papertrail.models import DocumentMetadata, DocumentMetadataRaw, SubDocumentMetadata
@@ -35,7 +35,11 @@ from papertrail.pdf import (
     render_pdf_to_images,
     split_pdf_bundle,
 )
-from papertrail.qr.extractor import configure_zbar_library_paths, extract_all_metadata_from_qr
+from papertrail.qr.extractor import (
+    QRExtractionError,
+    configure_zbar_library_paths,
+    extract_all_metadata_from_qr,
+)
 from papertrail.qr.models import QRExtractedMetadata
 from papertrail.repository import DocumentRepository
 from papertrail.runtime import Runtime
@@ -83,6 +87,18 @@ def _extract_qr_with_runtime_settings(
         default_currency=settings.default_currency,
         document_type_codes=settings.document_type_codes,
     )
+
+
+def _hash_file_text_cached(pdf_path: Path, runtime: Runtime, file_hash: str) -> str | None:
+    cached = runtime.hash_cache.get_text(file_hash)
+    if cached:
+        return cached
+    hashing_settings = runtime.profile.processing.hashing
+    text_hash = hash_file_text(pdf_path, min_chars=hashing_settings.text_min_chars)
+    if text_hash:
+        runtime.hash_cache.set_text(file_hash, text_hash)
+        runtime.hash_cache.save()
+    return text_hash
 
 
 def _phase0_qr_extract(pdf_path: Path, runtime: Runtime, doc_logger: DocumentLogger | None):
@@ -137,11 +153,8 @@ def _phase0_qr_extract(pdf_path: Path, runtime: Runtime, doc_logger: DocumentLog
                     page_number=qr_raw.get("page_number", 0) if qr_raw else 0,
                 )
         return None, None, all_results
-    except Exception as exc:
-        logger.debug(f"QR extraction failed (continuing with LLM): {exc}")
-        if doc_logger:
-            doc_logger.log_qr_not_found()
-        return None, None, []
+    except QRExtractionError:
+        raise
 
 
 def _phase1_llm_extract(
@@ -265,7 +278,7 @@ def _enrich_nif(
         repository.registry.register_issuing_party(cached_normalized)
         return cached_normalized, official_issuer
 
-    nif_normalized = normalize_issuing_party(
+    nif_normalized, normalization_source = normalize_issuing_party_with_status(
         official_issuer,
         runtime.openai_client,
         runtime.model_id,
@@ -276,7 +289,8 @@ def _enrich_nif(
     )
     if nif_normalized != "$UNKNOWN$":
         canonical = repository.registry.register_issuing_party(nif_normalized)
-        runtime.nif_cache.set_normalized(tax_number, canonical or nif_normalized)
+        if normalization_source != "heuristic_error":
+            runtime.nif_cache.set_normalized(tax_number, canonical or nif_normalized)
         if doc_logger:
             doc_logger.log_nif_enrichment(tax_number, official_issuer, canonical or nif_normalized)
         return canonical or nif_normalized, official_issuer
@@ -727,9 +741,12 @@ class DocumentEngine:
                 data["file_size_kb"] = round(source_path.stat().st_size / 1024)
                 changed = True
             if "hash_text" not in data and source_path.exists():
-                hashing_settings = self.runtime.profile.processing.hashing
                 data["hash_text"] = (
-                    hash_file_text(source_path, min_chars=hashing_settings.text_min_chars)
+                    _hash_file_text_cached(
+                        source_path,
+                        self.runtime,
+                        data.get("hash_file") or hash_file_fast(source_path),
+                    )
                     if source_path.suffix.lower() == ".pdf"
                     else None
                 )
@@ -892,7 +909,7 @@ class DocumentEngine:
             result.reason = "hash_file"
             return result
 
-        text_hash = hash_file_text(source_path, min_chars=hashing_settings.text_min_chars)
+        text_hash = _hash_file_text_cached(source_path, self.runtime, file_hash)
         if mode == "ingest" and text_hash and text_hash in known_text_hashes:
             result.duplicates = 1
             result.reason = "hash_text"

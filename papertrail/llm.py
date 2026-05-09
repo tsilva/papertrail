@@ -319,11 +319,37 @@ def normalize_issuing_party(
     legal_suffixes: list[str] | tuple[str, ...] | set[str] | None = None,
 ) -> str:
     """Normalize a single issuing party name against the known canonical list."""
+    normalized, _source = normalize_issuing_party_with_status(
+        raw_name,
+        client,
+        model_id,
+        known_issuing_parties,
+        max_tokens=max_tokens,
+        temperature=temperature,
+        legal_suffixes=legal_suffixes,
+    )
+    return normalized
+
+
+def normalize_issuing_party_with_status(
+    raw_name: str,
+    client: openai.OpenAI | None,
+    model_id: str | None,
+    known_issuing_parties: list[str],
+    *,
+    max_tokens: int = 256,
+    temperature: float = 0.0,
+    legal_suffixes: list[str] | tuple[str, ...] | set[str] | None = None,
+) -> tuple[str, str]:
+    """Normalize an issuing party and report whether the result came from LLM or heuristic."""
     if client is None:
-        return _heuristic_normalize_issuing_party(
-            raw_name,
-            known_issuing_parties,
-            legal_suffixes=legal_suffixes,
+        return (
+            _heuristic_normalize_issuing_party(
+                raw_name,
+                known_issuing_parties,
+                legal_suffixes=legal_suffixes,
+            ),
+            "heuristic",
         )
 
     suffix_examples = ", ".join(sorted(_legal_suffixes(legal_suffixes)))
@@ -347,23 +373,32 @@ def normalize_issuing_party(
         )
         content = response.choices[0].message.content
         if not content:
-            return _heuristic_normalize_issuing_party(
-                raw_name,
-                known_issuing_parties,
-                legal_suffixes=legal_suffixes,
+            return (
+                _heuristic_normalize_issuing_party(
+                    raw_name,
+                    known_issuing_parties,
+                    legal_suffixes=legal_suffixes,
+                ),
+                "heuristic",
             )
         parsed = _parse_issuing_party_response(content)
         if parsed:
-            return _heuristic_normalize_issuing_party(
-                parsed,
-                known_issuing_parties,
-                legal_suffixes=legal_suffixes,
+            return (
+                _heuristic_normalize_issuing_party(
+                    parsed,
+                    known_issuing_parties,
+                    legal_suffixes=legal_suffixes,
+                ),
+                "llm",
             )
     except Exception as exc:
         logger.error(f"NIF normalization failed: {exc}")
 
-    return _heuristic_normalize_issuing_party(
-        raw_name,
-        known_issuing_parties,
-        legal_suffixes=legal_suffixes,
+    return (
+        _heuristic_normalize_issuing_party(
+            raw_name,
+            known_issuing_parties,
+            legal_suffixes=legal_suffixes,
+        ),
+        "heuristic_error",
     )

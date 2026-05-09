@@ -84,11 +84,15 @@ def load_transactions(
     xlsx_path: Path,
     *,
     settings: object | None = None,
+    strict: bool = False,
 ) -> list[BankTransactionRecord]:
     warnings.filterwarnings("ignore", message="Workbook contains no default style")
-    parser = _detect_parser(xlsx_path, settings=settings)
+    parser = _detect_parser(xlsx_path, raise_on_open_error=strict, settings=settings)
     if parser is None:
-        logger.warning(f"No parser recognized format of {xlsx_path.name}")
+        message = f"No parser recognized format of {xlsx_path.name}"
+        if strict:
+            raise BankStatementParseError(message)
+        logger.warning(message)
         return []
 
     transactions = parser.load_transactions(xlsx_path, config=_parser_config(settings, parser))

@@ -329,10 +329,15 @@ def _copy_document_to_export(
     *,
     export_config,
     profile_context: Optional[dict],
+    document_type_overrides=None,
     naming_settings=None,
     max_file_size_mb: float | None,
 ) -> Path:
-    export_metadata_dict = _metadata_for_export(metadata_dict, doc_path)
+    export_metadata_dict = _metadata_for_export(
+        metadata_dict,
+        doc_path,
+        document_type_overrides=document_type_overrides,
+    )
     dest_doc, dest_json = _export_destination_paths(
         doc_path,
         json_path,
@@ -360,6 +365,7 @@ def _restore_groundtruth_documents(
     *,
     export_config,
     profile_context: Optional[dict],
+    document_type_overrides=None,
     naming_settings=None,
 ) -> int:
     max_file_size_mb = export_config.max_file_size_mb if export_config is not None else None
@@ -380,6 +386,7 @@ def _restore_groundtruth_documents(
             export_date_dir,
             export_config=export_config,
             profile_context=profile_context,
+            document_type_overrides=document_type_overrides,
             naming_settings=naming_settings,
             max_file_size_mb=max_file_size_mb,
         )
@@ -437,6 +444,7 @@ def _run_export_period(
         groundtruth_snapshots,
         export_config=export_file_config,
         profile_context=profile_context,
+        document_type_overrides=runtime.profile.classification.document_type_overrides,
         naming_settings=runtime.profile.naming,
     )
     if restored_documents:
@@ -810,13 +818,14 @@ def _warn_long_filenames(runtime: Runtime, path: Path) -> str:
     return warning
 
 
-def _metadata_for_export(metadata: dict, doc_path: Path) -> dict:
+def _metadata_for_export(metadata: dict, doc_path: Path, *, document_type_overrides=None) -> dict:
     export_metadata = dict(metadata)
     if doc_path.suffix.lower() == ".pdf":
         effective_type = normalize_document_type(
             export_metadata.get("document_type"),
             export_metadata.get("document_type_raw"),
             export_metadata.get("document_title"),
+            document_type_overrides,
         )
         if effective_type:
             export_metadata["document_type"] = effective_type
@@ -870,7 +879,11 @@ def copy_matching(
     )
     for json_path, doc_path, metadata in runtime.console.track(documents, "Copying files"):
         metadata_dict = metadata.model_dump() if isinstance(metadata, DocumentMetadata) else metadata
-        export_metadata_dict = _metadata_for_export(metadata_dict, doc_path)
+        export_metadata_dict = _metadata_for_export(
+            metadata_dict,
+            doc_path,
+            document_type_overrides=runtime.profile.classification.document_type_overrides,
+        )
         if not matcher(doc_path.name) and not matcher(json_path.name):
             continue
 
@@ -1074,6 +1087,7 @@ def export_dates(
                     groundtruth_snapshots,
                     export_config=export_config,
                     profile_context=profile_context,
+                    document_type_overrides=runtime.profile.classification.document_type_overrides,
                     naming_settings=runtime.profile.naming,
                 )
                 bank_statements = discover_bank_statements(repository, export_date_dir)

@@ -152,7 +152,6 @@ def _load_entries(processed_dir):
         if is_reconciliation_sidecar(json_path):
             continue
 
-        # Build search text from key fields
         search_parts = [
             json_path.stem,
             metadata.get("document_type", ""),

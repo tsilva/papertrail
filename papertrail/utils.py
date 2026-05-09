@@ -9,8 +9,6 @@ from typing import Callable
 
 import yaml
 
-# --- Date utilities ---
-
 def compute_month_range(months: int) -> list[str]:
     """Return list of YYYY-MM strings from N months back to current month."""
     today = datetime.now()
@@ -42,8 +40,6 @@ def month_to_date_range(months: list[str]) -> tuple[datetime, datetime]:
     return start, end
 
 
-# --- Text utilities ---
-
 def strip_diacritics(s: str) -> str:
     """Remove diacritics/accents from a string."""
     return "".join(
@@ -52,7 +48,9 @@ def strip_diacritics(s: str) -> str:
     )
 
 
-# --- Pattern utilities ---
+def compact_match_key(value: object) -> str:
+    return "".join(char for char in strip_diacritics(str(value or "")).lower() if char.isalnum())
+
 
 _REGEX_INDICATORS = (
     r'\d', r'\w', r'\s', r'\b', r'\B',
@@ -75,8 +73,6 @@ def make_matcher(pattern: str, use_search: bool = False) -> Callable[[str], bool
         return lambda name: pattern in name
     return lambda name: fnmatch.fnmatch(name, pattern)
 
-
-# --- YAML utilities ---
 
 def load_yaml(path: Path) -> dict:
     """Load YAML file, returning empty dict if missing."""

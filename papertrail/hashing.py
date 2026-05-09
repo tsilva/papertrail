@@ -168,8 +168,6 @@ def hash_file_text(path: Path, *, min_chars: int = 50) -> Optional[str]:
         return None
 
 
-# --- Deduplication utilities ---
-
 def group_duplicates(file_records: list[dict]) -> list[dict]:
     """Group file records into duplicate sets using three-tier hash hierarchy.
 
@@ -231,7 +229,6 @@ def scan_directory(directory: Path) -> dict:
         content_hash = data.get("hash_content")
         text_hash = data.get("hash_text")
         if not text_hash:
-            # Try to compute for PDFs
             ext = data.get("source_extension")
             companion = json_path.with_suffix(ext) if ext else None
             if companion is None or not companion.exists():

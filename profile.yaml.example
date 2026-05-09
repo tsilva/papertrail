@@ -78,7 +78,6 @@ workflow:
   metadata_load_workers: 16
 
 tools:
-  default_profile: "default"
   preview_dpi: 150
   xlsx_preview_max_rows: 100
   llm_high_confidence_threshold: 0.8
@@ -256,7 +255,6 @@ reconciliation:
   policy_files: []
   exclude_prefixes: ["EXC_"]
   include_builtin_rules: true
-  include_builtin_counterparty_aliases: true
   include_builtin_line_item_extractors: true
   rules: []
   amount_tolerance: 0.01
