@@ -1,0 +1,91 @@
+amount_tolerance: 0.01
+date_window_days: 30
+tax_number_default_country_prefix: PT
+bank_generated_doc_types:
+  - bank-card-transaction
+  - bank-note
+  - bank-transfer
+  - bank-statement
+  - bank-investment
+statement_bank_scoped_doc_types:
+  - bank-card-transaction
+  - bank-note
+statement_bank_issuer_aliases: {}
+bank_export_prefix: BNC_
+supporting_export_prefixes: [CMP_, DIV_]
+supporting_doc_type_patterns:
+  - invoice
+  - receipt
+  - invoice-receipt
+  - invoice-credit
+  - invoice-debit
+  - invoice-order
+  - insurance-notice
+  - receipt-reference
+  - receipt-delivery
+document_families:
+  bank_anchor:
+    aliases: [bank-anchor, bank_anchor]
+    types: [bank-note, bank-transfer, bank-card-transaction]
+  supplier_evidence:
+    aliases: [supplier-evidence, supplier_evidence]
+    types: [invoice, receipt, invoice-receipt, invoice-credit, invoice-debit, insurance-notice, bank-fees]
+    prefixes: [invoice-, receipt-]
+    ignore_when_zero_amount: true
+  tax_evidence:
+    aliases: [tax-evidence, tax_evidence]
+    prefixes: [tax-]
+  payroll_evidence:
+    aliases: [payroll-evidence, payroll_evidence]
+    prefixes: [payroll-]
+  loan_evidence:
+    aliases: [loan-evidence, loan_evidence]
+    prefixes: [loan-]
+  investment_evidence:
+    aliases: [investment-evidence, investment_evidence]
+    types: [bank-investment, investment-acquisition-summary, bank-stock-buy, bank-stock-sell]
+  contract_evidence:
+    aliases: [contract-evidence, contract_evidence]
+    types: [contract-signup]
+  ignore:
+    types: [investment-key-information-document, loan-simulation]
+bank_counterparties: []
+counterparty_aliases: {}
+shared_period_transaction_keywords: {}
+shared_period_title_terms: {}
+same_month_shared_rule_names: []
+strict_statement_banks: []
+supporting_pair_exempt_statement_banks: []
+shared_period_link_categories: [supplier-payment]
+shared_period_supplier_evidence_error_exempt_rule_names: [supplier-payment]
+shared_period_bank_anchor_error_exempt_rule_names: [supplier-payment]
+evidence_counterparty_categories: [supplier-payment, bank-fee]
+evidence_counterparty_required_pattern: invoice
+evidence_counterparty_skip_if_supplier_present_categories: [supplier-payment, bank-fee]
+evidence_counterparty_amount_optional_categories: [bank-fee]
+default_currency: EUR
+llm_default_confidence: 0.5
+line_item_category_aliases:
+  bank-fee:
+    prefixes: [bank-fee]
+    categories: [bank-custody-fee]
+  bank-only:
+    prefixes: [bank-transfer]
+    categories: []
+  investment:
+    prefixes: [stock-]
+    categories: []
+line_item_extractors: {}
+rules:
+  - name: default-credit
+    direction: credit
+    required_types:
+      bank-anchor: [1, null]
+    expected_page_count: {}
+  - name: supplier-payment
+    direction: debit
+    required_types:
+      bank-anchor: 1
+      supplier-evidence: [1, null]
+    expected_page_count:
+      bank-anchor: 1
