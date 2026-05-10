@@ -139,7 +139,7 @@ class CliTests(unittest.TestCase):
                 patch("main.create_runtime", return_value=runtime) as create_runtime_mock,
                 patch("main.commands.review") as review_mock,
             ):
-                result = self.runner.invoke(cli_main.app, ["--profile", "puzzle", "review"])
+                result = self.runner.invoke(cli_main.app, ["--profile", "default", "review"])
 
         self.assertEqual(result.exit_code, 0)
         create_runtime_mock.assert_called_once_with(

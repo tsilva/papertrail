@@ -6,16 +6,27 @@ import fitz
 
 from papertrail.commands.reconcile import (
     CandidateLineItem,
+    ReconciliationPolicy,
     Transaction,
+    _ACTIVE_RECONCILIATION_POLICY,
     _extract_bpi_fee_invoice_line_items,
     _extract_bpi_stock_invoice_line_items,
     _extract_insurance_notice_line_items,
     _extract_millennium_fee_invoice_line_items,
     _line_item_matches_transaction_context,
 )
+from tests.support import TEST_LINE_ITEM_EXTRACTORS
 
 
 class ReconcileLineItemTests(unittest.TestCase):
+    def setUp(self):
+        self._policy_token = _ACTIVE_RECONCILIATION_POLICY.set(
+            ReconciliationPolicy(line_item_extractors=TEST_LINE_ITEM_EXTRACTORS)
+        )
+
+    def tearDown(self):
+        _ACTIVE_RECONCILIATION_POLICY.reset(self._policy_token)
+
     def test_extracts_bpi_fee_invoice_line_items(self):
         lines = [
             "FACTURA",

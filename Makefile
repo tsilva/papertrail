@@ -1,4 +1,4 @@
-PROFILE ?= default
+PROFILE ?= $(shell find "$${PAPERTRAIL_HOME:-$$HOME/.config/papertrail}/profiles" -mindepth 1 -maxdepth 1 -type d -exec basename {} \; 2>/dev/null | head -n 1)
 GOLDEN_MONTHS ?= 2026-01 2026-02 2026-03 2026-04
 UV_CACHE_DIR ?= /private/tmp/uv-cache
 

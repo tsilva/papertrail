@@ -6,7 +6,7 @@
 profile:
   name: "default"
   description: "Default configuration for papertrail"
-  tax_number: "TESTOWNER"  # Your tax number (NIF) — used in export rules with ${profile.tax_number}
+  tax_number: null  # Your tax number (NIF) — used in export rules with ${profile.tax_number}
 
 # Directory paths for document processing
 paths:
@@ -221,7 +221,7 @@ export:
       # Documents with no QR can be separated from QR-backed invoices with has_qrcode.
       - match:
           document_type: "invoice*"
-          issuing_party: "shared-toll"
+          issuing_party: "example-issuer"
           has_qrcode: false
         prefix: "EXC_"
       # Excluded investment disclosure documents
@@ -284,17 +284,13 @@ reconciliation:
   statement_bank_scoped_doc_types:
     - "bank-card-transaction"
     - "bank-note"
-  statement_bank_issuer_aliases:
-    bancobpi: "bpi"
-    bpi: "bpi"
-    bancocomercialportugues: "millennium-bcp"
-    bcp: "millennium-bcp"
-    millennium: "millennium-bcp"
-    millenniumbcp: "millennium-bcp"
-  bank_counterparties: ["bpi", "millennium-bcp"]
+  # Add profile-specific bank aliases and counterparties here if you want
+  # reconciliation to scope bank-generated documents to their source bank.
+  statement_bank_issuer_aliases: {}
+  bank_counterparties: []
   # Add profile-specific tax numbers or issuer aliases here.
   # counterparty_aliases:
-  #   "TESTOWNER": "my-company"
+  #   "YOUR_VENDOR_TAX_ID": "example-company"
   counterparty_aliases: {}
   shared_period_transaction_keywords: {}
   shared_period_title_terms: {}

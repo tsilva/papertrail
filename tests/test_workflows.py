@@ -718,7 +718,7 @@ class CommandTests(unittest.TestCase):
                 {
                     "date_posting": "13/02/2026",
                     "date_value": "13/02/2026",
-                    "description": "MDB1717 MDB Google Y 17.99EUR",
+                    "description": "MDB1717 MDB Cloud Vendor Y 17.99EUR",
                     "amount": -17.99,
                     "currency": "EUR",
                     "notes": "",
@@ -733,14 +733,14 @@ class CommandTests(unittest.TestCase):
         statement_metadata = classify_bank_statement(statement_path, statement_hash)
         self.repository.save_document(statement_path, statement_metadata)
 
-        bank_screenshot = feb_dir / "google-bank.pdf"
+        bank_screenshot = feb_dir / "cloud-vendor-bank.pdf"
         unrelated_statement = feb_dir / "account-summary.pdf"
-        feb_invoice = feb_dir / "google-feb.pdf"
-        mar_invoice = mar_dir / "google-mar.pdf"
-        create_pdf(bank_screenshot, ["Google movement"])
+        feb_invoice = feb_dir / "cloud-vendor-feb.pdf"
+        mar_invoice = mar_dir / "cloud-vendor-mar.pdf"
+        create_pdf(bank_screenshot, ["Cloud Vendor movement"])
         create_pdf(unrelated_statement, ["Account summary"])
-        create_pdf(feb_invoice, ["Google invoice feb"])
-        create_pdf(mar_invoice, ["Google invoice mar"])
+        create_pdf(feb_invoice, ["Cloud Vendor invoice feb"])
+        create_pdf(mar_invoice, ["Cloud Vendor invoice mar"])
 
         self.repository.save_document(
             bank_screenshot,
@@ -752,9 +752,9 @@ class CommandTests(unittest.TestCase):
                 date_updated="2026-02-13",
                 document_type="bank-statement",
                 document_type_raw="Movimento",
-                issuing_party="Google",
-                issuing_party_raw="Google Y",
-                document_title="Google Y",
+                issuing_party="Cloud Vendor",
+                issuing_party_raw="Cloud Vendor Y",
+                document_title="Cloud Vendor Y",
                 total_amount=17.99,
             ),
         )
@@ -784,8 +784,8 @@ class CommandTests(unittest.TestCase):
                 date_updated="2026-02-10",
                 document_type="invoice",
                 document_type_raw="Invoice",
-                issuing_party="Google",
-                issuing_party_raw="Google",
+                issuing_party="Cloud Vendor",
+                issuing_party_raw="Cloud Vendor",
                 document_title="YouTube Premium",
                 total_amount=17.99,
             ),
@@ -800,8 +800,8 @@ class CommandTests(unittest.TestCase):
                 date_updated="2026-03-10",
                 document_type="invoice",
                 document_type_raw="Invoice",
-                issuing_party="Google",
-                issuing_party_raw="Google",
+                issuing_party="Cloud Vendor",
+                issuing_party_raw="Cloud Vendor",
                 document_title="YouTube Premium",
                 total_amount=17.99,
             ),
@@ -815,7 +815,7 @@ class CommandTests(unittest.TestCase):
         self.assertEqual(data["summary"]["incomplete"], 0)
         self.assertEqual(
             sorted(data["matches"][0]["files"]),
-            sorted(["google-bank.pdf", "google-feb.pdf"]),
+            sorted(["cloud-vendor-bank.pdf", "cloud-vendor-feb.pdf"]),
         )
 
     def test_reconcile_deduplicates_same_document_copied_into_multiple_export_months(self):
@@ -1483,7 +1483,7 @@ class CommandTests(unittest.TestCase):
             self.export
             / (
                 "BNC_2026-04-02 - bank-note - millenniumbcp - "
-                "transferencia para puzzle message - 6d1a9c44.pdf"
+                "transferencia para default message - 6d1a9c44.pdf"
             )
         )
         incoming_note = (
@@ -2703,22 +2703,22 @@ class CommandTests(unittest.TestCase):
         statement_metadata = classify_bank_statement(statement_path, statement_hash)
         self.repository.save_document(statement_path, statement_metadata)
 
-        benefits-provider_bank_note = feb_dir / "benefits-provider-bank-note.pdf"
-        employee-one_bank_note = feb_dir / "employee-one-bank-note.pdf"
-        employee-two_bank_note = feb_dir / "employee-two-bank-note.pdf"
+        benefits_provider_bank_note = feb_dir / "benefits-provider-bank-note.pdf"
+        employee_one_bank_note = feb_dir / "employee-one-bank-note.pdf"
+        employee_two_bank_note = feb_dir / "employee-two-bank-note.pdf"
         payroll_receipt = jan_dir / "january-payroll.pdf"
-        benefits-provider_receipt = mar_dir / "march-benefits-provider.pdf"
+        benefits_provider_receipt = mar_dir / "march-benefits-provider.pdf"
         unrelated_mar_invoice = mar_dir / "unrelated-march-invoice.pdf"
 
-        create_pdf(benefits-provider_bank_note, ["Benefits Provider bank note"])
-        create_pdf(employee-one_bank_note, ["Employee One salary bank note"])
-        create_pdf(employee-two_bank_note, ["Employee Two salary bank note"])
+        create_pdf(benefits_provider_bank_note, ["Benefits Provider bank note"])
+        create_pdf(employee_one_bank_note, ["Employee One salary bank note"])
+        create_pdf(employee_two_bank_note, ["Employee Two salary bank note"])
         create_pdf(payroll_receipt, ["January payroll receipt"])
-        create_pdf(benefits-provider_receipt, ["March benefits-provider receipt"])
+        create_pdf(benefits_provider_receipt, ["March benefits-provider receipt"])
         create_pdf(unrelated_mar_invoice, ["Unrelated invoice"])
 
         self.repository.save_document(
-            benefits-provider_bank_note,
+            benefits_provider_bank_note,
             self._metadata(
                 "cfbank01",
                 "cfbank01",
@@ -2734,7 +2734,7 @@ class CommandTests(unittest.TestCase):
             ),
         )
         self.repository.save_document(
-            employee-one_bank_note,
+            employee_one_bank_note,
             self._metadata(
                 "crbank01",
                 "crbank01",
@@ -2750,7 +2750,7 @@ class CommandTests(unittest.TestCase):
             ),
         )
         self.repository.save_document(
-            employee-two_bank_note,
+            employee_two_bank_note,
             self._metadata(
                 "tibank01",
                 "tibank01",
@@ -2782,7 +2782,7 @@ class CommandTests(unittest.TestCase):
             ),
         )
         self.repository.save_document(
-            benefits-provider_receipt,
+            benefits_provider_receipt,
             self._metadata(
                 "covmar01",
                 "covmar01",

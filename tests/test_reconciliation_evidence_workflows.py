@@ -204,7 +204,7 @@ class ReconciliationEvidenceWorkflowTests(unittest.TestCase):
                 {
                     "date_posting": "17/03/2026",
                     "date_value": "17/03/2026",
-                    "description": "MDB1717 MDB Google O     1.99EUR",
+                    "description": "MDB1717 MDB Cloud Vendor O     1.99EUR",
                     "amount": -1.99,
                     "currency": "EUR",
                     "notes": "",
@@ -212,12 +212,12 @@ class ReconciliationEvidenceWorkflowTests(unittest.TestCase):
                 }
             ]
         )
-        card = self.export / "BNC_google-card.pdf"
-        march_invoice = self.export / "CMP_google-march.pdf"
-        april_invoice = self.export / "CMP_google-april.pdf"
-        create_pdf(card, ["Google card"])
-        create_pdf(march_invoice, ["Google March"])
-        create_pdf(april_invoice, ["Google April"])
+        card = self.export / "BNC_cloud-vendor-card.pdf"
+        march_invoice = self.export / "CMP_cloud-vendor-march.pdf"
+        april_invoice = self.export / "CMP_cloud-vendor-april.pdf"
+        create_pdf(card, ["Cloud Vendor card"])
+        create_pdf(march_invoice, ["Cloud Vendor March"])
+        create_pdf(april_invoice, ["Cloud Vendor April"])
         self.repository.save_document(
             card,
             self._metadata(
@@ -225,29 +225,29 @@ class ReconciliationEvidenceWorkflowTests(unittest.TestCase):
                 "card1",
                 date_issued="2026-03-17",
                 document_type="bank-card-transaction",
-                issuing_party="Google",
+                issuing_party="Cloud Vendor",
                 total_amount=1.99,
             ),
         )
         self.repository.save_document(
             march_invoice,
             self._metadata(
-                "google1",
-                "google1",
+                "cloud-vendor1",
+                "cloud-vendor1",
                 date_issued="2026-03-12",
                 document_type="invoice",
-                issuing_party="Google",
+                issuing_party="Cloud Vendor",
                 total_amount=1.99,
             ),
         )
         self.repository.save_document(
             april_invoice,
             self._metadata(
-                "google2",
-                "google2",
+                "cloud-vendor2",
+                "cloud-vendor2",
                 date_issued="2026-04-12",
                 document_type="invoice",
-                issuing_party="Google",
+                issuing_party="Cloud Vendor",
                 total_amount=1.99,
             ),
         )
@@ -349,14 +349,14 @@ class ReconciliationEvidenceWorkflowTests(unittest.TestCase):
                 },
             ]
         )
-        employee-one_bank_note = self.export / "BNC_employee-one-salary.pdf"
-        employee-two_bank_note = self.export / "BNC_employee-two-salary.pdf"
+        employee_one_bank_note = self.export / "BNC_employee-one-salary.pdf"
+        employee_two_bank_note = self.export / "BNC_employee-two-salary.pdf"
         salary_slip = self.export / "DIV_salary-slip.pdf"
-        create_pdf(employee-one_bank_note, ["Employee One salary bank note"])
-        create_pdf(employee-two_bank_note, ["Employee Two salary bank note"])
+        create_pdf(employee_one_bank_note, ["Employee One salary bank note"])
+        create_pdf(employee_two_bank_note, ["Employee Two salary bank note"])
         create_pdf(salary_slip, ["Salary slip for Employee One and Employee Two"])
         self.repository.save_document(
-            employee-one_bank_note,
+            employee_one_bank_note,
             self._metadata(
                 "crbank1",
                 "crbank1",
@@ -367,7 +367,7 @@ class ReconciliationEvidenceWorkflowTests(unittest.TestCase):
             ),
         )
         self.repository.save_document(
-            employee-two_bank_note,
+            employee_two_bank_note,
             self._metadata(
                 "tibank1",
                 "tibank1",
@@ -396,8 +396,8 @@ class ReconciliationEvidenceWorkflowTests(unittest.TestCase):
         self.assertEqual(data["summary"]["reconciled"], 2)
         self.assertEqual(data["summary"]["incomplete"], 0)
         files_by_row = {match["row"]: set(match["files"]) for match in data["matches"]}
-        self.assertEqual(files_by_row[9], {employee-one_bank_note.name, salary_slip.name})
-        self.assertEqual(files_by_row[10], {employee-two_bank_note.name, salary_slip.name})
+        self.assertEqual(files_by_row[9], {employee_one_bank_note.name, salary_slip.name})
+        self.assertEqual(files_by_row[10], {employee_two_bank_note.name, salary_slip.name})
 
     def test_evidence_matches_bpi_fee_invoice_line_item(self):
         statement = self._bpi_statement(

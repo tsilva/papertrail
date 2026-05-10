@@ -77,7 +77,7 @@ PDF → render pages at 300 DPI → pyzbar decode → detect QR type → parse �
 - `is_portuguese_invoice_qr(content)` - Detection function
 - `parse_portuguese_invoice_qr(qr_data)` - Parser for PT invoice QR codes
 
-**Multi-QR (sub-documents):** When 2+ Portuguese invoice QR codes are detected in a single PDF (e.g., Shared Toll toll aggregator), each becomes a sub-document with independent metadata stored in `sub_documents`. The parent document gets LLM classification with multi-QR context injected into the system prompt (sub-document count + issuer NIFs), guiding the LLM to classify the aggregator/wrapper document rather than any embedded invoice or payment reference. QR data is not merged into the parent (`qrcode=null`). Each sub-document gets NIF-enriched `issuing_party` during extraction. In reconciliation, sub-documents are expanded as independent candidates for matching.
+**Multi-QR (sub-documents):** When 2+ Portuguese invoice QR codes are detected in a single PDF (e.g., shared-billing provider toll aggregator), each becomes a sub-document with independent metadata stored in `sub_documents`. The parent document gets LLM classification with multi-QR context injected into the system prompt (sub-document count + issuer NIFs), guiding the LLM to classify the aggregator/wrapper document rather than any embedded invoice or payment reference. QR data is not merged into the parent (`qrcode=null`). Each sub-document gets NIF-enriched `issuing_party` during extraction. In reconciliation, sub-documents are expanded as independent candidates for matching.
 
 **Portuguese QR fields extracted:**
 - `issue_date` from F field (YYYYMMDD → YYYY-MM-DD, stored as `date_issued` in sidecar JSON)
@@ -114,7 +114,7 @@ XLSX → openpyxl open → detect format (check row 8 headers) → parse metadat
 
 **Classification output:**
 - `document_type` = `"bank-statement"`, `issuing_party` = `"millennium-bcp"`
-- `document_title` = account number (e.g., `"TEST-ACCOUNT-ALPHA"`)
+- `document_title` = account number (e.g., `"ACCOUNT-ID"`)
 - `date_issued` = `period_start` (first date of statement range)
 - `source_extension` = `".xlsx"` (enables extension-aware file naming)
 - `bank_statement` dict with format-specific data (account, period, transaction count)
@@ -142,8 +142,8 @@ Image (PNG/JPG/...) → Pillow convert to RGB → save as PDF → temp dir → c
 ### Reconciliation Output
 Reconciliation writes a `.reconciliation.json` sidecar alongside each bank statement XLSX (non-destructive — original XLSX is never modified):
 ```
-2026-01-01 - bank-statement - millennium-bcp - TEST-ACCOUNT-ALPHA - a1b2c3d4.xlsx
-2026-01-01 - bank-statement - millennium-bcp - TEST-ACCOUNT-ALPHA - a1b2c3d4.reconciliation.json
+2026-01-01 - bank-statement - millennium-bcp - ACCOUNT-ID - a1b2c3d4.xlsx
+2026-01-01 - bank-statement - millennium-bcp - ACCOUNT-ID - a1b2c3d4.reconciliation.json
 ```
 The `.reconciliation.json` file contains: `source` (XLSX filename), `generated` (ISO timestamp), `summary` (total/reconciled/incomplete/unmatched/unmatched_files/reconciliation_rate), `matches` (array with row, date, description, amount, currency, transaction_category, method, confidence, reasoning, files, errors), `unmatched` (array with row, date, description, amount, currency, transaction_category), `unmatched_files` (array with file, date_issued, document_type, issuing_party, total_amount, currency).
 
@@ -158,7 +158,7 @@ Configurable in `profile.yaml` under `reconciliation.rules`. Rules are evaluated
 - `direction` (str, optional): `"credit"` (amount > 0) or `"debit"` (amount <= 0)
 - `required_types` (dict): Document type patterns → cardinality. Key is `|`-separated type alternatives, value is `N` (exactly N) or `[min, max]` (`null` = unbounded)
 - `companions` (list[str], optional): Rule names to group for sum-based matching. Transactions on the same date are summed and matched against a single document (e.g., bank fee + stamp duty matched against one combined bank note)
-- `shared_types` (dict, optional): Type pattern → issuing party filter. Documents matching these patterns are linked across multiple transactions (e.g., Shared Toll receipts shared across matching transactions)
+- `shared_types` (dict, optional): Type pattern → issuing party filter. Documents matching these patterns are linked across multiple transactions (e.g., shared-billing provider receipts shared across matching transactions)
 - `expected_page_count` (dict, optional): Type pattern → expected count. Flags documents with unexpected page counts as validation warnings
 
 **Config-level fields:**
@@ -259,7 +259,7 @@ The `qrcode` field stores raw QR code data when extracted:
 {
     "qrcode": {
         "qr_type": "portuguese_invoice",
-        "raw_content": "A:ISSUER-TAX-ID*B:TESTCOMPANY*C:PT*D:FT*...",
+        "raw_content": "A:ISSUER-TAX-ID*B:BUYER-TAX-ID*C:PT*D:FT*...",
         "page_number": 0
     }
 }
@@ -271,7 +271,7 @@ The `bank_statement` field stores format-specific data for bank statements:
 {
     "bank_statement": {
         "bank_format": "millennium_bcp",
-        "account_number": "TEST-ACCOUNT-ALPHA",
+        "account_number": "ACCOUNT-ID",
         "currency": "EUR",
         "period_start": "2026-01-01",
         "period_end": "2026-01-31",
@@ -287,7 +287,7 @@ The `hash_text` field stores the text-based hash of a PDF document (first 8 hex 
 
 The `file_size_kb` field stores the companion document file size in kilobytes (rounded integer). Set during extraction for both PDFs and XLSX files.
 
-The `sub_documents` field stores metadata for individual invoices within a multi-invoice PDF (e.g., Shared Toll toll aggregator PDFs with multiple QR codes from different issuers). When 2+ Portuguese invoice QR codes are detected, each is stored as a sub-document with independently NIF-enriched metadata. The parent document gets LLM-classified metadata (aggregator info) while `qrcode` is set to `null`. Each sub-document participates individually in reconciliation matching.
+The `sub_documents` field stores metadata for individual invoices within a multi-invoice PDF (e.g., shared-billing provider toll aggregator PDFs with multiple QR codes from different issuers). When 2+ Portuguese invoice QR codes are detected, each is stored as a sub-document with independently NIF-enriched metadata. The parent document gets LLM-classified metadata (aggregator info) while `qrcode` is set to `null`. Each sub-document participates individually in reconciliation matching.
 ```json
 {
     "sub_documents": [
@@ -297,8 +297,8 @@ The `sub_documents` field stores metadata for individual invoices within a multi
             "total_amount": 18.00,
             "total_amount_currency": "EUR",
             "issuer_tax_number": "SUBDOC-TAX-ID",
-            "issuing_party": "brisa",
-            "issuing_party_raw": "Brisa - Concessão Rodoviária, S.A.",
+            "issuing_party": "example-sub-issuer",
+            "issuing_party_raw": "Example Sub Issuer",
             "document_number": "DOC-NUMBER",
             "atcud": "...",
             "locale": "pt-PT",
@@ -313,7 +313,7 @@ Documents with 0-1 QR codes have `"sub_documents": null`. `SubDocumentMetadata` 
 
 Pattern: `YYYY-MM-DD - document-type - issuing-party - [title] - [amount currency] - hash_file.{ext}`
 Example (PDF): `2025-01-02 - invoice - anthropic - claude api - 120 eur - a1b2c3d4.pdf`
-Example (XLSX): `2026-01-01 - bank-statement - millennium-bcp - TEST-ACCOUNT-ALPHA - a1b2c3d4.xlsx`
+Example (XLSX): `2026-01-01 - bank-statement - millennium-bcp - ACCOUNT-ID - a1b2c3d4.xlsx`
 
 The hash component is `hash_file` (SHA256 of raw bytes, 8 chars). This ensures every distinct file gets a unique filename, even if two files have identical visual content (which would share the same `hash_content`). Generated by `file_name_from_metadata()`. All components lowercase, sanitized.
 
@@ -345,7 +345,7 @@ Each profile is a self-contained folder under `~/.config/papertrail/profiles/`. 
 profile:
   name: "default"
   description: "Default configuration"
-  tax_number: "TESTOWNER"  # Optional: your tax number (NIF)
+  tax_number: null  # Optional: your tax number (NIF)
 
 paths:
   raw: ["/path/to/raw/documents/"]
@@ -374,7 +374,7 @@ Export match rules support `${profile.*}` variable syntax to reference profile-l
 
 ```yaml
 profile:
-  tax_number: "TESTOWNER"
+  tax_number: null
 
 export:
   file_mappings:
@@ -387,14 +387,14 @@ export:
         prefix: "VND_"      # My tax number = I issued it
       - match:
           document_type: "invoice"
-          issuing_party: "utility-provider"
+          issuing_party: "example-utility"
           page_count: ">1"
-        prefix: "EXC_"      # Multi-page Utility Provider invoices
+        prefix: "EXC_"      # Multi-page example utility invoices
       - match:
           document_type: "invoice*"
-          issuing_party: "shared-toll"
+          issuing_party: "example-issuer"
           has_qrcode: false
-        prefix: "EXC_"      # Shared Toll invoice-like summaries without QR
+        prefix: "EXC_"      # shared-billing provider invoice-like summaries without QR
       - match:
           document_type: "invoice"
         prefix: "CMP_"      # Someone else issued it
@@ -465,7 +465,7 @@ make regression-golden
 
 Every code change must pass `make regression-golden` before it is considered complete. This is especially important for large refactors, where behavior can drift even when unit tests still pass. If the golden regression test fails, treat the change as unfinished and either fix the regression or explicitly document why the approved golden baseline needs to change.
 
-`make regression-golden` checks the approved reconciliation groundtruth for export months `2026-01`, `2026-02`, `2026-03`, and `2026-04` using the `puzzle` profile by default. Treat failures as real regressions unless the user explicitly says the golden approvals should be updated. Only run `make regression-seed-golden` when the user explicitly asks to refresh or seed the golden baseline.
+`make regression-golden` checks the approved reconciliation groundtruth for export months `2026-01`, `2026-02`, `2026-03`, and `2026-04`. Set `PROFILE=<name>` to choose a profile; when omitted, the Makefile uses the first local profile directory it finds. Treat failures as real regressions unless the user explicitly says the golden approvals should be updated. Only run `make regression-seed-golden` when the user explicitly asks to refresh or seed the golden baseline.
 
 ## Dependencies
 

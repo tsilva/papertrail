@@ -16,7 +16,7 @@ from papertrail.reconciliation_evidence import (
 
 PROFILE_COUNTERPARTY_ALIASES = {
     "TESTSHAREDTOLL": "shared-toll",
-    "TESTCLOUDVAT": "google",
+    "TESTCLOUDVAT": "cloud-vendor",
     "TESTINSURER": "insurance-provider",
     "Shared Toll": "shared-toll",
 }
@@ -57,9 +57,23 @@ class ReconciliationEvidenceTests(unittest.TestCase):
         )
 
     def test_counterparty_aliases_collapse_bank_drift(self):
-        self.assertEqual(counterparty_id({"issuing_party": "MillenniumBCP"}), "millennium-bcp")
-        self.assertEqual(counterparty_id({"issuing_party": "millenniumbcp"}), "millennium-bcp")
-        self.assertEqual(counterparty_id({"issuing_party_raw": "BANCO BPI S.A."}), "bpi")
+        aliases = {
+            "Bank Alpha": "bank-alpha",
+            "bankalpha": "bank-alpha",
+            "BANK BETA S.A.": "bank-beta",
+        }
+        self.assertEqual(
+            counterparty_id({"issuing_party": "Bank Alpha"}, counterparty_aliases=aliases),
+            "bank-alpha",
+        )
+        self.assertEqual(
+            counterparty_id({"issuing_party": "bankalpha"}, counterparty_aliases=aliases),
+            "bank-alpha",
+        )
+        self.assertEqual(
+            counterparty_id({"issuing_party_raw": "BANK BETA S.A."}, counterparty_aliases=aliases),
+            "bank-beta",
+        )
 
     def test_counterparty_aliases_use_tax_number_when_known(self):
         self.assertEqual(
@@ -74,7 +88,7 @@ class ReconciliationEvidenceTests(unittest.TestCase):
                 {"issuer_tax_number": "TESTCLOUDVAT"},
                 counterparty_aliases=PROFILE_COUNTERPARTY_ALIASES,
             ),
-            "google",
+            "cloud-vendor",
         )
         self.assertEqual(
             counterparty_id(
@@ -83,7 +97,7 @@ class ReconciliationEvidenceTests(unittest.TestCase):
             ),
             "insurance-provider",
         )
-        self.assertEqual(counterparty_id({"issuer_tax_number": "TESTUNKNOWN"}), "tax:PTTESTUNKNOWN")
+        self.assertEqual(counterparty_id({"issuer_tax_number": "TESTUNKNOWN"}), "tax:TESTUNKNOWN")
 
     def test_counterparty_tax_prefix_can_be_disabled(self):
         self.assertEqual(
