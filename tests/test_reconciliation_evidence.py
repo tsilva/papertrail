@@ -14,6 +14,13 @@ from papertrail.reconciliation_evidence import (
     document_type_matches_family,
 )
 
+PROFILE_COUNTERPARTY_ALIASES = {
+    "TESTSHAREDTOLL": "shared-toll",
+    "TESTCLOUDVAT": "google",
+    "TESTINSURER": "insurance-provider",
+    "Shared Toll": "shared-toll",
+}
+
 
 class ReconciliationEvidenceTests(unittest.TestCase):
     def test_maps_april_document_types_to_families(self):
@@ -55,9 +62,27 @@ class ReconciliationEvidenceTests(unittest.TestCase):
         self.assertEqual(counterparty_id({"issuing_party_raw": "BANCO BPI S.A."}), "bpi")
 
     def test_counterparty_aliases_use_tax_number_when_known(self):
-        self.assertEqual(counterparty_id({"issuer_tax_number": "TESTSHAREDTOLL"}), "shared-toll")
-        self.assertEqual(counterparty_id({"issuer_tax_number": "TESTCLOUDVAT"}), "google")
-        self.assertEqual(counterparty_id({"issuer_tax_number": "TESTINSURER"}), "insurance-provider")
+        self.assertEqual(
+            counterparty_id(
+                {"issuer_tax_number": "TESTSHAREDTOLL"},
+                counterparty_aliases=PROFILE_COUNTERPARTY_ALIASES,
+            ),
+            "shared-toll",
+        )
+        self.assertEqual(
+            counterparty_id(
+                {"issuer_tax_number": "TESTCLOUDVAT"},
+                counterparty_aliases=PROFILE_COUNTERPARTY_ALIASES,
+            ),
+            "google",
+        )
+        self.assertEqual(
+            counterparty_id(
+                {"issuer_tax_number": "TESTINSURER"},
+                counterparty_aliases=PROFILE_COUNTERPARTY_ALIASES,
+            ),
+            "insurance-provider",
+        )
         self.assertEqual(counterparty_id({"issuer_tax_number": "TESTUNKNOWN"}), "tax:PTTESTUNKNOWN")
 
     def test_counterparty_tax_prefix_can_be_disabled(self):
@@ -125,7 +150,9 @@ class ReconciliationEvidenceTests(unittest.TestCase):
                 "document_type": "invoice-receipt",
                 "issuing_party": "Shared Toll",
                 "document_title": "Pagamentos de Serviços Shared Toll",
-            }
+            },
+            counterparty_aliases=PROFILE_COUNTERPARTY_ALIASES,
+            shared_period_title_terms={"shared-toll": ["pagamentosdeservicos"]},
         )
         self.assertEqual(evidence.document_family, SUPPLIER_EVIDENCE)
         self.assertEqual(evidence.counterparty_id, "shared-toll")

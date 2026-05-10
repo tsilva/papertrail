@@ -2,9 +2,11 @@ import unittest
 from pathlib import Path
 
 from papertrail.commands.reconcile import (
+    ReconciliationPolicy,
     MatchResult,
     PDFCandidate,
     Transaction,
+    _ACTIVE_RECONCILIATION_POLICY,
     _candidate_sort_name,
     _filename_hash_key,
     _is_prior_reconciled_candidate,
@@ -104,12 +106,21 @@ class ReconcileLinkingTests(unittest.TestCase):
             reasoning="Amount match",
         )
 
-        updated_matches, updated_unmatched, shared_ids = _link_via_verde_period_documents(
-            [match],
-            [],
-            [shared_parent],
-            _reconciliation_rules(),
+        token = _ACTIVE_RECONCILIATION_POLICY.set(
+            ReconciliationPolicy(
+                shared_period_transaction_keywords={"shared-toll": ("SHAREDTOLL",)},
+                shared_period_title_terms={"shared-toll": ("pagamentosdeservicos",)},
+            )
         )
+        try:
+            updated_matches, updated_unmatched, shared_ids = _link_via_verde_period_documents(
+                [match],
+                [],
+                [shared_parent],
+                _reconciliation_rules(),
+            )
+        finally:
+            _ACTIVE_RECONCILIATION_POLICY.reset(token)
 
         self.assertEqual(updated_unmatched, [])
         self.assertEqual(shared_ids, {shared_parent.candidate_id})

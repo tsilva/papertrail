@@ -5,7 +5,57 @@ import openpyxl
 from PIL import Image
 
 from papertrail.config import ProfileSettings
+from papertrail.commands.reconcile import _reconciliation_rules
 from papertrail.runtime import Runtime, runtime_from_profile
+
+
+TEST_COUNTERPARTY_ALIASES = {
+    "TESTSHAREDTOLL": "shared-toll",
+    "ptTESTSHAREDTOLL": "shared-toll",
+    "sharedtoll": "shared-toll",
+    "sharedtollportugal": "shared-toll",
+    "TESTCOMPANY": "example-company",
+    "ptTESTCOMPANY": "example-company",
+    "examplecompany": "example-company",
+    "examplecompanyunipessoallda": "example-company",
+    "examplecompanyunipessoalltda": "example-company",
+    "benefits-provider": "benefits-provider",
+}
+
+_GENERIC_RULES = [rule.model_dump() for rule in _reconciliation_rules()]
+_DEFAULT_SUPPLIER_RULES = [rule for rule in _GENERIC_RULES if rule.get("name") == "supplier-payment"]
+_RULES_BEFORE_DEFAULT_SUPPLIER = [
+    rule for rule in _GENERIC_RULES if rule.get("name") != "supplier-payment"
+]
+
+TEST_RECONCILIATION_RULES = [
+    *_RULES_BEFORE_DEFAULT_SUPPLIER,
+    {
+        "name": "payroll-payment",
+        "match_description": ["EMPLOYEE ONE", "EMPLOYEE TWO"],
+        "required_types": {
+            "bank-anchor": 1,
+            "payroll-evidence": 1,
+        },
+        "shared_types": {"payroll-evidence": None},
+        "shared_filters": {
+            "payroll-evidence": {
+                "document_type": "payroll-salary",
+            },
+        },
+        "expected_page_count": {"bank-anchor": 1},
+    },
+    {
+        "name": "bank-only",
+        "match_description": [
+            "TRF P/ EXAMPLE COMPANY - BPI",
+            "EXAMPLE COMPANY - BPI",
+        ],
+        "required_types": {"bank-anchor": 1},
+        "expected_page_count": {"bank-anchor": 1},
+    },
+    *_DEFAULT_SUPPLIER_RULES,
+]
 
 
 def make_test_runtime(root: Path) -> Runtime:
@@ -49,6 +99,14 @@ def make_test_runtime(root: Path) -> Runtime:
             "profile_dir": root,
         }
     )
+    profile.reconciliation.counterparty_aliases = TEST_COUNTERPARTY_ALIASES
+    profile.reconciliation.shared_period_transaction_keywords = {"shared-toll": ["SHAREDTOLL"]}
+    profile.reconciliation.shared_period_title_terms = {
+        "shared-toll": ["pagamentosdeservicos", "extratorecibo"],
+        "$bank": ["comissoes", "manctapacote", "operacaocartoes", "impostodoselo"],
+    }
+    profile.reconciliation.same_month_shared_rule_names = ["vendor-sharedtoll"]
+    profile.reconciliation.rules = TEST_RECONCILIATION_RULES
 
     return runtime_from_profile(
         profile,

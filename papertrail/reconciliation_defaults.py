@@ -1,7 +1,8 @@
 """Default reconciliation policy values loaded from bundled configuration.
 
-The values preserve historical behavior. Profiles can override them through the
-``reconciliation`` section.
+The bundled values are generic defaults. Profile-specific aliases, shared-period
+rules, and business-specific overrides should live in profile policy files or
+the profile ``reconciliation`` section.
 """
 
 from __future__ import annotations

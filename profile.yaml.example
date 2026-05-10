@@ -248,10 +248,13 @@ export:
     - target_type: "at-ss*"        # Social security payment proof
       attach_type: "bank-note"
 
-# Reconciliation policy. Leave rules empty to use the built-in defaults from
-# papertrail/reconciliation_defaults.py, or set rules here to replace them.
+# Reconciliation policy. Use policy_files for profile-specific aliases, shared
+# period rules, line-item extractor settings, or rule overrides that should not
+# live in the codebase. Leave rules empty to use the built-in generic defaults,
+# or set rules here to replace them.
 reconciliation:
   # Optional YAML files, resolved relative to this profile, merged before inline settings.
+  # Example: ["reconciliation_policy.yaml"]
   policy_files: []
   exclude_prefixes: ["EXC_"]
   include_builtin_rules: true
@@ -293,12 +296,9 @@ reconciliation:
   # counterparty_aliases:
   #   "TESTOWNER": "my-company"
   counterparty_aliases: {}
-  shared_period_transaction_keywords:
-    shared-toll: ["SHAREDTOLL"]
-  shared_period_title_terms:
-    shared-toll: ["pagamentosdeservicos", "extratorecibo"]
-    "$bank": ["comissoes", "manctapacote", "operacaocartoes", "impostodoselo"]
-  same_month_shared_rule_names: ["vendor-sharedtoll"]
+  shared_period_transaction_keywords: {}
+  shared_period_title_terms: {}
+  same_month_shared_rule_names: []
   evidence_counterparty_categories: [supplier-payment, bank-fee]
   evidence_counterparty_required_pattern: invoice
   evidence_counterparty_skip_if_supplier_present_categories: [supplier-payment, bank-fee]

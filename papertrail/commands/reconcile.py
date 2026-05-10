@@ -1819,7 +1819,7 @@ def _same_calendar_month(date_str1: Optional[str], date_str2: Optional[str]) -> 
     return (left.year, left.month) == (right.year, right.month)
 
 
-def _is_via_verde_transaction(txn: Transaction) -> bool:
+def _is_shared_period_transaction(txn: Transaction) -> bool:
     normalized = _normalize_for_match(txn.description).upper()
     return any(
         (normalized_keyword := _normalize_for_match(keyword).upper())
@@ -1829,7 +1829,7 @@ def _is_via_verde_transaction(txn: Transaction) -> bool:
     )
 
 
-def _is_via_verde_shared_period_candidate(candidate: PDFCandidate) -> bool:
+def _is_shared_period_candidate(candidate: PDFCandidate) -> bool:
     return candidate.is_shared_period_document and _is_shared_period_counterparty(candidate)
 
 
@@ -2674,9 +2674,9 @@ def _validate_required_documents(matches: list[MatchResult], rules: list) -> dic
                 and not (
                     error.startswith("missing bank-anchor")
                     and rule.name in policy.shared_period_bank_anchor_error_exempt_rule_names
-                    and _is_via_verde_transaction(match.transaction)
+                    and _is_shared_period_transaction(match.transaction)
                     and any(
-                        _is_via_verde_shared_period_candidate(candidate)
+                        _is_shared_period_candidate(candidate)
                         for candidate in match.pdf_candidates
                     )
                 )
@@ -2725,15 +2725,15 @@ def _validate_supporting_documents_have_bank_pair(
             candidate.pdf_filename.startswith(_reconciliation_policy().bank_export_prefix)
             for candidate in match.pdf_candidates
         )
-        has_via_verde_shared_doc = _is_via_verde_transaction(match.transaction) and any(
-            _is_via_verde_shared_period_candidate(candidate)
+        has_shared_period_doc = _is_shared_period_transaction(match.transaction) and any(
+            _is_shared_period_candidate(candidate)
             for candidate in match.pdf_candidates
         )
         if (
             has_supporting_doc
             and not has_bank_doc
             and not match.line_items
-            and not has_via_verde_shared_doc
+            and not has_shared_period_doc
         ):
             policy = _reconciliation_policy()
             supporting_prefixes = "/".join(
@@ -2872,7 +2872,7 @@ def _link_shared_documents(
     return updated_matches, updated_unmatched, shared_candidate_ids
 
 
-def _link_via_verde_period_documents(
+def _link_shared_period_documents(
     all_matches: list[MatchResult],
     final_unmatched: list[Transaction],
     all_candidates: list[PDFCandidate],
@@ -2890,14 +2890,14 @@ def _link_via_verde_period_documents(
         if (
             rule is None
             or category not in set(_reconciliation_policy().shared_period_link_categories)
-            or not _is_via_verde_transaction(txn)
+            or not _is_shared_period_transaction(txn)
         ):
             continue
 
         txn_date = txn.date_posting or txn.date_value
         best_shared_match: tuple[PDFCandidate, tuple[int, bool, int]] | None = None
         for candidate in all_candidates:
-            if not _is_via_verde_shared_period_candidate(candidate):
+            if not _is_shared_period_candidate(candidate):
                 continue
             if not _same_calendar_month(txn_date, candidate.date_issued):
                 continue
@@ -2943,6 +2943,23 @@ def _link_via_verde_period_documents(
     updated_matches = all_matches + newly_matched
     updated_unmatched = [txn for txn in final_unmatched if txn.row_number in still_unmatched_rows]
     return updated_matches, updated_unmatched, shared_candidate_ids
+
+
+def _is_via_verde_transaction(txn: Transaction) -> bool:
+    return _is_shared_period_transaction(txn)
+
+
+def _is_via_verde_shared_period_candidate(candidate: PDFCandidate) -> bool:
+    return _is_shared_period_candidate(candidate)
+
+
+def _link_via_verde_period_documents(
+    all_matches: list[MatchResult],
+    final_unmatched: list[Transaction],
+    all_candidates: list[PDFCandidate],
+    rules: list,
+) -> tuple[list[MatchResult], list[Transaction], set[str]]:
+    return _link_shared_period_documents(all_matches, final_unmatched, all_candidates, rules)
 
 
 def _link_companion_documents(
@@ -3156,13 +3173,13 @@ def reconcile_single(
         matchable,
         rules,
     )
-    all_matches, final_unmatched, via_verde_shared_candidate_ids = _link_via_verde_period_documents(
+    all_matches, final_unmatched, shared_period_candidate_ids = _link_shared_period_documents(
         all_matches,
         final_unmatched,
         matchable,
         rules,
     )
-    shared_candidate_ids.update(via_verde_shared_candidate_ids)
+    shared_candidate_ids.update(shared_period_candidate_ids)
     paired_supporting_candidate_ids = _link_paired_supporting_documents(
         all_matches,
         matchable,
