@@ -10,11 +10,13 @@ import gradio as gr
 
 from papertrail.hashing import PLAN_FILENAME, scan_directory
 from papertrail.repository import associated_document_files
+
 if __package__:
     from .shared import (
         FULLSCREEN_CSS,
         find_companion,
         get_processed_dir,
+        launch_blocks,
         placeholder_html,
         render_document_preview,
     )
@@ -23,6 +25,7 @@ else:
         FULLSCREEN_CSS,
         find_companion,
         get_processed_dir,
+        launch_blocks,
         placeholder_html,
         render_document_preview,
     )
@@ -33,7 +36,9 @@ _CACHE = {
 }
 
 _CSS = """
-.gradio-container { max-width: 100% !important; padding-left: 4px !important; padding-right: 4px !important; }
+.gradio-container {
+    max-width: 100% !important; padding-left: 4px !important; padding-right: 4px !important;
+}
 .group-container {
     display: flex; flex-wrap: wrap; gap: 16px; justify-content: flex-start;
     padding: 16px 0;
@@ -526,4 +531,4 @@ def build_ui():
     return app
 
 if __name__ == "__main__":
-    build_ui().launch(css=FULLSCREEN_CSS + _CSS)
+    launch_blocks(build_ui(), css=FULLSCREEN_CSS + _CSS)

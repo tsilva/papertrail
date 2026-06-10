@@ -198,7 +198,13 @@ def _settings_map(value, fallback: dict[str, dict[str, object]]) -> dict[str, di
     for name, settings in dict(value).items():
         if not isinstance(settings, dict):
             continue
-        merged[str(name)] = {**merged.get(str(name), {}), **settings}
+        existing = merged.get(str(name), {})
+        combined = {**existing, **settings}
+        for key, overlay_value in settings.items():
+            existing_value = existing.get(key)
+            if isinstance(existing_value, list) and isinstance(overlay_value, list):
+                combined[key] = list(dict.fromkeys([*existing_value, *overlay_value]))
+        merged[str(name)] = combined
     return merged
 
 

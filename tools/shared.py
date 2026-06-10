@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import argparse
 import base64
 import html as html_lib
 import importlib
 import os
+import socket
 import warnings
 from functools import lru_cache
 from pathlib import Path
@@ -233,6 +235,53 @@ def render_document_preview(doc_path: str | Path, page_num: int = 0) -> tuple[st
     return placeholder_html(f"Unsupported format: {path.suffix}"), "Page -/-", 0
 
 
+def _pick_random_port() -> int:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.bind(("127.0.0.1", 0))
+        return int(sock.getsockname()[1])
+
+
+def _parse_port_arg(value: str) -> int:
+    if value == "auto":
+        return _pick_random_port()
+
+    try:
+        port = int(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError("--port must be an integer or 'auto'") from exc
+
+    if port < 1 or port > 65535:
+        raise argparse.ArgumentTypeError("--port must be between 1 and 65535")
+
+    return port
+
+
+def launch_kwargs_from_cli(argv: list[str] | None = None) -> dict:
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--port",
+        type=_parse_port_arg,
+        default=None,
+        help="Server port, or 'auto' to bind a random available port.",
+    )
+    args = parser.parse_args(argv)
+
+    kwargs = {}
+    if args.port is not None:
+        kwargs["server_port"] = args.port
+    return kwargs
+
+
+def launch_blocks(
+    app,
+    *,
+    css: str | None = None,
+    js: str | None = None,
+    argv: list[str] | None = None,
+):
+    return app.launch(css=css, js=js, **launch_kwargs_from_cli(argv))
+
+
 def launch_tool(initial_tab: str) -> None:
     module_name = initial_tab.replace("-", "_")
     module = importlib.import_module(f"tools.{module_name}")
@@ -243,7 +292,7 @@ def launch_tool(initial_tab: str) -> None:
     js = "\n".join(
         part for part in (FULLSCREEN_JS, getattr(module, "_JS", "")) if part
     )
-    module.build_ui().launch(css=css, js=js)
+    launch_blocks(module.build_ui(), css=css, js=js, argv=[])
 
 
 FULLSCREEN_CSS = """

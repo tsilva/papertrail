@@ -31,6 +31,7 @@ class ReconciliationEvidenceTests(unittest.TestCase):
             "invoice": SUPPLIER_EVIDENCE,
             "receipt": SUPPLIER_EVIDENCE,
             "invoice-receipt": SUPPLIER_EVIDENCE,
+            "statement-receipt": SUPPLIER_EVIDENCE,
             "insurance-notice": SUPPLIER_EVIDENCE,
             "tax-irs": TAX_EVIDENCE,
             "payroll-social": PAYROLL_EVIDENCE,
@@ -162,6 +163,21 @@ class ReconciliationEvidenceTests(unittest.TestCase):
         evidence = build_document_evidence(
             {
                 "document_type": "invoice-receipt",
+                "issuing_party": "Shared Toll",
+                "document_title": "Pagamentos de Serviços Shared Toll",
+            },
+            counterparty_aliases=PROFILE_COUNTERPARTY_ALIASES,
+            shared_period_title_terms={"shared-toll": ["pagamentosdeservicos"]},
+        )
+        self.assertEqual(evidence.document_family, SUPPLIER_EVIDENCE)
+        self.assertEqual(evidence.counterparty_id, "shared-toll")
+        self.assertTrue(evidence.is_shared_period_document)
+
+    def test_statement_receipt_can_be_shared_period_supplier_evidence(self):
+        evidence = build_document_evidence(
+            {
+                "document_type": "statement-receipt",
+                "issuer_tax_number": "TESTSHAREDTOLL",
                 "issuing_party": "Shared Toll",
                 "document_title": "Pagamentos de Serviços Shared Toll",
             },

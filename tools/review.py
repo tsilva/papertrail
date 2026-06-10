@@ -31,6 +31,7 @@ if __package__:
         find_companion,
         get_export_dir,
         iter_sidecars,
+        launch_blocks,
         placeholder_html,
         profile_setting_float,
         profile_setting_int,
@@ -45,6 +46,7 @@ else:
         find_companion,
         get_export_dir,
         iter_sidecars,
+        launch_blocks,
         placeholder_html,
         profile_setting_float,
         profile_setting_int,
@@ -171,8 +173,14 @@ _CSS = """
     overflow: visible !important;
     height: 100vh !important; display: flex !important; flex-direction: column !important;
 }
-.gradio-container > .main { flex: 1 !important; min-height: 0 !important; display: flex !important; flex-direction: column !important; }
-.gradio-container > .main > .wrap { flex: 1 !important; min-height: 0 !important; display: flex !important; flex-direction: column !important; }
+.gradio-container > .main {
+    flex: 1 !important; min-height: 0 !important;
+    display: flex !important; flex-direction: column !important;
+}
+.gradio-container > .main > .wrap {
+    flex: 1 !important; min-height: 0 !important;
+    display: flex !important; flex-direction: column !important;
+}
 #content_row {
     flex: 1 !important; min-height: 0 !important;
     overflow: hidden !important;
@@ -1211,4 +1219,8 @@ def build_ui():
     return app
 
 if __name__ == "__main__":
-    build_ui().launch(css="\n".join([FULLSCREEN_CSS, _CSS]), js="\n".join([FULLSCREEN_JS, _JS]))
+    launch_blocks(
+        build_ui(),
+        css="\n".join([FULLSCREEN_CSS, _CSS]),
+        js="\n".join([FULLSCREEN_JS, _JS]),
+    )

@@ -29,7 +29,15 @@ document_families:
     types: [bank-note, bank-transfer, bank-card-transaction]
   supplier_evidence:
     aliases: [supplier-evidence, supplier_evidence]
-    types: [invoice, receipt, invoice-receipt, invoice-credit, invoice-debit, insurance-notice, bank-fees]
+    types:
+      - invoice
+      - receipt
+      - invoice-receipt
+      - invoice-credit
+      - invoice-debit
+      - statement-receipt
+      - insurance-notice
+      - bank-fees
     prefixes: [invoice-, receipt-]
     ignore_when_zero_amount: true
   tax_evidence:

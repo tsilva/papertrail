@@ -3,7 +3,7 @@
 import gradio as gr
 
 from tools import browse, dedupe, review
-from tools.shared import FULLSCREEN_CSS, FULLSCREEN_JS
+from tools.shared import FULLSCREEN_CSS, FULLSCREEN_JS, launch_blocks
 
 _CSS = "\n".join(
     [
@@ -38,4 +38,4 @@ def build_ui(initial_tab: str = "browse"):
     return app
 
 if __name__ == "__main__":
-    build_ui().launch(css=_CSS, js=_JS)
+    launch_blocks(build_ui(), css=_CSS, js=_JS)

@@ -238,6 +238,9 @@ class RuleEngineTests(unittest.TestCase):
             profile.reconciliation.document_families["bank_anchor"]["types"],
             ["custom-bank-doc"],
         )
+        policy = _policy_from_profile(profile)
+        self.assertIn("custom-bank-doc", policy.document_families["bank_anchor"]["types"])
+        self.assertIn("bank-note", policy.document_families["bank_anchor"]["types"])
 
 
 if __name__ == "__main__":
