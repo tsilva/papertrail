@@ -21,7 +21,7 @@ dependencies = [
     "google-api-python-client",
     "google-auth-httplib2",
     "google-auth-oauthlib",
-    "gradio>=5.0.0",
+    "gradio>=6.15.1",
     "orjson>=3.9.0",
     "mbox-extractor",
     "pyzbar>=0.1.9",
