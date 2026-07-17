@@ -59,6 +59,7 @@ class BankTransactionRecord(TypedDict):
 
 class BankStatementParser(Protocol):
     FORMAT: BankFormat
+    DEFAULT_CONFIG: Mapping[str, object]
 
     def can_parse(self, ws, config: Mapping[str, object] | None = None) -> bool: ...
     def parse(

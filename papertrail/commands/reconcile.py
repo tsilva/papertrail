@@ -12,7 +12,9 @@ from typing import Optional
 
 import fitz
 
-from papertrail.bank_statement.extractor import load_transactions as load_bank_statement_transactions
+from papertrail.bank_statement.extractor import (
+    load_transactions as load_bank_statement_transactions,
+)
 from papertrail.config import ReconciliationRule, ReconciliationSettings
 from papertrail.document_types import normalize_document_type
 from papertrail.llm import _extract_json_from_response
@@ -36,10 +38,6 @@ _PERIOD_TOKEN_RE = re.compile(
 )
 _DATE_DMY_RE = re.compile(r"\b(\d{2})[/-](\d{2})[/-](20\d{2})\b")
 _DATE_DM_RE = re.compile(r"\b(\d{2})[/-](\d{2})\b")
-
-
-ReconciliationPolicy = ReconciliationSettings
-
 
 _ACTIVE_RECONCILIATION_POLICY: ContextVar[ReconciliationSettings] = ContextVar(
     "papertrail_reconciliation_policy",
@@ -239,7 +237,7 @@ def _build_candidate(
     is_sub_document: bool = False,
     exclude_from_matching: bool = False,
     line_items: list[CandidateLineItem] | None = None,
-    policy: ReconciliationPolicy | None = None,
+    policy: ReconciliationSettings | None = None,
 ) -> PDFCandidate:
     policy = policy or _reconciliation_policy()
     evidence = build_document_evidence(
@@ -2693,23 +2691,6 @@ def _link_shared_period_documents(
     updated_matches = all_matches + newly_matched
     updated_unmatched = [txn for txn in final_unmatched if txn.row_number in still_unmatched_rows]
     return updated_matches, updated_unmatched, shared_candidate_ids
-
-
-def _is_via_verde_transaction(txn: Transaction) -> bool:
-    return _is_shared_period_transaction(txn)
-
-
-def _is_via_verde_shared_period_candidate(candidate: PDFCandidate) -> bool:
-    return _is_shared_period_candidate(candidate)
-
-
-def _link_via_verde_period_documents(
-    all_matches: list[MatchResult],
-    final_unmatched: list[Transaction],
-    all_candidates: list[PDFCandidate],
-    rules: list,
-) -> tuple[list[MatchResult], list[Transaction], set[str]]:
-    return _link_shared_period_documents(all_matches, final_unmatched, all_candidates, rules)
 
 
 def _link_companion_documents(

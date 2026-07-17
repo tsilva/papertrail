@@ -3,8 +3,7 @@ import unittest
 from pathlib import Path
 
 from papertrail.models import DocumentMetadata
-from papertrail.repository import DocumentRepository
-
+from papertrail.repository import DocumentRepository, document_sidecar_paths
 from tests.support import make_test_runtime
 
 
@@ -53,6 +52,20 @@ class DocumentRepositoryTests(unittest.TestCase):
         self.assertIn("deadbeef", file_idx)
         self.assertIn("vendor", issuers)
         self.assertEqual(text_idx, {})
+
+    def test_document_sidecar_paths_excludes_repository_internal_state(self):
+        visible = self.processed / "visible.json"
+        visible.write_text("{}")
+        (self.processed / "statement.reconciliation.json").write_text("{}")
+        (self.processed / "statement.reconciliation.groundtruth.json").write_text("{}")
+        logs = self.processed / "logs"
+        logs.mkdir()
+        (logs / "failure.json").write_text("{}")
+        dupes = self.processed / "_dupes"
+        dupes.mkdir()
+        (dupes / "duplicate.json").write_text("{}")
+
+        self.assertEqual(document_sidecar_paths(self.processed), [visible])
 
     def test_unique_dates_returns_sorted_months(self):
         jan_doc = self.processed / "jan.pdf"

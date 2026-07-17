@@ -7,13 +7,13 @@ UV_CACHE_DIR ?= /private/tmp/uv-cache
 regression-golden:
 	@set -e; for month in $(GOLDEN_MONTHS); do \
 		echo "==> Regression $$month"; \
-		UV_CACHE_DIR=$(UV_CACHE_DIR) uv run python main.py regression --profile $(PROFILE) --export-date $$month; \
+		UV_CACHE_DIR=$(UV_CACHE_DIR) uv run --frozen papertrail regression --profile $(PROFILE) --export-date $$month; \
 	done
 
 regression-seed-golden:
 	@set -e; for month in $(GOLDEN_MONTHS); do \
 		echo "==> Seeding regression $$month"; \
-		UV_CACHE_DIR=$(UV_CACHE_DIR) uv run python main.py regression --profile $(PROFILE) --export-date $$month --seed-missing-approvals; \
+		UV_CACHE_DIR=$(UV_CACHE_DIR) uv run --frozen papertrail regression --profile $(PROFILE) --export-date $$month --seed-missing-approvals; \
 	done
 
 release-%:

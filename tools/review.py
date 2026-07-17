@@ -13,7 +13,6 @@ from papertrail.reconciliation_groundtruth import (
     approval_map,
     document_sets_match,
     groundtruth_path_for_document,
-    is_reconciliation_sidecar,
     load_groundtruth,
     remove_approval,
     remove_unmatched_file_approval,
@@ -352,8 +351,8 @@ _LABELS = {
     "unclassified": "Unclassified",
 }
 
-def _get_export_base_dir():
-    export_dir = get_export_dir()
+def _get_export_base_dir(export_path: str | Path | None = None):
+    export_dir = export_path or get_export_dir()
     if not export_dir:
         return None
     path = Path(export_dir)
@@ -368,6 +367,19 @@ def _list_export_folders(base_dir):
         if d.is_dir() and re.match(r"^\d{4}-\d{2}$", d.name):
             folders.append(d.name)
     return sorted(folders, reverse=True)
+
+
+def _export_folder_options(export_path: str | Path | None = None):
+    """Return the dropdown base, choices, and default for a base or folder path."""
+    export_dir = _get_export_base_dir(export_path)
+    if export_dir is None:
+        return None, [], None
+
+    folder_choices = _list_export_folders(export_dir)
+    if folder_choices:
+        return export_dir, folder_choices, folder_choices[0]
+
+    return export_dir.parent, [export_dir.name], export_dir.name
 
 
 def _resolve_export_folder(folder_name, base_dir) -> Path | None:
@@ -429,8 +441,8 @@ def _collect_referenced_files(bank_statements):
     return referenced
 
 
-def _build_cross_folder_index(folder, file_index, referenced_files):
-    export_base = _get_export_base_dir()
+def _build_cross_folder_index(folder, file_index, referenced_files, export_base=None):
+    export_base = _get_export_base_dir(export_base)
     if not export_base or export_base == folder or not referenced_files:
         return {}
 
@@ -444,8 +456,6 @@ def _build_cross_folder_index(folder, file_index, referenced_files):
     cross_file_index = {}
     for json_path, metadata in iter_sidecars(export_base):
         if not isinstance(metadata, dict):
-            continue
-        if is_reconciliation_sidecar(json_path):
             continue
 
         doc_path = find_companion(json_path, metadata)
@@ -531,7 +541,7 @@ def _find_reconciliation_row(bank_statement, row_number):
     return None
 
 
-def load_export_folder(folder_path):
+def load_export_folder(folder_path, export_base=None):
     folder = Path(folder_path.strip().strip("'\""))
     if not folder.is_dir():
         return {}, f"**Error:** `{folder_path}` is not a valid directory."
@@ -540,8 +550,6 @@ def load_export_folder(folder_path):
 
     for json_path, metadata in iter_sidecars(folder):
         if not isinstance(metadata, dict):
-            continue
-        if is_reconciliation_sidecar(json_path):
             continue
         doc_path = find_companion(json_path, metadata)
         entry = {
@@ -583,7 +591,12 @@ def load_export_folder(folder_path):
                 bank_files.update(f for f in m.get("files", []) if f)
 
     referenced_files = _collect_referenced_files(bank_statements)
-    cross_file_index = _build_cross_folder_index(folder, file_index, referenced_files)
+    cross_file_index = _build_cross_folder_index(
+        folder,
+        file_index,
+        referenced_files,
+        export_base,
+    )
 
     unmatched_files_map: dict[str, dict] = {}
     for bs in bank_statements:
@@ -1001,10 +1014,8 @@ def _do_preview(filename, page):
     preview_html, label, page_num = render_document_preview(doc_path, page)
     return preview_html, json_str, label, page_num
 
-def build_ui():
-    export_base = _get_export_base_dir()
-    folder_choices = _list_export_folders(export_base)
-    default_folder = folder_choices[0] if folder_choices else None
+def build_ui(export_path: str | Path | None = None):
+    export_base, folder_choices, default_folder = _export_folder_options(export_path)
 
     with gr.Blocks(title="Papertrail Review") as app:
         export_base_state = gr.State(str(export_base) if export_base else "")
@@ -1059,7 +1070,7 @@ def build_ui():
             if folder is None:
                 _CACHE["data"] = {}
                 return empty
-            data, status = load_export_folder(str(folder))
+            data, status = load_export_folder(str(folder), base_dir)
             if not data:
                 _CACHE["data"] = {}
                 return (status, empty[1], empty[2])
@@ -1122,7 +1133,10 @@ def build_ui():
 
             data = _CACHE.get("data") or {}
             if not data and folder_name and base_dir:
-                data, _status = load_export_folder(str(Path(base_dir) / folder_name))
+                data, _status = load_export_folder(
+                    str(Path(base_dir) / folder_name),
+                    base_dir,
+                )
 
             statement_file = payload.get("statement_file")
             bank_statement = _find_bank_statement(data, statement_file)
@@ -1173,7 +1187,7 @@ def build_ui():
             folder_path = data.get("folder_path")
             if not folder_path and folder_name and base_dir:
                 folder_path = str(Path(base_dir) / folder_name)
-            data, status = load_export_folder(folder_path)
+            data, status = load_export_folder(folder_path, base_dir)
             _CACHE["data"] = data
             bank_content = render_all_banks_html(
                 data.get("bank_statements", []),
@@ -1214,9 +1228,19 @@ def build_ui():
 
     return app
 
-if __name__ == "__main__":
-    launch_blocks(
-        build_ui(),
+
+def launch(
+    *,
+    export_path: str | Path | None = None,
+    argv: list[str] | None = None,
+):
+    """Launch the review UI for an explicit export path or active profile."""
+    return launch_blocks(
+        build_ui(export_path),
         css="\n".join([FULLSCREEN_CSS, _CSS]),
         js="\n".join([FULLSCREEN_JS, _JS]),
+        argv=argv,
     )
+
+if __name__ == "__main__":
+    launch()

@@ -6,10 +6,9 @@ import json
 import re
 import unicodedata
 from datetime import datetime
-from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
+from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any
-
 
 GROUNDTRUTH_SUFFIX = ".reconciliation.groundtruth.json"
 RECONCILIATION_SUFFIX = ".reconciliation.json"
@@ -138,6 +137,17 @@ def unmatched_file_approvals(groundtruth: dict | None) -> list[dict]:
     return list(groundtruth.get("unmatched_file_approvals", []))
 
 
+def document_hash_identity_matches(current: dict, approved: dict) -> bool:
+    """Return whether two document identities share a persisted hash."""
+    return bool(
+        (approved.get("hash_file") and current.get("hash_file") == approved.get("hash_file"))
+        or (
+            approved.get("hash_content")
+            and current.get("hash_content") == approved.get("hash_content")
+        )
+    )
+
+
 def _unmatched_file_sort_key(item: dict) -> tuple[str, str, str]:
     document = item.get("document", {})
     return (
@@ -261,16 +271,8 @@ def remove_unmatched_file_approval(groundtruth_path: Path, *, document: dict) ->
 
 def document_matches_approval(current: dict, approved: dict, *, strict_hash: bool = False) -> bool:
     if strict_hash and (approved.get("hash_file") or approved.get("hash_content")):
-        return bool(
-            (approved.get("hash_file") and current.get("hash_file") == approved.get("hash_file"))
-            or (
-                approved.get("hash_content")
-                and current.get("hash_content") == approved.get("hash_content")
-            )
-        )
-    if approved.get("hash_file") and current.get("hash_file") == approved.get("hash_file"):
-        return True
-    if approved.get("hash_content") and current.get("hash_content") == approved.get("hash_content"):
+        return document_hash_identity_matches(current, approved)
+    if document_hash_identity_matches(current, approved):
         return True
     return bool(approved.get("filename") and current.get("filename") == approved.get("filename"))
 

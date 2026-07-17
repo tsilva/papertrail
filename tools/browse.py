@@ -6,8 +6,6 @@ from pathlib import Path
 
 import gradio as gr
 
-from papertrail.reconciliation_groundtruth import is_reconciliation_sidecar
-
 if __package__:
     from .shared import (
         FULLSCREEN_CSS,
@@ -157,9 +155,6 @@ def _load_entries(processed_dir):
 
     entries = []
     for json_path, metadata in iter_sidecars(root):
-        if is_reconciliation_sidecar(json_path):
-            continue
-
         search_parts = [
             json_path.stem,
             metadata.get("document_type", ""),

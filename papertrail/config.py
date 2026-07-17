@@ -259,46 +259,7 @@ class DependenciesSettings(SettingsModel):
 
 
 class BankStatementsSettings(SettingsModel):
-    formats: dict[str, dict[str, object]] = Field(
-        default_factory=lambda: {
-            "millennium_bcp": {
-                "header_row": 8,
-                "data_start_row": 9,
-                "scan_columns": 7,
-                "expected_headers": ["data lancamento", "descricao", "montante"],
-                "date_formats": ["%d/%m/%Y", "%d-%m-%Y"],
-                "account_cell": [2, 3],
-                "period_start_cell": [3, 3],
-                "period_end_cell": [4, 3],
-                "account_currency_separator": " - ",
-                "default_currency": "EUR",
-                "issuer_party": "MillenniumBCP",
-                "issuer_party_raw": "Millennium BCP",
-                "max_columns": 7,
-                "description_column": 3,
-                "amount_column": 4,
-                "currency_column": 5,
-                "notes_column": 6,
-                "treated_column": 7,
-                "untreated_values": ["nao", "não", ""],
-            },
-            "bpi": {
-                "header_row": 18,
-                "data_start_row": 19,
-                "scan_columns": 7,
-                "expected_headers": ["data mov.", "descricao do movimento", "valor em eur"],
-                "date_formats": ["%d-%m-%Y", "%d/%m/%Y"],
-                "account_cell": [7, 3],
-                "account_currency_pattern": r"([\d\-.]+)\s*\((\w+)\)",
-                "default_currency": "EUR",
-                "issuer_party": "BPI",
-                "issuer_party_raw": "BPI",
-                "max_columns": 4,
-                "description_column": 3,
-                "amount_column": 4,
-            },
-        }
-    )
+    formats: dict[str, dict[str, object]] = Field(default_factory=dict)
 
 
 class DocumentTypeOverride(SettingsModel):
@@ -367,47 +328,42 @@ class ReconciliationSettings(SettingsModel):
     def _merge_bundled_policy(cls, value: object) -> dict[str, object]:
         overlay = dict(value) if isinstance(value, dict) else {}
         base = _BUNDLED_RECONCILIATION_POLICY
-        if overlay.get("include_builtin_line_item_extractors") is False:
-            base = {**base, "line_item_extractors": {}}
+        if overlay.get("include_builtin_rules") is False:
+            base = {**base, "rules": []}
         return _merge_reconciliation_policy_data(base, overlay)
 
     policy_files: list[str] = Field(default_factory=list)
     exclude_prefixes: list[str] = Field(default_factory=list)
-    rules: list[ReconciliationRule] = Field(default_factory=list)
     include_builtin_rules: bool = True
-    amount_tolerance: float = 0.01
-    date_window_days: int = 30
-    tax_number_default_country_prefix: str = "PT"
-    bank_generated_doc_types: list[str] = Field(default_factory=list)
-    statement_bank_scoped_doc_types: list[str] = Field(default_factory=list)
-    statement_bank_issuer_aliases: dict[str, str] = Field(default_factory=dict)
-    bank_export_prefix: str = "BNC_"
-    supporting_export_prefixes: list[str] = Field(default_factory=list)
-    supporting_doc_type_patterns: list[str] = Field(default_factory=list)
-    document_families: dict[str, dict[str, object]] = Field(default_factory=dict)
-    bank_counterparties: list[str] = Field(default_factory=list)
-    counterparty_aliases: dict[str, str] = Field(default_factory=dict)
-    shared_period_transaction_keywords: dict[str, list[str]] = Field(default_factory=dict)
-    shared_period_title_terms: dict[str, list[str]] = Field(default_factory=dict)
-    same_month_shared_rule_names: list[str] = Field(default_factory=list)
-    strict_statement_banks: list[str] = Field(default_factory=list)
-    supporting_pair_exempt_statement_banks: list[str] = Field(default_factory=list)
-    shared_period_link_categories: list[str] = Field(default_factory=list)
-    shared_period_supplier_evidence_error_exempt_rule_names: list[str] = Field(
-        default_factory=list
-    )
-    shared_period_bank_anchor_error_exempt_rule_names: list[str] = Field(default_factory=list)
-    evidence_counterparty_categories: list[str] = Field(default_factory=list)
-    evidence_counterparty_required_pattern: str = "invoice"
-    evidence_counterparty_skip_if_supplier_present_categories: list[str] = Field(
-        default_factory=list
-    )
-    evidence_counterparty_amount_optional_categories: list[str] = Field(default_factory=list)
-    default_currency: str = "EUR"
-    llm_default_confidence: float = 0.5
-    line_item_category_aliases: dict[str, dict[str, object]] = Field(default_factory=dict)
-    include_builtin_line_item_extractors: bool = True
-    line_item_extractors: dict[str, dict[str, object]] = Field(default_factory=dict)
+    rules: list[ReconciliationRule]
+    amount_tolerance: float
+    date_window_days: int
+    tax_number_default_country_prefix: str
+    bank_generated_doc_types: list[str]
+    statement_bank_scoped_doc_types: list[str]
+    statement_bank_issuer_aliases: dict[str, str]
+    bank_export_prefix: str
+    supporting_export_prefixes: list[str]
+    supporting_doc_type_patterns: list[str]
+    document_families: dict[str, dict[str, object]]
+    bank_counterparties: list[str]
+    counterparty_aliases: dict[str, str]
+    shared_period_transaction_keywords: dict[str, list[str]]
+    shared_period_title_terms: dict[str, list[str]]
+    same_month_shared_rule_names: list[str]
+    strict_statement_banks: list[str]
+    supporting_pair_exempt_statement_banks: list[str]
+    shared_period_link_categories: list[str]
+    shared_period_supplier_evidence_error_exempt_rule_names: list[str]
+    shared_period_bank_anchor_error_exempt_rule_names: list[str]
+    evidence_counterparty_categories: list[str]
+    evidence_counterparty_required_pattern: str
+    evidence_counterparty_skip_if_supplier_present_categories: list[str]
+    evidence_counterparty_amount_optional_categories: list[str]
+    default_currency: str
+    llm_default_confidence: float
+    line_item_category_aliases: dict[str, dict[str, object]]
+    line_item_extractors: dict[str, dict[str, object]]
 
 
 class ExportRule(SettingsModel):
@@ -458,10 +414,6 @@ class ProfileSettings(SettingsModel):
     export: ExportSettings = Field(default_factory=ExportSettings)
     profile_path: Path | None = Field(default=None, exclude=True)
     profile_dir: Path | None = Field(default=None, exclude=True)
-
-
-Profile = ProfileSettings
-
 
 def _resolve_path(path_str: str | None, profile_path: Path | None) -> str | None:
     if not path_str:
@@ -640,58 +592,42 @@ def get_cache_dir() -> Path:
     return cache_dir
 
 
-class ProfileLoader:
-    """Profile discovery and loading."""
-
-    @property
-    def profiles_dir(self) -> Path:
-        return get_profiles_dir()
-
-    def list_available_profiles(self) -> list[str]:
-        profiles_dir = self.profiles_dir
-        if not profiles_dir.exists():
-            return []
-        return sorted(
-            directory.name
-            for directory in profiles_dir.iterdir()
-            if directory.is_dir() and (directory / "profile.yaml").exists()
-        )
-
-    def load_profile(self, name: str) -> ProfileSettings:
-        if yaml is None:
-            raise ConfigError("PyYAML is not installed.")
-
-        profile_path = self.profiles_dir / name / "profile.yaml"
-        if not profile_path.exists():
-            available = self.list_available_profiles()
-            raise ProfileNotFoundError(
-                f"Profile '{name}' not found at {profile_path}. "
-                f"Available: {', '.join(available) or 'none'}"
-            )
-
-        try:
-            with open(profile_path, "r", encoding="utf-8") as handle:
-                data = yaml.safe_load(handle)
-        except yaml.YAMLError as exc:
-            raise ProfileParseError(f"Failed to parse profile '{name}': {exc}") from exc
-
-        if not isinstance(data, dict):
-            raise ProfileParseError(f"Profile '{name}' must be a YAML mapping")
-        if "profile" not in data or not isinstance(data.get("profile"), dict):
-            raise ConfigError("Missing required field: profile")
-        if "name" not in data["profile"]:
-            raise ConfigError("Missing required field: profile.name")
-
-        normalized = _normalize_profile_data(data, profile_path)
-        return ProfileSettings.model_validate(normalized)
-
-
 def list_available_profiles() -> list[str]:
-    return ProfileLoader().list_available_profiles()
+    profiles_dir = get_profiles_dir()
+    return sorted(
+        directory.name
+        for directory in profiles_dir.iterdir()
+        if directory.is_dir() and (directory / "profile.yaml").exists()
+    )
 
 
 def load_profile(name: str) -> ProfileSettings:
-    return ProfileLoader().load_profile(name)
+    if yaml is None:
+        raise ConfigError("PyYAML is not installed.")
+
+    profile_path = get_profiles_dir() / name / "profile.yaml"
+    if not profile_path.exists():
+        available = list_available_profiles()
+        raise ProfileNotFoundError(
+            f"Profile '{name}' not found at {profile_path}. "
+            f"Available: {', '.join(available) or 'none'}"
+        )
+
+    try:
+        with open(profile_path, "r", encoding="utf-8") as handle:
+            data = yaml.safe_load(handle)
+    except yaml.YAMLError as exc:
+        raise ProfileParseError(f"Failed to parse profile '{name}': {exc}") from exc
+
+    if not isinstance(data, dict):
+        raise ProfileParseError(f"Profile '{name}' must be a YAML mapping")
+    if "profile" not in data or not isinstance(data.get("profile"), dict):
+        raise ConfigError("Missing required field: profile")
+    if "name" not in data["profile"]:
+        raise ConfigError("Missing required field: profile.name")
+
+    normalized = _normalize_profile_data(data, profile_path)
+    return ProfileSettings.model_validate(normalized)
 
 
 def get_passwords_from_profile(profile: ProfileSettings) -> tuple[list[str], str | None]:
@@ -709,10 +645,9 @@ def get_passwords_from_profile(profile: ProfileSettings) -> tuple[list[str], str
 def get_gmail_config_paths(profile: ProfileSettings | None = None) -> dict[str, Path]:
     credentials_dir = get_config_root() / "credentials"
     credentials_dir.mkdir(parents=True, exist_ok=True)
-    paths = {
+    paths: dict[str, Path] = {
         "credentials": credentials_dir / "gmail_credentials.json",
         "token": credentials_dir / "gmail_token.json",
-        "settings": credentials_dir / "gmail_settings.json",
     }
     if profile and profile.gmail.enabled:
         if profile.gmail.credentials_file:

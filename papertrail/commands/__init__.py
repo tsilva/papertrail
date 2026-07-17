@@ -6,7 +6,6 @@ import fcntl
 import hashlib
 import io
 import json
-import os
 import re
 import shutil
 import sys
@@ -21,7 +20,12 @@ import fitz
 import pandas as pd
 
 from papertrail.archive_extract import extract_archives
-from papertrail.config import get_gmail_config_paths, get_passwords_from_profile
+from papertrail.config import (
+    ExportSettings,
+    NamingSettings,
+    get_gmail_config_paths,
+    get_passwords_from_profile,
+)
 from papertrail.document_types import normalize_document_type
 from papertrail.engine import DocumentEngine
 from papertrail.filename_audit import collect_long_filenames, format_long_filename_warning
@@ -36,7 +40,10 @@ from papertrail.mbox import extract_mbox_attachments
 from papertrail.models import DocumentMetadata, clean_enum_string
 from papertrail.naming import sanitize_filename_component, trim_filename_component
 from papertrail.pdf_merge import merge_all_pdfs
-from papertrail.reconciliation_groundtruth import GROUNDTRUTH_SUFFIX
+from papertrail.reconciliation_groundtruth import (
+    GROUNDTRUTH_SUFFIX,
+    document_hash_identity_matches,
+)
 from papertrail.repository import DocumentRepository
 from papertrail.rules import RuleEngine
 from papertrail.runtime import Runtime
@@ -51,8 +58,6 @@ from .reconcile import (
 logger = get_logger("commands")
 _PDFPRESS_COMPRESSORS = {}
 _EXPORT_FILENAME_OMITTED_FIELDS = {"document_title"}
-_DEFAULT_PDF_EXPORT_FILENAME_MAX_CHARS = 60
-_DEFAULT_FILENAME_COMPONENT_MAX_CHARS = 80
 
 
 @contextmanager
@@ -252,19 +257,13 @@ def _groundtruth_documents(snapshots: list[dict]) -> list[dict]:
     return documents
 
 
-def _document_identity_matches(metadata: dict, identity: dict) -> bool:
-    return bool(
-        (identity.get("hash_file") and metadata.get("hash_file") == identity.get("hash_file"))
-        or (
-            identity.get("hash_content")
-            and metadata.get("hash_content") == identity.get("hash_content")
-        )
-    )
-
-
-def _export_contains_document(repository: DocumentRepository, export_date_dir: Path, identity: dict) -> bool:
+def _export_contains_document(
+    repository: DocumentRepository,
+    export_date_dir: Path,
+    identity: dict,
+) -> bool:
     return any(
-        _document_identity_matches(data, identity)
+        document_hash_identity_matches(data, identity)
         for _, data in repository.iter_sidecars(export_date_dir)
     )
 
@@ -273,31 +272,34 @@ def _find_processed_document_by_identity(
     repository: DocumentRepository,
     processed_path: Path,
     identity: dict,
-) -> tuple[Path, Path, dict] | None:
+) -> tuple[Path, dict] | None:
     for json_path, data in repository.iter_sidecars(processed_path):
-        if not _document_identity_matches(data, identity):
+        if not document_hash_identity_matches(data, identity):
             continue
         doc_path = repository.find_companion(json_path, data)
         if doc_path is not None:
-            return json_path, doc_path, data
+            return doc_path, data
     return None
+
+
+def _profile_context(runtime: Runtime) -> dict | None:
+    tax_number = runtime.profile.profile.tax_number
+    return {"tax_number": tax_number} if tax_number else None
 
 
 def _export_destination_paths(
     doc_path: Path,
-    json_path: Path,
     export_metadata_dict: dict,
     dest_folder: Path,
     *,
-    export_config,
+    export_config: ExportSettings,
     profile_context: Optional[dict],
-    naming_settings=None,
+    naming_settings: NamingSettings,
 ) -> tuple[Path, Path]:
-    file_mappings = export_config.file_mappings if export_config is not None else None
-    use_prefixes = file_mappings is not None and file_mappings.enabled
+    file_mappings = export_config.file_mappings
     engine = RuleEngine(profile_context=profile_context)
 
-    if use_prefixes:
+    if file_mappings.enabled:
         prefix = _sanitize_export_prefix(
             engine.evaluate_export_prefix(export_metadata_dict, file_mappings=file_mappings)
         )
@@ -308,18 +310,18 @@ def _export_destination_paths(
                 list(file_mappings.filename_fields),
                 file_hash,
                 profile_context=profile_context,
-                component_max_chars=_naming_component_max_chars(naming_settings),
+                component_max_chars=naming_settings.component_max_chars,
             )
         else:
             base_name = _sanitize_export_filename(doc_path.name)
         dest_name = _fit_pdf_export_filename(
             f"{prefix}{base_name}",
-            max_length=_naming_pdf_export_max_chars(naming_settings),
+            max_length=naming_settings.pdf_export_max_chars,
         )
     else:
         dest_name = _fit_pdf_export_filename(
             _sanitize_export_filename(doc_path.name),
-            max_length=_naming_pdf_export_max_chars(naming_settings),
+            max_length=naming_settings.pdf_export_max_chars,
         )
 
     dest_doc = dest_folder / dest_name
@@ -329,14 +331,13 @@ def _export_destination_paths(
 def _copy_document_to_export(
     repository: DocumentRepository,
     doc_path: Path,
-    json_path: Path,
     metadata_dict: dict,
     dest_folder: Path,
     *,
-    export_config,
+    export_config: ExportSettings,
     profile_context: Optional[dict],
     document_type_overrides=None,
-    naming_settings=None,
+    naming_settings: NamingSettings,
     max_file_size_mb: float | None,
 ) -> Path:
     export_metadata_dict = _metadata_for_export(
@@ -346,7 +347,6 @@ def _copy_document_to_export(
     )
     dest_doc, dest_json = _export_destination_paths(
         doc_path,
-        json_path,
         export_metadata_dict,
         dest_folder,
         export_config=export_config,
@@ -356,7 +356,7 @@ def _copy_document_to_export(
     _check_file_size(doc_path, max_file_size_mb)
     shutil.copy2(doc_path, dest_doc)
     if dest_doc.suffix.lower() == ".pdf":
-        _compress_pdf_export_maybe_configured(dest_doc, export_config)
+        _compress_pdf_export(dest_doc, export_config=export_config)
     metadata_copy = dict(export_metadata_dict)
     metadata_copy["source_filename"] = doc_path.name
     repository.save_json(dest_json, metadata_copy)
@@ -364,17 +364,13 @@ def _copy_document_to_export(
 
 
 def _restore_groundtruth_documents(
+    runtime: Runtime,
     repository: DocumentRepository,
     processed_path: Path,
     export_date_dir: Path,
     snapshots: list[dict],
-    *,
-    export_config,
-    profile_context: Optional[dict],
-    document_type_overrides=None,
-    naming_settings=None,
 ) -> int:
-    max_file_size_mb = export_config.max_file_size_mb if export_config is not None else None
+    export_config = runtime.profile.export
     restored = 0
     for identity in _groundtruth_documents(snapshots):
         if not identity or _export_contains_document(repository, export_date_dir, identity):
@@ -383,35 +379,32 @@ def _restore_groundtruth_documents(
         if found is None:
             logger.warning(f"Could not restore approved export document {identity}")
             continue
-        json_path, doc_path, metadata = found
+        doc_path, metadata = found
         _copy_document_to_export(
             repository,
             doc_path,
-            json_path,
             metadata,
             export_date_dir,
             export_config=export_config,
-            profile_context=profile_context,
-            document_type_overrides=document_type_overrides,
-            naming_settings=naming_settings,
-            max_file_size_mb=max_file_size_mb,
+            profile_context=_profile_context(runtime),
+            document_type_overrides=runtime.profile.classification.document_type_overrides,
+            naming_settings=runtime.profile.naming,
+            max_file_size_mb=export_config.max_file_size_mb,
         )
         restored += 1
     return restored
 
 
-def _run_export_period(
+def _regenerate_export_period(
     runtime: Runtime,
+    repository: DocumentRepository,
     processed_path: Path,
     export_dir: Path,
     export_date: str,
     *,
-    export_file_config,
-    profile_context: dict | None,
-    merge_rules,
-    run_merge_pdfs: bool = False,
-) -> tuple[Path, list[dict]]:
-    console = runtime.console
+    step=None,
+) -> tuple[Path, dict, list[Path]]:
+    """Rebuild one export month while preserving its durable approvals."""
     export_date_dir = export_dir / export_date
     groundtruth_snapshots = _snapshot_reconciliation_groundtruth(export_date_dir)
     if groundtruth_snapshots:
@@ -421,48 +414,73 @@ def _run_export_period(
     if export_date_dir.exists():
         shutil.rmtree(export_date_dir)
 
-    def export_documents(step):
-        copy_stats = copy_matching(
-            runtime,
-            processed_path,
-            export_date,
-            export_date_dir,
-            export_config=export_file_config,
-            profile_context=profile_context,
-            quiet=True,
-        )
-        if copy_stats.get("copied", 0):
-            message = f"{copy_stats['copied']} files"
-            if copy_stats.get("deduped", 0) > 0:
-                message += f" ({copy_stats['deduped']} content dupes skipped)"
-            step.success(message)
-        else:
-            step.success("0 files")
-        return copy_stats
+    copy_stats = copy_matching(
+        runtime,
+        processed_path,
+        export_date,
+        export_date_dir,
+        incremental=False,
+        quiet=True,
+    )
+    if step is not None:
+        message = f"{copy_stats['copied']} files"
+        if copy_stats.get("deduped", 0) > 0:
+            message += f" ({copy_stats['deduped']} content dupes skipped)"
+        step.success(message)
 
-    _pipeline_step(console, f"Export documents ({export_date})", export_documents)
-
-    repository = DocumentRepository(runtime)
     restored_documents = _restore_groundtruth_documents(
+        runtime,
         repository,
         processed_path,
         export_date_dir,
         groundtruth_snapshots,
-        export_config=export_file_config,
-        profile_context=profile_context,
-        document_type_overrides=runtime.profile.classification.document_type_overrides,
-        naming_settings=runtime.profile.naming,
     )
     if restored_documents:
         logger.debug(
-            f"[RECON-GROUNDTRUTH] Restored {restored_documents} approved document(s) for {export_date}"
+            f"[RECON-GROUNDTRUTH] Restored {restored_documents} approved document(s) "
+            f"for {export_date}"
         )
+
     bank_statements = discover_bank_statements(repository, export_date_dir)
-    restored_groundtruth = _restore_reconciliation_groundtruth(groundtruth_snapshots, bank_statements)
+    restored_groundtruth = _restore_reconciliation_groundtruth(
+        groundtruth_snapshots,
+        bank_statements,
+    )
     if restored_groundtruth:
         logger.debug(
-            f"[RECON-GROUNDTRUTH] Restored {restored_groundtruth} approval sidecar(s) for {export_date}"
+            f"[RECON-GROUNDTRUTH] Restored {restored_groundtruth} approval sidecar(s) "
+            f"for {export_date}"
         )
+    return export_date_dir, copy_stats, bank_statements
+
+
+def _run_export_period(
+    runtime: Runtime,
+    processed_path: Path,
+    export_dir: Path,
+    export_date: str,
+    *,
+    merge_rules,
+    run_merge_pdfs: bool = False,
+) -> tuple[Path, list[dict]]:
+    console = runtime.console
+
+    def export_documents(step):
+        return _regenerate_export_period(
+            runtime,
+            repository,
+            processed_path,
+            export_dir,
+            export_date,
+            step=step,
+        )
+
+    repository = DocumentRepository(runtime)
+    export_date_dir, _, bank_statements = _pipeline_step(
+        console,
+        f"Export documents ({export_date})",
+        export_documents,
+    )
     all_recon_matches = []
     recon_stats_all: list[dict] = []
 
@@ -527,7 +545,7 @@ def _run_export_period(
                 merged_outputs = merge_all_pdfs(str(export_date_dir))
                 _compress_exported_pdfs(
                     list(merged_outputs.values()),
-                    export_config=export_file_config,
+                    export_config=runtime.profile.export,
                 )
             merged_files = list(export_date_dir.glob("merged_*.pdf"))
             if merged_files:
@@ -607,9 +625,9 @@ def sync(
 
 
 def rename(runtime: Runtime, processed_path: Path, *, quiet: bool = False) -> dict:
-    export_root = runtime.profile.paths.export
+    export_root = runtime.paths.export
     if export_root:
-        export_path = Path(export_root).resolve()
+        export_path = export_root.resolve()
         target_path = processed_path.resolve()
         if target_path == export_path or export_path in target_path.parents:
             raise RuntimeError(
@@ -636,28 +654,7 @@ def _truncate_filename_component(value: str, max_length: int) -> str:
     return value[:max_length].rstrip(" -_.") or value[:max_length]
 
 
-def _naming_component_max_chars(naming_settings) -> int:
-    return int(
-        getattr(naming_settings, "component_max_chars", _DEFAULT_FILENAME_COMPONENT_MAX_CHARS)
-        or _DEFAULT_FILENAME_COMPONENT_MAX_CHARS
-    )
-
-
-def _naming_pdf_export_max_chars(naming_settings) -> int:
-    return int(
-        getattr(naming_settings, "pdf_export_max_chars", _DEFAULT_PDF_EXPORT_FILENAME_MAX_CHARS)
-        or _DEFAULT_PDF_EXPORT_FILENAME_MAX_CHARS
-    )
-
-
-def _naming_warning_max_chars(naming_settings) -> int:
-    return int(
-        getattr(naming_settings, "filename_warning_max_chars", _DEFAULT_PDF_EXPORT_FILENAME_MAX_CHARS)
-        or _DEFAULT_PDF_EXPORT_FILENAME_MAX_CHARS
-    )
-
-
-def _fit_pdf_export_filename(filename: str, max_length: int = _DEFAULT_PDF_EXPORT_FILENAME_MAX_CHARS) -> str:
+def _fit_pdf_export_filename(filename: str, max_length: int) -> str:
     if not filename.lower().endswith(".pdf") or len(filename) <= max_length:
         return filename
 
@@ -695,7 +692,7 @@ def _build_filename_from_fields(
     file_hash: str,
     *,
     profile_context: dict | None = None,
-    component_max_chars: int = _DEFAULT_FILENAME_COMPONENT_MAX_CHARS,
+    component_max_chars: int,
 ) -> str:
     engine = RuleEngine(profile_context=profile_context)
     parts = []
@@ -741,23 +738,18 @@ def _check_file_size(src: Path, max_file_size_mb: float | None) -> None:
         logger.warning(f"Large file: {src.name} ({size_mb:.1f} MB exceeds {max_file_size_mb} MB threshold)")
 
 
-def _compression_settings(export_config=None):
-    return getattr(export_config, "compression", None) if export_config is not None else None
-
-
-def _compression_enabled(pdf_path: Path, export_config=None) -> bool:
-    settings = _compression_settings(export_config)
-    if settings is not None and not getattr(settings, "enabled", True):
+def _compression_enabled(pdf_path: Path, export_config: ExportSettings) -> bool:
+    settings = export_config.compression
+    if not settings.enabled:
         return False
-    min_size_mb = getattr(settings, "min_size_mb", None) if settings is not None else None
+    min_size_mb = settings.min_size_mb
     if min_size_mb is not None and pdf_path.stat().st_size < float(min_size_mb) * 1024 * 1024:
         return False
     return True
 
 
-def _get_pdfpress_compressor(export_config=None):
-    settings = _compression_settings(export_config)
-    quality = str(getattr(settings, "quality", "ebook") or "ebook")
+def _get_pdfpress_compressor(export_config: ExportSettings):
+    quality = export_config.compression.quality
     if quality not in _PDFPRESS_COMPRESSORS:
         try:
             from pdfpress import PDFCompressor
@@ -769,7 +761,7 @@ def _get_pdfpress_compressor(export_config=None):
     return _PDFPRESS_COMPRESSORS[quality]
 
 
-def _compress_pdf_export(pdf_path: Path, *, export_config=None) -> None:
+def _compress_pdf_export(pdf_path: Path, *, export_config: ExportSettings) -> None:
     if pdf_path.suffix.lower() != ".pdf" or not pdf_path.exists():
         return
     if not _compression_enabled(pdf_path, export_config):
@@ -790,26 +782,16 @@ def _compress_pdf_export(pdf_path: Path, *, export_config=None) -> None:
     )
 
 
-def _compress_exported_pdfs(pdf_paths: list[Path], *, export_config=None) -> None:
+def _compress_exported_pdfs(pdf_paths: list[Path], *, export_config: ExportSettings) -> None:
     for pdf_path in pdf_paths:
-        if export_config is None:
-            _compress_pdf_export(pdf_path)
-        else:
-            _compress_pdf_export(pdf_path, export_config=export_config)
-
-
-def _compress_pdf_export_maybe_configured(pdf_path: Path, export_config=None) -> None:
-    if export_config is None:
-        _compress_pdf_export(pdf_path)
-    else:
         _compress_pdf_export(pdf_path, export_config=export_config)
 
 
-def _long_filename_warning(path: Path, *, naming_settings=None) -> str:
+def _long_filename_warning(path: Path, *, naming_settings: NamingSettings) -> str:
     return format_long_filename_warning(
         collect_long_filenames(
             path,
-            max_length=_naming_warning_max_chars(naming_settings),
+            max_length=naming_settings.filename_warning_max_chars,
             suffixes=(".pdf",),
         ),
         max_items=None,
@@ -866,15 +848,15 @@ def copy_matching(
     dest_folder: Path,
     *,
     incremental: bool = False,
-    export_config=None,
-    profile_context: Optional[dict] = None,
     quiet: bool = False,
 ) -> dict:
     repository = DocumentRepository(runtime)
+    export_config = runtime.profile.export
+    profile_context = _profile_context(runtime)
     matcher = make_matcher(pattern, use_search=True)
     dest_folder.mkdir(parents=True, exist_ok=True)
 
-    max_file_size_mb = export_config.max_file_size_mb if export_config is not None else None
+    max_file_size_mb = export_config.max_file_size_mb
 
     stats = {"copied": 0, "skipped": 0, "deduped": 0, "total": 0}
     seen_dedup_keys: set[tuple[str, ...]] = set()
@@ -904,7 +886,6 @@ def copy_matching(
 
         dest_doc, dest_json = _export_destination_paths(
             doc_path,
-            json_path,
             export_metadata_dict,
             dest_folder,
             export_config=export_config,
@@ -919,7 +900,7 @@ def copy_matching(
         _check_file_size(doc_path, max_file_size_mb)
         shutil.copy2(doc_path, dest_doc)
         if dest_doc.suffix.lower() == ".pdf":
-            _compress_pdf_export_maybe_configured(dest_doc, export_config)
+            _compress_pdf_export(dest_doc, export_config=export_config)
         metadata_copy = dict(export_metadata_dict)
         metadata_copy["source_filename"] = doc_path.name
         repository.save_json(dest_json, metadata_copy)
@@ -1048,11 +1029,9 @@ def export_dates(
     processed_path: Path,
     export_base_dir: Path,
     run_merge: bool = False,
-    *,
-    export_config=None,
-    profile_context: dict | None = None,
 ) -> None:
     repository = DocumentRepository(runtime)
+    export_config = runtime.profile.export
 
     with task_log_context(runtime, processed_path, "export_all_dates", show_header=False):
         all_dates = repository.unique_dates(processed_path)
@@ -1064,40 +1043,13 @@ def export_dates(
         total_skipped = 0
         changed_directories = []
         for date in runtime.console.track(all_dates, "Exporting dates"):
-            export_date_dir = export_base_dir / date
-            groundtruth_snapshots = _snapshot_reconciliation_groundtruth(export_date_dir)
-            if groundtruth_snapshots:
-                _save_reconciliation_groundtruth_backup(export_base_dir, date, groundtruth_snapshots)
-            else:
-                groundtruth_snapshots = _load_reconciliation_groundtruth_backup(export_base_dir, date)
-
-            if export_date_dir.exists():
-                shutil.rmtree(export_date_dir)
-
-            stats = copy_matching(
+            export_date_dir, stats, _ = _regenerate_export_period(
                 runtime,
+                repository,
                 processed_path,
+                export_base_dir,
                 date,
-                export_date_dir,
-                incremental=False,
-                export_config=export_config,
-                profile_context=profile_context,
-                quiet=True,
             )
-
-            if groundtruth_snapshots:
-                _restore_groundtruth_documents(
-                    repository,
-                    processed_path,
-                    export_date_dir,
-                    groundtruth_snapshots,
-                    export_config=export_config,
-                    profile_context=profile_context,
-                    document_type_overrides=runtime.profile.classification.document_type_overrides,
-                    naming_settings=runtime.profile.naming,
-                )
-                bank_statements = discover_bank_statements(repository, export_date_dir)
-                _restore_reconciliation_groundtruth(groundtruth_snapshots, bank_statements)
 
             total_copied += stats["copied"]
             total_skipped += stats["skipped"]
@@ -1146,19 +1098,19 @@ def archive(runtime: Runtime, processed_path: Path, digests: list[str], *, dry_r
 
 
 def gmail(runtime: Runtime, *, months: int = 2) -> None:
-    raw_paths = runtime.profile.paths.raw
-    processed_path_str = runtime.profile.paths.processed
+    raw_paths = runtime.paths.raw
+    processed_path = runtime.paths.processed
     gmail_settings = runtime.profile.gmail
 
-    if processed_path_str:
-        setup_task_logging(Path(processed_path_str), "gmail_download")
+    if processed_path:
+        setup_task_logging(processed_path, "gmail_download")
 
     has_gmail_output = bool(raw_paths or gmail_settings.output_raw_path)
-    if not has_gmail_output or not processed_path_str:
+    if not has_gmail_output or not processed_path:
         missing = []
         if not has_gmail_output:
             missing.append("paths.raw or gmail.output_raw_path")
-        if not processed_path_str:
+        if not processed_path:
             missing.append("paths.processed")
         runtime.console.error(f"Missing required profile settings: {', '.join(missing)}", indent=False)
         raise RuntimeError(f"Missing required profile settings: {', '.join(missing)}")
@@ -1166,7 +1118,7 @@ def gmail(runtime: Runtime, *, months: int = 2) -> None:
     raw_path = (
         Path(gmail_settings.output_raw_path)
         if gmail_settings.output_raw_path
-        else Path(raw_paths[0])
+        else raw_paths[0]
     )
     export_dates_list = compute_month_range(months)
     totals = {
@@ -1181,7 +1133,7 @@ def gmail(runtime: Runtime, *, months: int = 2) -> None:
     tracking_dir = (
         Path(gmail_settings.tracking_dir)
         if gmail_settings.tracking_dir
-        else Path(processed_path_str)
+        else processed_path
         / "logs"
         / (gmail_settings.tracking_subdir or "gmail_tracking")
     )
@@ -1202,7 +1154,6 @@ def gmail(runtime: Runtime, *, months: int = 2) -> None:
                 tracking_dir=tracking_dir,
                 credentials_path=paths["credentials"],
                 token_path=paths["token"],
-                settings_path=paths["settings"],
                 settings=runtime.profile.gmail,
                 console=runtime.console,
             )
@@ -1350,9 +1301,9 @@ def reconcile(
 
 
 def review(runtime: Runtime, export_path: Path) -> None:
-    os.environ["PAPERTRAIL_PROFILE"] = runtime.profile_name
-    from tools.shared import launch_tool
-    launch_tool("review")
+    from tools.review import launch
+
+    launch(export_path=export_path, argv=[])
 
 
 def pipeline(
@@ -1360,15 +1311,14 @@ def pipeline(
     *,
     months: int = 2,
     export_date_arg: Optional[str] = None,
-    processed_path_override: Optional[Path] = None,
 ) -> None:
     console = runtime.console
     start_time = time.time()
     profile = runtime.profile
 
-    raw_dirs = profile.paths.raw
-    processed_dir = str(processed_path_override or profile.paths.processed or "")
-    export_dir = profile.paths.export
+    raw_dirs = runtime.paths.raw
+    processed_dir = runtime.paths.processed
+    export_dir = runtime.paths.export
 
     missing = []
     if not raw_dirs:
@@ -1413,7 +1363,7 @@ def pipeline(
 
     for raw_dir in raw_dirs:
         with console.step_progress("Extract mbox attachments") as step:
-            stats = extract_mbox_attachments(raw_dir)
+            stats = extract_mbox_attachments(str(raw_dir))
             if stats["mbox_files"] > 0:
                 step.success(f"{stats['mbox_files']} mbox file(s), {stats['attachments_extracted']} attachment(s)")
             else:
@@ -1425,7 +1375,7 @@ def pipeline(
         with console.step_progress("Extract compressed archives") as step:
             with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()), warnings.catch_warnings():
                 warnings.simplefilter("ignore")
-                results = extract_archives(raw_dir, passwords=passwords if passwords else None)
+                results = extract_archives(str(raw_dir), passwords=passwords if passwords else None)
             total_extracted = 0
             failures = 0
             for count in results.values():
@@ -1442,7 +1392,7 @@ def pipeline(
 
     console.step("Classify new documents")
     try:
-        extract_stats = extract(runtime, processed_path, [Path(directory) for directory in raw_dirs], quiet=False)
+        extract_stats = extract(runtime, processed_path, raw_dirs, quiet=False)
         if extract_stats is None:
             console.warning("Extraction locked by another process")
         elif extract_stats["failed"] > 0:
@@ -1512,10 +1462,8 @@ def pipeline(
             step.error(str(exc))
             sys.exit(1)
 
-    export_file_config = profile.export
-    profile_context = {"tax_number": profile.profile.tax_number} if profile.profile.tax_number else None
     recon_stats_all: list[dict] = []
-    merge_rules = export_file_config.merge_rules
+    merge_rules = profile.export.merge_rules
 
     for export_date in export_dates_list:
         try:
@@ -1524,8 +1472,6 @@ def pipeline(
                 processed_path,
                 Path(export_dir),
                 export_date,
-                export_file_config=export_file_config,
-                profile_context=profile_context,
                 merge_rules=merge_rules,
                 run_merge_pdfs=False,
             )
