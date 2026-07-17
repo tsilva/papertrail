@@ -10,15 +10,14 @@ from papertrail.bank_statement.models import (
     BankStatementData,
     BankTransactionRecord,
     parse_bank_amount,
-    parse_bank_date_cell,
 )
 from papertrail.bank_statement.parser_utils import (
     cfg_cell,
     cfg_int,
-    cfg_sequence,
     cfg_str,
     expected_headers,
     normalized_headers,
+    parse_date_cell,
     parse_date_str,
 )
 from papertrail.logging_utils import get_logger
@@ -41,14 +40,6 @@ def can_parse(ws, config: dict[str, object] | None = None) -> bool:
     return expected_headers(config, _EXPECTED_HEADERS).issubset(
         normalized_headers(ws, row=header_row, columns=scan_columns)
     )
-
-
-def _date_formats(config: dict[str, object] | None = None) -> tuple[str, ...]:
-    return cfg_sequence(config, "date_formats", _DATE_FORMATS)
-
-
-def _parse_date_str(value: str, config: dict[str, object] | None = None) -> str | None:
-    return parse_date_str(value, config, _DATE_FORMATS)
 
 
 def parse(xlsx_path: Path, config: dict[str, object] | None = None) -> BankStatementData | None:
@@ -84,7 +75,7 @@ def parse(xlsx_path: Path, config: dict[str, object] | None = None) -> BankState
         if cell_val is None:
             continue
         date_str = str(cell_val).strip()
-        parsed = _parse_date_str(date_str, config)
+        parsed = parse_date_str(date_str, config, _DATE_FORMATS)
         if parsed:
             dates.append(parsed)
             transaction_count += 1
@@ -116,10 +107,6 @@ def parse(xlsx_path: Path, config: dict[str, object] | None = None) -> BankState
     )
 
 
-def _parse_date_cell(value, config: dict[str, object] | None = None) -> str | None:
-    return parse_bank_date_cell(value, _date_formats(config))
-
-
 def load_transactions(
     xlsx_path: Path,
     config: dict[str, object] | None = None,
@@ -147,8 +134,8 @@ def load_transactions(
 
         transactions.append({
             "row_number": row[0].row,
-            "date_posting": _parse_date_cell(row[0].value, config),
-            "date_value": _parse_date_cell(row[1].value, config),
+            "date_posting": parse_date_cell(row[0].value, config, _DATE_FORMATS),
+            "date_value": parse_date_cell(row[1].value, config, _DATE_FORMATS),
             "description": str(row[description_column].value or "").strip(),
             "amount": amount,
             "currency": default_currency,

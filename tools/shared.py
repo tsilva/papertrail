@@ -34,27 +34,15 @@ def _active_profile_name() -> str:
     )
 
 
-def _tool_setting_int(name: str, default: int) -> int:
+def profile_setting(section: str, name: str, default):
+    converter = type(default)
     env_name = f"PAPERTRAIL_{name.upper()}"
-    try:
-        return int(os.environ.get(env_name) or "")
-    except ValueError:
-        pass
-    profile = _load_profile(_active_profile_name())
-    if profile is None:
-        return default
-    try:
-        return int(getattr(profile.tools, name.lower(), default) or default)
-    except (TypeError, ValueError):
-        return default
-
-
-def profile_setting_int(section: str, name: str, default: int) -> int:
-    env_name = f"PAPERTRAIL_{name.upper()}"
-    try:
-        return int(os.environ.get(env_name) or "")
-    except ValueError:
-        pass
+    env_value = os.environ.get(env_name)
+    if env_value:
+        try:
+            return converter(env_value)
+        except (TypeError, ValueError):
+            pass
     profile = _load_profile(_active_profile_name())
     if profile is None:
         return default
@@ -62,41 +50,9 @@ def profile_setting_int(section: str, name: str, default: int) -> int:
     if settings is None:
         return default
     try:
-        return int(getattr(settings, name.lower(), default) or default)
+        return converter(getattr(settings, name.lower(), default) or default)
     except (TypeError, ValueError):
         return default
-
-
-def profile_setting_float(section: str, name: str, default: float) -> float:
-    env_name = f"PAPERTRAIL_{name.upper()}"
-    try:
-        return float(os.environ.get(env_name) or "")
-    except ValueError:
-        pass
-    profile = _load_profile(_active_profile_name())
-    if profile is None:
-        return default
-    settings = getattr(profile, section, None)
-    if settings is None:
-        return default
-    try:
-        return float(getattr(settings, name.lower(), default) or default)
-    except (TypeError, ValueError):
-        return default
-
-
-def profile_setting_str(section: str, name: str, default: str) -> str:
-    env_name = f"PAPERTRAIL_{name.upper()}"
-    value = os.environ.get(env_name)
-    if value:
-        return value
-    profile = _load_profile(_active_profile_name())
-    if profile is None:
-        return default
-    settings = getattr(profile, section, None)
-    if settings is None:
-        return default
-    return str(getattr(settings, name.lower(), default) or default)
 
 
 @lru_cache(maxsize=8)
@@ -169,7 +125,7 @@ def render_pdf_page_html(pdf_path, page_num=0):
         with fitz.open(str(pdf_path)) as doc:
             total = len(doc)
             page_num = max(0, min(page_num, total - 1))
-            pix = doc[page_num].get_pixmap(dpi=_tool_setting_int("preview_dpi", 150))
+            pix = doc[page_num].get_pixmap(dpi=profile_setting("tools", "preview_dpi", 150))
             b64 = base64.b64encode(pix.tobytes("png")).decode("utf-8")
             html = f'<img src="data:image/png;base64,{b64}" class="preview-img"/>'
             return html, total, page_num
@@ -181,7 +137,7 @@ def render_xlsx_as_html(xlsx_path, max_rows=None):
     import openpyxl
 
     if max_rows is None:
-        max_rows = _tool_setting_int("xlsx_preview_max_rows", 100)
+        max_rows = profile_setting("tools", "xlsx_preview_max_rows", 100)
     warnings.filterwarnings("ignore", message="Workbook contains no default style")
     try:
         workbook = openpyxl.load_workbook(str(xlsx_path), data_only=True)

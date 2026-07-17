@@ -3,7 +3,6 @@
 import os
 import re
 import sys
-from contextlib import contextmanager
 from pathlib import Path
 from typing import Optional
 
@@ -124,13 +123,6 @@ def _default_months(runtime: Runtime, section: str = "workflow") -> int:
         workflow = getattr(profile, "workflow", None)
         value = getattr(workflow, "default_months", 2)
     return int(value or 2)
-
-
-@contextmanager
-def _task_log_context(runtime: Runtime, processed_path: Path, task_name: str):
-    log_file_path = commands.setup_task_logging(processed_path, task_name)
-    runtime.console.detail(f"Log: {log_file_path}", indent=False)
-    yield log_file_path
 
 
 def _run_pipeline(
@@ -423,7 +415,7 @@ def export_excel(
         _fail("--output must end with '.xlsx'.")
     runtime = _resolve_runtime(ctx, profile=profile, verbose=verbose)
     pp = _resolve_processed(runtime, processed_path)
-    with _task_log_context(runtime, pp, "export_excel"):
+    with commands.task_log_context(runtime, pp, "export_excel"):
         commands.export_excel(runtime, pp, output)
 
 
@@ -470,7 +462,7 @@ def export_copy(
     runtime = _resolve_runtime(ctx, profile=profile, verbose=verbose)
     pp = _resolve_processed(runtime, processed_path)
     dest_path = _resolve_dir(dest, "dest", create=True)
-    with _task_log_context(runtime, pp, "copy_matching"):
+    with commands.task_log_context(runtime, pp, "copy_matching"):
         commands.copy_matching(runtime, pp, pattern, dest_path)
 
 
