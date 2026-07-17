@@ -9,7 +9,6 @@ from papertrail.bank_statement.models import (
     BankStatementData,
     BankTransactionRecord,
     parse_bank_amount,
-    parse_bank_date_cell,
 )
 from papertrail.bank_statement.parser_utils import (
     cfg_cell,
@@ -18,6 +17,7 @@ from papertrail.bank_statement.parser_utils import (
     cfg_str,
     expected_headers,
     normalized_headers,
+    parse_date_cell,
     parse_date_str,
 )
 from papertrail.logging_utils import get_logger
@@ -43,14 +43,6 @@ def can_parse(ws, config: dict[str, object] | None = None) -> bool:
 _DATE_FORMATS = ("%d/%m/%Y", "%d-%m-%Y")
 
 
-def _date_formats(config: dict[str, object] | None = None) -> tuple[str, ...]:
-    return cfg_sequence(config, "date_formats", _DATE_FORMATS)
-
-
-def _parse_date_str(value: str, config: dict[str, object] | None = None) -> str | None:
-    return parse_date_str(value, config, _DATE_FORMATS)
-
-
 def parse(xlsx_path: Path, config: dict[str, object] | None = None) -> BankStatementData | None:
     """Parse a Millennium BCP bank statement XLSX."""
     wb = openpyxl.load_workbook(xlsx_path, data_only=True)
@@ -68,11 +60,16 @@ def parse(xlsx_path: Path, config: dict[str, object] | None = None) -> BankState
 
     start_row, start_col = cfg_cell(config, "period_start_cell", (3, 3))
     end_row, end_col = cfg_cell(config, "period_end_cell", (4, 3))
-    period_start = _parse_date_str(
+    period_start = parse_date_str(
         str(ws.cell(row=start_row, column=start_col).value or ""),
         config,
+        _DATE_FORMATS,
     )
-    period_end = _parse_date_str(str(ws.cell(row=end_row, column=end_col).value or ""), config)
+    period_end = parse_date_str(
+        str(ws.cell(row=end_row, column=end_col).value or ""),
+        config,
+        _DATE_FORMATS,
+    )
 
     transaction_count = 0
     data_start_row = cfg_int(config, "data_start_row", _DATA_START_ROW)
@@ -104,10 +101,6 @@ def parse(xlsx_path: Path, config: dict[str, object] | None = None) -> BankState
         issuing_party=cfg_str(config, "issuer_party", "MillenniumBCP"),
         issuing_party_raw=cfg_str(config, "issuer_party_raw", "Millennium BCP"),
     )
-
-
-def _parse_date_cell(value, config: dict[str, object] | None = None) -> str | None:
-    return parse_bank_date_cell(value, _date_formats(config))
 
 
 def load_transactions(
@@ -148,8 +141,8 @@ def load_transactions(
 
         transactions.append({
             "row_number": row[0].row,
-            "date_posting": _parse_date_cell(row[0].value, config),
-            "date_value": _parse_date_cell(row[1].value, config),
+            "date_posting": parse_date_cell(row[0].value, config, _DATE_FORMATS),
+            "date_value": parse_date_cell(row[1].value, config, _DATE_FORMATS),
             "description": str(row[description_column].value or "").strip(),
             "amount": amount,
             "currency": str(row[currency_column].value or default_currency).strip(),

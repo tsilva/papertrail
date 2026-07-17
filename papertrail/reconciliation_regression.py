@@ -15,7 +15,6 @@ from papertrail.reconciliation_groundtruth import (
     GROUNDTRUTH_SUFFIX,
     RECONCILIATION_SUFFIX,
     approval_map,
-    document_matches_approval,
     document_sets_match,
     groundtruth_path_for_document,
     load_groundtruth,
@@ -139,7 +138,7 @@ def _verify_statement(
     for key_id in sorted(approved_keys & current_keys):
         approved_documents = approvals[key_id].get("required_documents", [])
         current_documents = current[key_id].get("required_documents", [])
-        if not _document_sets_match_strict(current_documents, approved_documents):
+        if not document_sets_match(current_documents, approved_documents, strict_hash=True):
             description = approvals[key_id].get("transaction", {}).get("description", "")
             result.failures.append(f"{statement_path.name}: document mismatch for {description!r}")
 
@@ -180,14 +179,6 @@ def _candidate_identity(repository: DocumentRepository, candidate) -> dict:
         "hash_file": metadata.get("hash_file") or candidate.hash_file,
         "hash_content": metadata.get("hash_content"),
     }
-
-
-def _document_sets_match_strict(current_documents: list[dict], approved_documents: list[dict]) -> bool:
-    return document_sets_match(current_documents, approved_documents, strict_hash=True)
-
-
-def _document_matches_strict(current: dict, approved: dict) -> bool:
-    return document_matches_approval(current, approved, strict_hash=True)
 
 
 def _build_file_index(repository: DocumentRepository, export_path: Path) -> dict[str, dict]:

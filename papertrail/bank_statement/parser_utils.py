@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Mapping
 
-from papertrail.bank_statement.models import parse_bank_date
+from papertrail.bank_statement.models import parse_bank_date, parse_bank_date_cell
 from papertrail.utils import strip_diacritics
 
 ParserConfig = Mapping[str, object]
@@ -71,3 +71,11 @@ def parse_date_str(
     default_formats: tuple[str, ...],
 ) -> str | None:
     return parse_bank_date(value, cfg_sequence(config, "date_formats", default_formats))
+
+
+def parse_date_cell(
+    value: object,
+    config: ParserConfig | None,
+    default_formats: tuple[str, ...],
+) -> str | None:
+    return parse_bank_date_cell(value, cfg_sequence(config, "date_formats", default_formats))

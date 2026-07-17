@@ -33,9 +33,7 @@ if __package__:
         iter_sidecars,
         launch_blocks,
         placeholder_html,
-        profile_setting_float,
-        profile_setting_int,
-        profile_setting_str,
+        profile_setting,
         render_document_preview,
     )
 else:
@@ -48,9 +46,7 @@ else:
         iter_sidecars,
         launch_blocks,
         placeholder_html,
-        profile_setting_float,
-        profile_setting_int,
-        profile_setting_str,
+        profile_setting,
         render_document_preview,
     )
 
@@ -642,7 +638,7 @@ def _match_status(m):
     if m.get("method") == "exact":
         return "exact"
     if m.get("method") == "llm":
-        threshold = profile_setting_float("tools", "llm_high_confidence_threshold", 0.8)
+        threshold = profile_setting("tools", "llm_high_confidence_threshold", 0.8)
         return "llm_high" if m.get("confidence", 0) >= threshold else "llm_low"
     return "exact"
 
@@ -700,7 +696,7 @@ def render_all_banks_html(bs_list, unmatched_files=None, file_index=None, data=N
 
 
 def _filename_length_warning_icon(filename: str) -> str:
-    max_chars = profile_setting_int("naming", "filename_warning_max_chars", 60)
+    max_chars = profile_setting("naming", "filename_warning_max_chars", 60)
     if Path(filename).suffix.lower() != ".pdf" or len(filename) <= max_chars:
         return ""
     return (
@@ -769,7 +765,7 @@ def _render_unmatched_files_html(unmatched_files, file_index, data=None):
         party = html_lib.escape(uf.get("issuing_party", "") or "")
         doc_type = html_lib.escape(uf.get("document_type", "") or "")
         amt = uf.get("total_amount")
-        currency = uf.get("currency") or profile_setting_str(
+        currency = uf.get("currency") or profile_setting(
             "reconciliation",
             "default_currency",
             "EUR",

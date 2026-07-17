@@ -56,7 +56,13 @@ _DEFAULT_FILENAME_COMPONENT_MAX_CHARS = 80
 
 
 @contextmanager
-def _task_log_context(runtime: Runtime, processed_path: Path, task_name: str, *, show_header: bool = True):
+def task_log_context(
+    runtime: Runtime,
+    processed_path: Path,
+    task_name: str,
+    *,
+    show_header: bool = True,
+):
     log_file_path = setup_task_logging(processed_path, task_name)
     logger.debug(f"=== {task_name.upper()} STARTED ===")
     logger.debug(f"Log: {log_file_path}")
@@ -562,7 +568,7 @@ def extract(
         return None
 
     try:
-        with _task_log_context(runtime, processed_path, "extract_new", show_header=not quiet):
+        with task_log_context(runtime, processed_path, "extract_new", show_header=not quiet):
             logs_dir = processed_path / "logs"
             failure_log_path = logs_dir / "classification_failures.log"
             failure_logger = setup_failure_logger(failure_log_path)
@@ -588,7 +594,7 @@ def sync(
     all: bool = False,
     quiet: bool = False,
 ) -> dict:
-    with _task_log_context(runtime, processed_path, "sync", show_header=not quiet):
+    with task_log_context(runtime, processed_path, "sync", show_header=not quiet):
         return DocumentEngine(runtime).sync(
             processed_path,
             dry_run=dry_run,
@@ -611,7 +617,7 @@ def rename(runtime: Runtime, processed_path: Path, *, quiet: bool = False) -> di
             )
 
     repository = DocumentRepository(runtime)
-    with _task_log_context(runtime, processed_path, "rename_files", show_header=not quiet):
+    with task_log_context(runtime, processed_path, "rename_files", show_header=not quiet):
         stats = repository.repair_filenames(processed_path)
         if not quiet:
             runtime.console.success(
@@ -1048,7 +1054,7 @@ def export_dates(
 ) -> None:
     repository = DocumentRepository(runtime)
 
-    with _task_log_context(runtime, processed_path, "export_all_dates", show_header=False):
+    with task_log_context(runtime, processed_path, "export_all_dates", show_header=False):
         all_dates = repository.unique_dates(processed_path)
         if not all_dates:
             runtime.console.warning("No dates found in processed files", indent=False)
@@ -1310,7 +1316,7 @@ def reconcile(
 ) -> None:
     repository = DocumentRepository(runtime)
     merge_rules = runtime.profile.export.merge_rules
-    with _task_log_context(runtime, export_path, "reconcile"):
+    with task_log_context(runtime, export_path, "reconcile"):
         if excel_path is not None:
             excel_paths = [excel_path]
         else:

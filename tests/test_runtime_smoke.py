@@ -293,6 +293,30 @@ class AdapterSmokeTests(unittest.TestCase):
         self.assertEqual(export_dir, str(self.runtime.paths.export))
         load_profile_mock.assert_called_once_with("work")
 
+    def test_tools_shared_reads_typed_profile_settings_with_env_overrides(self):
+        self.runtime.profile.tools.preview_dpi = 144
+        with (
+            patch("tools.shared._load_profile", return_value=self.runtime.profile),
+            patch.dict(
+                os.environ,
+                {
+                    "PAPERTRAIL_PREVIEW_DPI": "invalid",
+                    "PAPERTRAIL_LLM_HIGH_CONFIDENCE_THRESHOLD": "0.9",
+                    "PAPERTRAIL_DEFAULT_CURRENCY": "USD",
+                },
+                clear=False,
+            ),
+        ):
+            self.assertEqual(shared.profile_setting("tools", "preview_dpi", 150), 144)
+            self.assertEqual(
+                shared.profile_setting("tools", "llm_high_confidence_threshold", 0.8),
+                0.9,
+            )
+            self.assertEqual(
+                shared.profile_setting("reconciliation", "default_currency", "EUR"),
+                "USD",
+            )
+
     def test_runtime_hard_fails_when_required_dependency_is_missing(self):
         real_import_module = importlib.import_module
 
