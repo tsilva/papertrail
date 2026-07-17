@@ -24,11 +24,11 @@ _JS = "\n".join(
 )
 
 
-def build_ui(initial_tab: str = "browse"):
+def build_ui():
     """Build the unified tools UI."""
     with gr.Blocks(title="Papertrail Tools") as app:
         gr.Markdown("## Papertrail Tools")
-        with gr.Tabs(selected=initial_tab):
+        with gr.Tabs():
             with gr.Tab("Browse", id="browse"):
                 browse.build_ui().render()
             with gr.Tab("Dedupe", id="dedupe"):

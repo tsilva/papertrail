@@ -2,18 +2,18 @@ import unittest
 from pathlib import Path
 
 from papertrail.commands.reconcile import (
-    ReconciliationPolicy,
+    _ACTIVE_RECONCILIATION_POLICY,
     MatchResult,
     PDFCandidate,
     Transaction,
-    _ACTIVE_RECONCILIATION_POLICY,
     _candidate_sort_name,
     _filename_hash_key,
     _is_prior_reconciled_candidate,
     _link_evidence_counterparty_documents,
-    _link_via_verde_period_documents,
+    _link_shared_period_documents,
     _reconciliation_rules,
 )
+from papertrail.config import ReconciliationSettings
 
 
 class ReconcileLinkingTests(unittest.TestCase):
@@ -110,7 +110,7 @@ class ReconcileLinkingTests(unittest.TestCase):
         )
 
         token = _ACTIVE_RECONCILIATION_POLICY.set(
-            ReconciliationPolicy(
+            ReconciliationSettings(
                 bank_counterparties=("millennium-bcp",),
                 shared_period_transaction_keywords={"via-verde": ("VIAVERDE",)},
             )
@@ -127,7 +127,7 @@ class ReconcileLinkingTests(unittest.TestCase):
         self.assertEqual(evidence_ids, set())
         self.assertEqual(match.pdf_candidates, [bank_note])
 
-    def test_via_verde_shared_period_link_does_not_duplicate_existing_file(self):
+    def test_shared_period_link_does_not_duplicate_existing_file(self):
         txn = Transaction(
             row_number=28,
             date_posting="2026-03-09",
@@ -176,13 +176,13 @@ class ReconcileLinkingTests(unittest.TestCase):
         )
 
         token = _ACTIVE_RECONCILIATION_POLICY.set(
-            ReconciliationPolicy(
+            ReconciliationSettings(
                 shared_period_transaction_keywords={"shared-toll": ("SHAREDTOLL",)},
                 shared_period_title_terms={"shared-toll": ("pagamentosdeservicos",)},
             )
         )
         try:
-            updated_matches, updated_unmatched, shared_ids = _link_via_verde_period_documents(
+            updated_matches, updated_unmatched, shared_ids = _link_shared_period_documents(
                 [match],
                 [],
                 [shared_parent],

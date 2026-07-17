@@ -11,12 +11,14 @@ import openai
 
 from papertrail.config import (
     ConfigError,
-    ProfileLoader,
     ProfileSettings,
     build_openai_client,
     check_api_accessibility,
     get_cache_dir,
     get_config_root,
+    get_profiles_dir,
+    list_available_profiles,
+    load_profile,
 )
 from papertrail.console import PapertrailConsole
 from papertrail.dependencies import validate_runtime_dependencies
@@ -79,8 +81,7 @@ def create_runtime(
 
     setup_logging(verbose=verbose)
 
-    loader = ProfileLoader()
-    available = loader.list_available_profiles()
+    available = list_available_profiles()
     if not available:
         raise ConfigError(
             "No profiles found in ~/.config/papertrail/profiles/. "
@@ -94,11 +95,11 @@ def create_runtime(
             f"A profile is required. Use --profile <name>. Available profiles: {', '.join(available)}."
         )
 
-    profile = loader.load_profile(profile_name)
+    profile = load_profile(profile_name)
     return runtime_from_profile(
         profile,
         profile_name=profile_name,
-        profiles_dir=loader.profiles_dir,
+        profiles_dir=get_profiles_dir(),
         verbose=verbose,
         enable_client=enable_client,
         probe_api=probe_api,

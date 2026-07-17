@@ -13,8 +13,12 @@ from papertrail.hashing import hash_file_fast
 from papertrail.models import DocumentMetadata
 from papertrail.reconciliation_groundtruth import GROUNDTRUTH_SUFFIX
 from papertrail.repository import DocumentRepository
-
-from tests.support import create_bpi_statement, create_millennium_statement, create_pdf, make_test_runtime
+from tests.support import (
+    create_bpi_statement,
+    create_millennium_statement,
+    create_pdf,
+    make_test_runtime,
+)
 
 
 class CommandTests(unittest.TestCase):
@@ -78,8 +82,6 @@ class CommandTests(unittest.TestCase):
             self.processed,
             "2026-01",
             dest,
-            export_config=self.runtime.profile.export,
-            profile_context={"tax_number": "TESTOWNER"},
             quiet=True,
         )
 
@@ -89,7 +91,7 @@ class CommandTests(unittest.TestCase):
         self.assertEqual(stats["deduped"], 1)
         self.assertEqual(len(copied_docs), 1)
         self.assertEqual(len(copied_sidecars), 1)
-        self.assertTrue(copied_docs[0].startswith(("VND_", "CMP_")))
+        self.assertTrue(copied_docs[0].startswith("VND_"))
 
     def test_copy_matching_uses_effective_document_type_for_pdf_exports(self):
         self.runtime.profile.export.file_mappings.enabled = True
@@ -126,7 +128,6 @@ class CommandTests(unittest.TestCase):
             self.processed,
             "2026-04",
             dest,
-            export_config=self.runtime.profile.export,
             quiet=True,
         )
 
@@ -175,7 +176,6 @@ class CommandTests(unittest.TestCase):
                 self.processed,
                 "2026-04",
                 dest,
-                export_config=self.runtime.profile.export,
                 quiet=True,
             )
 
@@ -222,7 +222,6 @@ class CommandTests(unittest.TestCase):
             self.processed,
             "2026-04",
             dest,
-            export_config=self.runtime.profile.export,
             quiet=True,
         )
 
@@ -284,7 +283,6 @@ class CommandTests(unittest.TestCase):
             self.processed,
             "2026-04",
             dest,
-            export_config=self.runtime.profile.export,
             quiet=True,
         )
 
@@ -311,7 +309,10 @@ class CommandTests(unittest.TestCase):
 
         self.assertEqual(stats["copied"], 1)
         exported_pdf = next(dest.glob("*.pdf"))
-        compress_mock.assert_called_once_with(exported_pdf)
+        compress_mock.assert_called_once_with(
+            exported_pdf,
+            export_config=self.runtime.profile.export,
+        )
 
     def test_export_rebuild_preserves_reconciliation_groundtruth_by_statement_hash(self):
         from papertrail.bank_statement import classify_bank_statement
@@ -394,8 +395,6 @@ class CommandTests(unittest.TestCase):
                 self.processed,
                 self.export,
                 "2026-04",
-                export_file_config=self.runtime.profile.export,
-                profile_context=None,
                 merge_rules=[],
             )
 
@@ -696,12 +695,12 @@ class CommandTests(unittest.TestCase):
 
         with (
             patch("papertrail.commands.reconcile_single") as reconcile_single_mock,
-            patch("tools.shared.launch_tool") as launch_tool_mock,
+            patch("tools.review.launch") as launch_mock,
         ):
             review(self.runtime, self.export)
 
         reconcile_single_mock.assert_not_called()
-        launch_tool_mock.assert_called_once_with("review")
+        launch_mock.assert_called_once_with(export_path=self.export, argv=[])
 
     def test_reconcile_keeps_pdf_bank_screenshots_and_prefers_nearest_same_signature(self):
         feb_dir = self.export / "2026-02"

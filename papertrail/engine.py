@@ -307,7 +307,7 @@ def _phase4_nif_enrich(
     scope: str | Path,
     doc_logger: DocumentLogger | None,
 ) -> str:
-    enabled_locales = set(getattr(runtime.profile.nif_api, "enabled_locales", ["pt-PT"]) or [])
+    enabled_locales = set(runtime.profile.nif_api.enabled_locales or [])
     if enabled_locales and merged["locale"] not in enabled_locales:
         return normalized_issuing_party
 
@@ -520,7 +520,7 @@ class DocumentEngine:
             raw_metadata = None
             max_attempts = max(
                 1,
-                int(getattr(self.runtime.profile.openrouter.requests, "classification_retries", 2) or 2),
+                int(self.runtime.profile.openrouter.requests.classification_retries or 2),
             )
             for attempt in range(max_attempts):
                 try:

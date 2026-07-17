@@ -6,7 +6,7 @@ import json
 import re
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-from typing import Iterator
+from typing import TYPE_CHECKING, Iterator
 
 import orjson
 from pydantic import ValidationError
@@ -15,7 +15,9 @@ from papertrail.logging_utils import get_logger
 from papertrail.models import DocumentMetadata, clean_enum_string
 from papertrail.naming import file_name_from_metadata
 from papertrail.reconciliation_groundtruth import GROUNDTRUTH_SUFFIX, is_reconciliation_sidecar
-from papertrail.runtime import Runtime
+
+if TYPE_CHECKING:
+    from papertrail.runtime import Runtime
 
 logger = get_logger("repository")
 
@@ -36,6 +38,49 @@ def associated_document_files(json_path: Path, companion: Path | None = None) ->
         if extra.exists():
             files.append(extra)
     return files
+
+
+def is_internal_path(path: Path) -> bool:
+    """Return whether a path belongs to repository-managed internal state."""
+    return (
+        any(part.startswith("_dupes") for part in path.parts)
+        or "logs" in path.parts
+        or path.name.startswith("_")
+    )
+
+
+def find_companion(json_path: Path, metadata: dict | None = None) -> Path | None:
+    """Find the document represented by a metadata sidecar."""
+    if isinstance(metadata, dict):
+        extension = metadata.get("source_extension")
+        if extension:
+            candidate = json_path.with_suffix(extension)
+            if candidate.exists():
+                return candidate
+    for extension in (".pdf", ".xlsx"):
+        candidate = json_path.with_suffix(extension)
+        if candidate.exists():
+            return candidate
+    return None
+
+
+def document_sidecar_paths(root: Path) -> list[Path]:
+    """List document metadata sidecars below a filesystem root."""
+    return [
+        path
+        for path in root.rglob("*.json")
+        if not is_internal_path(path.relative_to(root))
+        and not is_reconciliation_sidecar(path)
+    ]
+
+
+def iter_document_sidecars(root: Path) -> Iterator[tuple[Path, object]]:
+    """Yield readable document sidecars without requiring an application runtime."""
+    for json_path in document_sidecar_paths(root):
+        try:
+            yield json_path, _load_json_fast(json_path)
+        except _JSON_LOAD_EXCEPTIONS as exc:
+            logger.warning(f"Skipping invalid sidecar {json_path}: {exc}")
 
 
 _JSON_LOAD_EXCEPTIONS = (OSError, UnicodeDecodeError, ValueError)
@@ -131,10 +176,8 @@ class DocumentRepository:
         self.runtime = runtime
         self.registry = CanonicalRegistry(self)
 
-    @staticmethod
-    def is_internal_path(path: Path) -> bool:
-        parts = path.parts
-        return any(part.startswith("_dupes") for part in parts) or "logs" in parts or path.name.startswith("_")
+    is_internal_path = staticmethod(is_internal_path)
+    find_companion = staticmethod(find_companion)
 
     def resolve_scope(self, scope: str | Path = "processed") -> Path:
         if isinstance(scope, Path):
@@ -145,27 +188,8 @@ class DocumentRepository:
             return self.runtime.require_export_path()
         raise ValueError(f"Unsupported document scope: {scope}")
 
-    def find_companion(self, json_path: Path, metadata: dict | None = None) -> Path | None:
-        if isinstance(metadata, dict):
-            extension = metadata.get("source_extension")
-            if extension:
-                candidate = json_path.with_suffix(extension)
-                if candidate.exists():
-                    return candidate
-        for extension in (".pdf", ".xlsx"):
-            candidate = json_path.with_suffix(extension)
-            if candidate.exists():
-                return candidate
-        return None
-
     def sidecar_paths(self, scope: str | Path = "processed") -> list[Path]:
-        root = self.resolve_scope(scope)
-        return [
-            path
-            for path in root.rglob("*.json")
-            if not self.is_internal_path(path.relative_to(root))
-            and not is_reconciliation_sidecar(path)
-        ]
+        return document_sidecar_paths(self.resolve_scope(scope))
 
     def load_metadata(self, json_path: Path, validate: bool = False) -> DocumentMetadata | dict:
         data = _load_json_fast(json_path)
@@ -219,9 +243,7 @@ class DocumentRepository:
                 return None
 
         if max_workers is None:
-            max_workers = int(
-                getattr(self.runtime.profile.workflow, "metadata_load_workers", 16) or 16
-            )
+            max_workers = int(self.runtime.profile.workflow.metadata_load_workers or 16)
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
             raw_results = list(executor.map(_load_one, json_files))
 

@@ -1,5 +1,5 @@
-import json
 import importlib
+import json
 import os
 import sys
 import tempfile
@@ -10,14 +10,14 @@ from unittest.mock import patch
 
 from papertrail.archive_extract import extract_archives
 from papertrail.commands import pipeline
-from papertrail.config import ConfigError
+from papertrail.config import ConfigError, GmailSettings, get_gmail_config_paths
+from papertrail.gmail import GmailDownloader
 from papertrail.hashing import hash_file_fast
 from papertrail.models import DocumentMetadata
 from papertrail.pdf import get_page_count
 from papertrail.pdf_merge import merge_all_pdfs
 from papertrail.repository import DocumentRepository
 from papertrail.runtime import runtime_from_profile
-
 from tests.support import create_millennium_statement, create_pdf, make_test_runtime
 from tools import browse, review, shared
 
@@ -31,7 +31,6 @@ class AdapterSmokeTests(unittest.TestCase):
 
     def tearDown(self):
         shared._load_profile.cache_clear()
-        shared.build_repository.cache_clear()
         self.tmpdir.cleanup()
 
     def _metadata(self, hash_content: str, hash_file: str, **overrides) -> DocumentMetadata:
@@ -182,9 +181,8 @@ class AdapterSmokeTests(unittest.TestCase):
             encoding="utf-8",
         )
 
-        with patch("tools.shared.build_repository", return_value=self.repository):
-            browse_entries = browse._load_entries(str(self.runtime.paths.processed))
-            review_data, status = review.load_export_folder(str(self.runtime.paths.export))
+        browse_entries = browse._load_entries(str(self.runtime.paths.processed))
+        review_data, status = review.load_export_folder(str(self.runtime.paths.export))
 
         self.assertEqual(len(browse_entries), 1)
         self.assertEqual(browse_entries[0]["metadata"]["hash_file"], "file1111")
@@ -273,7 +271,7 @@ class AdapterSmokeTests(unittest.TestCase):
         statement_metadata = classify_bank_statement(statement_path, statement_hash)
         self.repository.save_document(statement_path, statement_metadata)
 
-        with patch("tools.shared.build_repository", return_value=self.repository):
+        with patch("tools.shared._load_profile", return_value=None):
             review_data, status = review.load_export_folder(str(export_dir))
 
         self.assertEqual(len(review_data["bank_statements"]), 1)
@@ -282,7 +280,6 @@ class AdapterSmokeTests(unittest.TestCase):
 
     def test_tools_shared_uses_active_profile_env(self):
         shared._load_profile.cache_clear()
-        shared.build_repository.cache_clear()
 
         with (
             patch.dict(os.environ, {"PAPERTRAIL_PROFILE": "work"}, clear=False),
@@ -316,6 +313,22 @@ class AdapterSmokeTests(unittest.TestCase):
                 shared.profile_setting("reconciliation", "default_currency", "EUR"),
                 "USD",
             )
+
+    def test_gmail_uses_typed_settings_and_credential_paths_only(self):
+        downloader = GmailDownloader(
+            credentials_path=self.root / "credentials.json",
+            token_path=self.root / "token.json",
+            output_dir=self.root / "gmail",
+            settings={"api_page_size": 75},
+        )
+
+        self.assertIsInstance(downloader.settings, GmailSettings)
+        self.assertEqual(downloader.settings.api_page_size, 75)
+        self.assertEqual(downloader.settings.api_service, "gmail")
+
+        with patch.dict(os.environ, {"PAPERTRAIL_HOME": str(self.root)}, clear=False):
+            paths = get_gmail_config_paths()
+        self.assertEqual(set(paths), {"credentials", "token"})
 
     def test_runtime_hard_fails_when_required_dependency_is_missing(self):
         real_import_module = importlib.import_module

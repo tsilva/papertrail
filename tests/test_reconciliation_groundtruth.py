@@ -4,6 +4,7 @@ import unittest
 from pathlib import Path
 
 from papertrail.reconciliation_groundtruth import (
+    document_hash_identity_matches,
     document_sets_match,
     groundtruth_path_for_document,
     load_groundtruth,
@@ -18,6 +19,20 @@ from papertrail.reconciliation_groundtruth import (
 
 
 class ReconciliationGroundtruthTests(unittest.TestCase):
+    def test_document_hash_identity_matches_either_persisted_hash(self):
+        self.assertTrue(
+            document_hash_identity_matches(
+                {"hash_file": "new-file", "hash_content": "same-content"},
+                {"hash_file": "old-file", "hash_content": "same-content"},
+            )
+        )
+        self.assertFalse(
+            document_hash_identity_matches(
+                {"hash_file": "new-file", "hash_content": "new-content"},
+                {"filename": "same-name.pdf"},
+            )
+        )
+
     def test_transaction_key_uses_transaction_facts_not_row_number(self):
         recon_a = {
             "matches": [

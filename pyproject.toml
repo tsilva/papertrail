@@ -42,6 +42,7 @@ papertrail = "main:app"
 include = [
     "main.py",
     "papertrail/**",
+    "tools/**",
 ]
 
 [tool.ruff]

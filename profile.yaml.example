@@ -92,41 +92,9 @@ dependencies:
   zbar_library_paths: []
 
 bank_statements:
-  formats:
-    millennium_bcp:
-      header_row: 8
-      data_start_row: 9
-      scan_columns: 7
-      expected_headers: ["data lancamento", "descricao", "montante"]
-      date_formats: ["%d/%m/%Y", "%d-%m-%Y"]
-      account_cell: [2, 3]
-      period_start_cell: [3, 3]
-      period_end_cell: [4, 3]
-      account_currency_separator: " - "
-      default_currency: "EUR"
-      issuer_party: "MillenniumBCP"
-      issuer_party_raw: "Millennium BCP"
-      max_columns: 7
-      description_column: 3
-      amount_column: 4
-      currency_column: 5
-      notes_column: 6
-      treated_column: 7
-      untreated_values: ["nao", "não", ""]
-    bpi:
-      header_row: 18
-      data_start_row: 19
-      scan_columns: 7
-      expected_headers: ["data mov.", "descricao do movimento", "valor em eur"]
-      date_formats: ["%d-%m-%Y", "%d/%m/%Y"]
-      account_cell: [7, 3]
-      account_currency_pattern: '([\d\-.]+)\s*\((\w+)\)'
-      default_currency: "EUR"
-      issuer_party: "BPI"
-      issuer_party_raw: "BPI"
-      max_columns: 4
-      description_column: 3
-      amount_column: 4
+  # Parsers supply complete defaults. Add only values that differ for your bank export.
+  # Example: {millennium_bcp: {header_row: 10}}
+  formats: {}
 
 nif_api:
   enabled: false
@@ -248,10 +216,8 @@ export:
     - target_type: "at-ss*"        # Social security payment proof
       attach_type: "bank-note"
 
-# Reconciliation policy. Use policy_files for profile-specific aliases, shared
-# period rules, line-item extractor settings, or rule overrides that should not
-# live in the codebase. Leave rules empty to use the built-in generic defaults,
-# or set rules here to replace them.
+# Reconciliation policy. Bundled generic defaults come from
+# papertrail/reconciliation_policy.yaml. Use sparse profile overrides for local policy.
 reconciliation:
   # Optional YAML files, resolved relative to this profile, merged before inline settings.
   # Example: ["reconciliation_policy.yaml"]
@@ -259,45 +225,5 @@ reconciliation:
   exclude_prefixes: ["EXC_"]
   include_builtin_rules: true
   include_builtin_line_item_extractors: true
-  rules: []
-  amount_tolerance: 0.01
-  date_window_days: 30
-  tax_number_default_country_prefix: "PT"
-  bank_export_prefix: "BNC_"
-  supporting_export_prefixes: ["CMP_", "DIV_"]
-  supporting_doc_type_patterns:
-    - "invoice"
-    - "receipt"
-    - "invoice-receipt"
-    - "invoice-credit"
-    - "invoice-debit"
-    - "invoice-order"
-    - "insurance-notice"
-    - "receipt-reference"
-    - "receipt-delivery"
-  bank_generated_doc_types:
-    - "bank-card-transaction"
-    - "bank-note"
-    - "bank-transfer"
-    - "bank-statement"
-    - "bank-investment"
-  statement_bank_scoped_doc_types:
-    - "bank-card-transaction"
-    - "bank-note"
-  # Add profile-specific bank aliases and counterparties here if you want
-  # reconciliation to scope bank-generated documents to their source bank.
-  statement_bank_issuer_aliases: {}
-  bank_counterparties: []
-  # Add profile-specific tax numbers or issuer aliases here.
-  # counterparty_aliases:
-  #   "YOUR_VENDOR_TAX_ID": "example-company"
-  counterparty_aliases: {}
-  shared_period_transaction_keywords: {}
-  shared_period_title_terms: {}
-  same_month_shared_rule_names: []
-  evidence_counterparty_categories: [supplier-payment, bank-fee]
-  evidence_counterparty_required_pattern: invoice
-  evidence_counterparty_skip_if_supplier_present_categories: [supplier-payment, bank-fee]
-  evidence_counterparty_amount_optional_categories: [bank-fee]
-  default_currency: "EUR"
-  llm_default_confidence: 0.5
+  # Any bundled key can be overridden inline, for example:
+  # amount_tolerance: 0.05

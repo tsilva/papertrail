@@ -3,7 +3,6 @@ from __future__ import annotations
 import argparse
 import base64
 import html as html_lib
-import importlib
 import os
 import socket
 import warnings
@@ -13,8 +12,8 @@ from pathlib import Path
 import fitz  # PyMuPDF
 
 from papertrail.config import ConfigError, load_profile
-from papertrail.repository import DocumentRepository
-from papertrail.runtime import runtime_from_profile
+from papertrail.repository import find_companion as find_companion
+from papertrail.repository import iter_document_sidecars
 
 
 @lru_cache(maxsize=8)
@@ -55,15 +54,6 @@ def profile_setting(section: str, name: str, default):
         return default
 
 
-@lru_cache(maxsize=8)
-def build_repository(profile_name: str) -> DocumentRepository | None:
-    profile = _load_profile(profile_name)
-    if profile is None or not profile.paths.processed:
-        return None
-    runtime = runtime_from_profile(profile, enable_client=False, probe_api=False)
-    return DocumentRepository(runtime)
-
-
 def _get_profile_dir(path_attr: str) -> str:
     profile = _load_profile(_active_profile_name())
     if profile is None:
@@ -85,26 +75,8 @@ def get_export_dir() -> str:
     return _get_profile_dir("export")
 
 
-def find_companion(json_path: Path, metadata: dict) -> Path | None:
-    repository = build_repository(_active_profile_name())
-    if repository is None:
-        return None
-    return repository.find_companion(json_path, metadata)
-
-
-def is_internal_path(path: Path) -> bool:
-    repository = build_repository(_active_profile_name())
-    if repository is None:
-        parts = path.parts
-        return any(part.startswith("_") or part == "logs" for part in parts)
-    return repository.is_internal_path(path)
-
-
 def iter_sidecars(root: Path):
-    repository = build_repository(_active_profile_name())
-    if repository is None:
-        return []
-    return repository.iter_sidecars(root)
+    return iter_document_sidecars(root)
 
 
 def placeholder_html(message: str) -> str:
@@ -236,19 +208,6 @@ def launch_blocks(
     argv: list[str] | None = None,
 ):
     return app.launch(css=css, js=js, **launch_kwargs_from_cli(argv))
-
-
-def launch_tool(initial_tab: str) -> None:
-    module_name = initial_tab.replace("-", "_")
-    module = importlib.import_module(f"tools.{module_name}")
-
-    css = "\n".join(
-        part for part in (FULLSCREEN_CSS, getattr(module, "_CSS", "")) if part
-    )
-    js = "\n".join(
-        part for part in (FULLSCREEN_JS, getattr(module, "_JS", "")) if part
-    )
-    launch_blocks(module.build_ui(), css=css, js=js, argv=[])
 
 
 FULLSCREEN_CSS = """

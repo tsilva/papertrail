@@ -14,7 +14,7 @@ import fitz  # PyMuPDF
 
 from papertrail.config import get_cache_dir
 from papertrail.logging_utils import get_logger
-from papertrail.reconciliation_groundtruth import is_reconciliation_sidecar
+from papertrail.repository import document_sidecar_paths, find_companion
 from papertrail.utils import load_yaml, save_yaml
 
 logger = get_logger('hashing')
@@ -204,20 +204,13 @@ def scan_directory(directory: Path) -> dict:
     Groups files by hash_content (primary) or hash_text (fallback).
     Each group has a `decision` field (initially None).
     """
-    json_files = sorted(directory.rglob("*.json"))
+    json_files = sorted(document_sidecar_paths(directory))
 
     file_records: list[dict] = []
     scanned = 0
     skipped_no_hash = 0
 
     for json_path in json_files:
-        if "/logs/" in str(json_path) or json_path.name.startswith("_"):
-            continue
-        if is_reconciliation_sidecar(json_path):
-            continue
-        if any(part.startswith("_dupes") for part in json_path.parts):
-            continue
-
         try:
             with open(json_path, "r", encoding="utf-8") as f:
                 data = json.load(f)
@@ -228,15 +221,8 @@ def scan_directory(directory: Path) -> dict:
 
         content_hash = data.get("hash_content")
         text_hash = data.get("hash_text")
+        companion = find_companion(json_path, data)
         if not text_hash:
-            ext = data.get("source_extension")
-            companion = json_path.with_suffix(ext) if ext else None
-            if companion is None or not companion.exists():
-                for fb_ext in (".pdf", ".xlsx"):
-                    candidate = json_path.with_suffix(fb_ext)
-                    if candidate.exists():
-                        companion = candidate
-                        break
             if companion and companion.suffix.lower() == ".pdf":
                 text_hash = hash_file_text(companion)
 
@@ -245,17 +231,8 @@ def scan_directory(directory: Path) -> dict:
             continue
 
         size_kb = data.get("file_size_kb")
-        if size_kb is None:
-            ext = data.get("source_extension")
-            companion = json_path.with_suffix(ext) if ext else None
-            if companion is None or not companion.exists():
-                for fb_ext in (".pdf", ".xlsx"):
-                    candidate = json_path.with_suffix(fb_ext)
-                    if candidate.exists():
-                        companion = candidate
-                        break
-            if companion and companion.exists():
-                size_kb = round(companion.stat().st_size / 1024)
+        if size_kb is None and companion:
+            size_kb = round(companion.stat().st_size / 1024)
 
         file_records.append({
             "json": json_path.name,

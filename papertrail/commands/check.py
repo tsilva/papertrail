@@ -10,7 +10,6 @@ from papertrail.engine import DocumentEngine
 from papertrail.hashing import hash_file_content, hash_file_fast
 from papertrail.logging_utils import get_logger, setup_task_logging
 from papertrail.pdf import get_page_count
-from papertrail.reconciliation_groundtruth import is_reconciliation_sidecar
 from papertrail.repository import DocumentRepository
 from papertrail.runtime import Runtime
 
@@ -216,12 +215,8 @@ def _header(title: str) -> None:
     print(f"\n{'=' * 60}\n  {title}\n{'=' * 60}")
 
 
-def _is_sidecar(path: Path) -> bool:
-    return is_reconciliation_sidecar(path)
-
-
 def _load_all_metadata(repository: DocumentRepository, processed_path: Path) -> list[tuple[Path, dict]]:
-    return [(path, data) for path, data in repository.iter_sidecars(processed_path) if not _is_sidecar(path)]
+    return list(repository.iter_sidecars(processed_path))
 
 
 def _section_unknown(records, total):

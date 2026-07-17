@@ -10,6 +10,7 @@ from typing import TypedDict
 
 import openai
 
+from papertrail.config import ClassificationSettings
 from papertrail.logging_utils import get_logger
 from papertrail.models import DocumentMetadataRaw
 from papertrail.qr.models import QRExtractedMetadata
@@ -219,20 +220,16 @@ def get_system_prompt_classify(
     known_issuing_parties: list[str],
     pre_extracted: QRPreExtractedFields | None = None,
     multi_qr_info: MultiQRInfo | None = None,
-    classification_settings=None,
+    *,
+    classification_settings: ClassificationSettings,
 ) -> str:
     """Build the single-call document classification prompt."""
-    document_type_rules = list(getattr(classification_settings, "prompt_document_type_rules", []) or [])
-    issuing_party_rules = list(getattr(classification_settings, "prompt_issuing_party_rules", []) or [])
-    legal_suffixes = sorted(_legal_suffixes(getattr(classification_settings, "legal_suffixes", None)))
+    document_type_rules = list(classification_settings.prompt_document_type_rules or [])
+    issuing_party_rules = list(classification_settings.prompt_issuing_party_rules or [])
+    legal_suffixes = sorted(_legal_suffixes(classification_settings.legal_suffixes))
     legal_suffix_text = ", ".join(legal_suffixes)
-    issuer_tax_number_rule = getattr(
-        classification_settings,
-        "issuer_tax_number_prefix_rule",
-        "Include country prefix when visible (e.g., DETESTOWNER). "
-        "Omit prefix only for Portuguese documents where no prefix is shown. Null if the issuer tax number is not visible.",
-    )
-    title_max_chars = int(getattr(classification_settings, "document_title_max_chars", 60) or 60)
+    issuer_tax_number_rule = classification_settings.issuer_tax_number_prefix_rule
+    title_max_chars = int(classification_settings.document_title_max_chars or 60)
     document_type_rule_text = "".join(f"- {rule}\n" for rule in document_type_rules)
     issuing_party_rule_text = "".join(f"- {rule}\n" for rule in issuing_party_rules)
     prompt = (

@@ -22,10 +22,6 @@ from papertrail.logging_utils import get_logger, setup_failure_logger
 
 logger = get_logger("gmail")
 
-def _default_settings() -> dict:
-    return GmailSettings().model_dump()
-
-
 def _slugify(text: str, *, max_chars: int = 80) -> str:
     text = unicodedata.normalize("NFKD", text)
     text = text.encode("ascii", "ignore").decode("ascii").lower()
@@ -35,18 +31,6 @@ def _slugify(text: str, *, max_chars: int = 80) -> str:
     return text[:max_chars] or "no-subject"
 
 
-def _settings_to_dict(settings: GmailSettings | dict | None) -> dict:
-    if settings is None:
-        return _default_settings()
-    if isinstance(settings, GmailSettings):
-        data = settings.model_dump()
-    else:
-        data = dict(settings)
-    merged = _default_settings()
-    merged.update({key: value for key, value in data.items() if value is not None})
-    return merged
-
-
 class GmailDownloader:
     """Download email attachments from Gmail."""
 
@@ -54,7 +38,6 @@ class GmailDownloader:
         self,
         credentials_path: Path,
         token_path: Path,
-        settings_path: Path,
         output_dir: Path,
         *,
         tracking_dir: Optional[Path] = None,
@@ -63,25 +46,20 @@ class GmailDownloader:
     ) -> None:
         self.credentials_path = Path(credentials_path)
         self.token_path = Path(token_path)
-        self.settings_path = Path(settings_path)
         self.output_dir = Path(output_dir)
         self.tracking_dir = Path(tracking_dir) if tracking_dir else self.output_dir
-        self.settings = self._load_settings(settings)
+        self.settings = (
+            settings
+            if isinstance(settings, GmailSettings)
+            else GmailSettings.model_validate(settings or {})
+        )
         self.console = console
         self.service = None
         self.failure_logger = None
 
-    def _load_settings(self, settings: GmailSettings | dict | None) -> dict:
-        if settings is not None:
-            return _settings_to_dict(settings)
-        if self.settings_path.exists():
-            with open(self.settings_path, "r", encoding="utf-8") as handle:
-                return _settings_to_dict(json.load(handle))
-        return _default_settings()
-
     def authenticate(self) -> bool:
         creds = None
-        scopes = list(self.settings.get("scopes") or GmailSettings().scopes)
+        scopes = list(self.settings.scopes)
         if self.token_path.exists():
             creds = Credentials.from_authorized_user_file(str(self.token_path), scopes)
 
@@ -101,8 +79,8 @@ class GmailDownloader:
                 token_file.write(creds.to_json())
 
         self.service = build(
-            str(self.settings.get("api_service") or "gmail"),
-            str(self.settings.get("api_version") or "v1"),
+            self.settings.api_service,
+            self.settings.api_version,
             credentials=creds,
         )
         return True
@@ -111,15 +89,15 @@ class GmailDownloader:
         start_str = start_date.strftime("%Y/%m/%d")
         end_str = (end_date + timedelta(days=1)).strftime("%Y/%m/%d")
         query = f"has:attachment after:{start_str} before:{end_str}"
-        if self.settings.get("label_filter"):
-            query += f" label:{self.settings['label_filter']}"
+        if self.settings.label_filter:
+            query += f" label:{self.settings.label_filter}"
         return query
 
     def list_messages(self, query: str) -> list[dict]:
         messages = []
         page_token = None
-        max_results = self.settings.get("max_results_per_query", 500)
-        api_page_size = int(self.settings.get("api_page_size") or 100)
+        max_results = self.settings.max_results_per_query
+        api_page_size = self.settings.api_page_size
 
         while True:
             result = (
@@ -155,10 +133,10 @@ class GmailDownloader:
                 attachments.extend(self._extract_attachments_from_parts(part["parts"], allowed_types))
 
             if attachment_id and filename and mime_type not in allowed_types:
-                generic_mime_types = set(self.settings.get("generic_mime_types") or [])
+                generic_mime_types = set(self.settings.generic_mime_types)
                 if mime_type in generic_mime_types:
                     ext = Path(filename).suffix.lower()
-                    resolved_mime = dict(self.settings.get("extension_mime_types") or {}).get(ext)
+                    resolved_mime = self.settings.extension_mime_types.get(ext)
                     if resolved_mime and resolved_mime in allowed_types:
                         mime_type = resolved_mime
                         logger.info(f"[GMAIL] Accepted '{filename}' by extension ({ext} -> {resolved_mime})")
@@ -181,7 +159,7 @@ class GmailDownloader:
         return attachments
 
     def extract_attachments(self, message: dict) -> list[dict]:
-        allowed_types = set(self.settings.get("attachment_mime_types", ["application/pdf"]))
+        allowed_types = set(self.settings.attachment_mime_types)
         payload = message.get("payload", {})
         parts = payload.get("parts", [])
         if not parts and payload.get("body", {}).get("attachmentId"):
@@ -198,7 +176,7 @@ class GmailDownloader:
         else:
             date_str = "unknown-date"
         subject = headers.get("subject", "")
-        max_chars = int(self.settings.get("subject_slug_max_chars") or 80)
+        max_chars = self.settings.subject_slug_max_chars
         subject_slug = _slugify(subject, max_chars=max_chars) if subject else "no-subject"
         return self.output_dir / f"{date_str} - {subject_slug}"
 
@@ -215,7 +193,7 @@ class GmailDownloader:
         target_path = base_dir / filename
 
         # If the file is already present, reuse it instead of creating a duplicate.
-        if self.settings.get("skip_already_downloaded", True) and target_path.exists():
+        if self.settings.skip_already_downloaded and target_path.exists():
             return target_path, True
 
         try:
@@ -293,7 +271,7 @@ class GmailDownloader:
             return stats
 
         processed_ids = set()
-        if self.settings.get("skip_already_downloaded", True):
+        if self.settings.skip_already_downloaded:
             processed_ids = self.load_processed_messages()
             if processed_ids:
                 logger.info(f"Already processed: {len(processed_ids)} messages")
@@ -347,20 +325,17 @@ def download_gmail_attachments(
     tracking_dir: Optional[Path] = None,
     credentials_path: Path | None = None,
     token_path: Path | None = None,
-    settings_path: Path | None = None,
     settings: GmailSettings | dict | None = None,
     console: PapertrailConsole | None = None,
 ) -> dict:
-    if credentials_path is None or token_path is None or settings_path is None:
+    if credentials_path is None or token_path is None:
         paths = get_gmail_config_paths()
         credentials_path = credentials_path or paths["credentials"]
         token_path = token_path or paths["token"]
-        settings_path = settings_path or paths["settings"]
 
     downloader = GmailDownloader(
         credentials_path=credentials_path,
         token_path=token_path,
-        settings_path=settings_path,
         output_dir=output_dir,
         tracking_dir=tracking_dir,
         settings=settings,

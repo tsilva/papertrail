@@ -1,8 +1,8 @@
-import unittest
 import sys
 import tempfile
-from types import ModuleType, SimpleNamespace
+import unittest
 from pathlib import Path
+from types import ModuleType, SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 from typer.testing import CliRunner
@@ -29,7 +29,7 @@ _stub_module("googleapiclient.discovery", build=MagicMock())
 _stub_module("googleapiclient.errors", HttpError=Exception)
 _stub_module("mbox_extractor", extract_mbox=MagicMock())
 
-import main as cli_main
+import main as cli_main  # noqa: E402
 
 
 class CliTests(unittest.TestCase):
@@ -58,7 +58,11 @@ class CliTests(unittest.TestCase):
         self.assertIn("Usage:", result.stdout)
 
     def test_bare_command_runs_default_pipeline_when_api_is_available(self):
-        runtime = SimpleNamespace(api_accessible=True, console=MagicMock())
+        runtime = SimpleNamespace(
+            api_accessible=True,
+            console=MagicMock(),
+            profile=SimpleNamespace(workflow=SimpleNamespace(default_months=2)),
+        )
 
         with (
             patch("main.create_runtime", return_value=runtime),
@@ -67,18 +71,70 @@ class CliTests(unittest.TestCase):
             result = self.runner.invoke(cli_main.app, [])
 
         self.assertEqual(result.exit_code, 0)
-        pipeline_mock.assert_called_once()
+        pipeline_mock.assert_called_once_with(
+            runtime,
+            months=2,
+            export_date=None,
+        )
+
+    def test_pipeline_creates_runtime_once_with_root_options(self):
+        runtime = SimpleNamespace(
+            profile=SimpleNamespace(workflow=SimpleNamespace(default_months=3))
+        )
+
+        with (
+            patch("main.create_runtime", return_value=runtime) as create_runtime_mock,
+            patch("main.commands.pipeline") as pipeline_mock,
+        ):
+            result = self.runner.invoke(
+                cli_main.app,
+                ["--profile", "default", "--verbose", "pipeline"],
+            )
+
+        self.assertEqual(result.exit_code, 0)
+        create_runtime_mock.assert_called_once_with(
+            profile_name="default",
+            verbose=True,
+            enable_client=True,
+            probe_api=True,
+        )
+        pipeline_mock.assert_called_once_with(
+            runtime,
+            months=3,
+            export_date_arg=None,
+        )
+
+    def test_pipeline_creates_runtime_once_with_subcommand_options(self):
+        runtime = SimpleNamespace(
+            profile=SimpleNamespace(workflow=SimpleNamespace(default_months=3))
+        )
+
+        with (
+            patch("main.create_runtime", return_value=runtime) as create_runtime_mock,
+            patch("main.commands.pipeline"),
+        ):
+            result = self.runner.invoke(
+                cli_main.app,
+                ["pipeline", "--profile", "default", "--verbose"],
+            )
+
+        self.assertEqual(result.exit_code, 0)
+        create_runtime_mock.assert_called_once_with(
+            profile_name="default",
+            verbose=True,
+            enable_client=True,
+            probe_api=True,
+        )
 
     def test_review_command_dispatches_to_command_layer(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             export_dir = Path(tmpdir)
             runtime = SimpleNamespace(
-                profile=SimpleNamespace(
-                    paths=SimpleNamespace(
-                        raw=[str(export_dir)],
-                        processed=str(export_dir),
-                        export=str(export_dir),
-                    )
+                profile=SimpleNamespace(),
+                paths=SimpleNamespace(
+                    raw=[export_dir],
+                    processed=export_dir,
+                    export=export_dir,
                 ),
                 console=MagicMock(),
             )
@@ -96,12 +152,11 @@ class CliTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmpdir:
             export_dir = Path(tmpdir)
             runtime = SimpleNamespace(
-                profile=SimpleNamespace(
-                    paths=SimpleNamespace(
-                        raw=[str(export_dir)],
-                        processed=str(export_dir),
-                        export=str(export_dir),
-                    )
+                profile=SimpleNamespace(),
+                paths=SimpleNamespace(
+                    raw=[export_dir],
+                    processed=export_dir,
+                    export=export_dir,
                 ),
                 console=MagicMock(),
             )
@@ -125,12 +180,11 @@ class CliTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmpdir:
             export_dir = Path(tmpdir)
             runtime = SimpleNamespace(
-                profile=SimpleNamespace(
-                    paths=SimpleNamespace(
-                        raw=[str(export_dir)],
-                        processed=str(export_dir),
-                        export=str(export_dir),
-                    )
+                profile=SimpleNamespace(),
+                paths=SimpleNamespace(
+                    raw=[export_dir],
+                    processed=export_dir,
+                    export=export_dir,
                 ),
                 console=MagicMock(),
             )
@@ -156,12 +210,11 @@ class CliTests(unittest.TestCase):
             month_dir = export_root / "2026-04"
             month_dir.mkdir()
             runtime = SimpleNamespace(
-                profile=SimpleNamespace(
-                    paths=SimpleNamespace(
-                        raw=[str(export_root)],
-                        processed=str(export_root),
-                        export=str(export_root),
-                    )
+                profile=SimpleNamespace(),
+                paths=SimpleNamespace(
+                    raw=[export_root],
+                    processed=export_root,
+                    export=export_root,
                 ),
                 console=MagicMock(),
             )

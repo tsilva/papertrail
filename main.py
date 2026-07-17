@@ -40,105 +40,55 @@ def _resolve_runtime(
     enable_client: bool = True,
     probe_api: bool = True,
 ) -> Runtime:
-    """Create or reuse runtime using root or subcommand overrides."""
-    state = dict(ctx.obj or {})
+    """Create a runtime using root or subcommand overrides."""
+    state = ctx.obj or {}
     selected_profile = profile or state.get("profile")
     selected_verbose = bool(state.get("verbose")) or verbose
 
-    runtime = state.get("runtime")
-    runtime_profile = state.get("runtime_profile")
-    runtime_verbose = state.get("runtime_verbose")
-    runtime_enable_client = state.get("runtime_enable_client", True)
-    runtime_probe_api = state.get("runtime_probe_api", True)
-    if (
-        runtime is None
-        or runtime_profile != selected_profile
-        or runtime_verbose != selected_verbose
-        or runtime_enable_client != enable_client
-        or runtime_probe_api != probe_api
-    ):
-        try:
-            runtime = create_runtime(
-                profile_name=selected_profile,
-                verbose=selected_verbose,
-                enable_client=enable_client,
-                probe_api=probe_api,
-            )
-        except (ProfileNotFoundError, ConfigError) as e:
-            _fail(str(e))
-        state["runtime"] = runtime
-        state["runtime_profile"] = selected_profile
-        state["runtime_verbose"] = selected_verbose
-        state["runtime_enable_client"] = enable_client
-        state["runtime_probe_api"] = probe_api
-
-    state["profile"] = selected_profile
-    state["verbose"] = selected_verbose
-    ctx.obj = state
-    return runtime
+    try:
+        return create_runtime(
+            profile_name=selected_profile,
+            verbose=selected_verbose,
+            enable_client=enable_client,
+            probe_api=probe_api,
+        )
+    except (ProfileNotFoundError, ConfigError) as e:
+        _fail(str(e))
 
 
-def _profile_path(runtime: Runtime | None, name: str) -> Optional[str]:
-    """Get a named path ('processed', 'raw', 'export') from the current profile."""
-    profile = runtime.profile if runtime else None
-    if not profile:
-        return None
-    paths = profile.paths
-    return {
-        "processed": paths.processed,
-        "raw": paths.raw[0] if paths.raw else None,
-        "export": paths.export,
-    }.get(name)
-
-
-def _resolve_processed(runtime: Runtime | None, processed_path: Optional[str] = None) -> Path:
+def _resolve_processed(runtime: Runtime, processed_path: Optional[str] = None) -> Path:
     """Resolve processed_path from argument or profile, create if needed."""
-    path_str = processed_path or _profile_path(runtime, "processed")
-    if not path_str:
+    path = Path(processed_path) if processed_path else runtime.paths.processed
+    if path is None:
         _fail("processed_path is required.")
-    p = Path(path_str)
-    p.mkdir(parents=True, exist_ok=True)
-    return p
+    path.mkdir(parents=True, exist_ok=True)
+    return path
 
 
-def _resolve_dir(path_str: Optional[str], name: str, create: bool = False) -> Path:
+def _resolve_dir(path_value: str | Path | None, name: str, create: bool = False) -> Path:
     """Validate a directory path exists, or fail."""
-    if not path_str:
+    if not path_value:
         _fail(f"the {name} argument is required.")
-    p = Path(path_str)
+    p = Path(path_value)
     if create:
         p.mkdir(parents=True, exist_ok=True)
     if not p.is_dir():
-        _fail(f"'{path_str}' is not a valid directory.")
+        _fail(f"'{path_value}' is not a valid directory.")
     return p
 
 
-def _default_months(runtime: Runtime, section: str = "workflow") -> int:
-    profile = getattr(runtime, "profile", None)
-    if profile is None:
-        return 2
-    settings = getattr(profile, section, None)
-    value = getattr(settings, "default_months", None)
-    if value is None:
-        workflow = getattr(profile, "workflow", None)
-        value = getattr(workflow, "default_months", 2)
-    return int(value or 2)
-
-
 def _run_pipeline(
-    ctx: typer.Context,
+    runtime: Runtime,
     *,
     months: int,
     export_date: Optional[str],
-    profile: Optional[str] = None,
-    verbose: bool = False,
 ):
     if months < 1:
         _fail("--months must be >= 1.")
     if export_date and not re.match(r"^\d{4}-\d{2}$", export_date):
         _fail("--export_date must be in YYYY-MM format.")
     commands.pipeline(
-        _resolve_runtime(ctx, profile=profile, verbose=verbose),
+        runtime,
         months=months,
         export_date_arg=export_date,
     )
@@ -170,11 +120,9 @@ def main(
             typer.echo(ctx.get_help())
             return
         _run_pipeline(
-            ctx,
-            months=_default_months(runtime),
+            runtime,
+            months=int(runtime.profile.workflow.default_months or 2),
             export_date=None,
-            profile=profile,
-            verbose=verbose,
         )
 
 
@@ -192,11 +140,9 @@ def pipeline_cmd(
     """Full end-to-end workflow (default)."""
     runtime = _resolve_runtime(ctx, profile=profile, verbose=verbose)
     _run_pipeline(
-        ctx,
-        months=months or _default_months(runtime),
+        runtime,
+        months=months or int(runtime.profile.workflow.default_months or 2),
         export_date=export_date,
-        profile=profile,
-        verbose=verbose,
     )
 
 
@@ -212,9 +158,7 @@ def extract(
     runtime = _resolve_runtime(ctx, profile=profile, verbose=verbose)
     pp = _resolve_processed(runtime, processed_path)
     if not raw_path:
-        profile = runtime.profile
-        if profile and profile.paths.raw:
-            raw_path = ";".join(profile.paths.raw)
+        raw_path = ";".join(str(path) for path in runtime.paths.raw)
     if not raw_path:
         _fail("--raw_path is required for extract.")
     raw_paths = [_resolve_dir(p, "raw_path") for p in raw_path.split(";") if p]
@@ -242,7 +186,7 @@ def sync(
 ):
     """Sync metadata."""
     runtime = _resolve_runtime(ctx, profile=profile, verbose=verbose)
-    resolved_workers = workers or int(getattr(runtime.profile.workflow, "sync_workers", 1) or 1)
+    resolved_workers = workers or int(runtime.profile.workflow.sync_workers or 1)
     commands.sync(
         runtime,
         _resolve_processed(runtime, processed_path),
@@ -265,7 +209,7 @@ def reconcile(
 ):
     """Reconcile bank transactions against documents."""
     runtime = _resolve_runtime(ctx, profile=profile, verbose=verbose)
-    export = _resolve_dir(export_path or _profile_path(runtime, "export"), "export_path")
+    export = _resolve_dir(export_path or runtime.paths.export, "export_path")
     excel = Path(excel_path) if excel_path else None
     commands.reconcile(runtime, export, excel_path=excel, dry_run=dry_run)
 
@@ -279,7 +223,7 @@ def review(
 ):
     """Launch the review UI for existing reconciliation sidecars."""
     runtime = _resolve_runtime(ctx, profile=profile, verbose=verbose)
-    export = _resolve_dir(export_path or _profile_path(runtime, "export"), "export_path")
+    export = _resolve_dir(export_path or runtime.paths.export, "export_path")
     commands.review(runtime, export)
 
 
@@ -305,7 +249,7 @@ def regression(
         enable_client=False,
         probe_api=False,
     )
-    export_root = export_path or _profile_path(runtime, "export")
+    export_root = Path(export_path) if export_path else runtime.paths.export
     if not export_root:
         _fail("export_path is required.")
     export_base = Path(export_root)
@@ -346,7 +290,7 @@ def gmail(
 ):
     """Download email attachments from Gmail."""
     runtime = _resolve_runtime(ctx, profile=profile, verbose=verbose)
-    resolved_months = months or _default_months(runtime, "gmail")
+    resolved_months = months or int(runtime.profile.gmail.default_months or 2)
     if resolved_months < 1:
         _fail("--months must be >= 1.")
     try:
@@ -431,22 +375,9 @@ def export_dates(
     """Export files by date range."""
     runtime = _resolve_runtime(ctx, profile=profile, verbose=verbose)
     pp = _resolve_processed(runtime, processed_path)
-    profile = runtime.profile
-    export_base = (
-        base_dir or (profile.paths.export if profile else None) or os.getenv("EXPORT_FILES_DIR")
-    )
+    export_base = base_dir or runtime.paths.export or os.getenv("EXPORT_FILES_DIR")
     export_dir = _resolve_dir(export_base, "base_dir", create=True)
-    profile_context = None
-    if profile and profile.profile.tax_number:
-        profile_context = {"tax_number": profile.profile.tax_number}
-    commands.export_dates(
-        runtime,
-        pp,
-        export_dir,
-        run_merge,
-        export_config=profile.export if profile else None,
-        profile_context=profile_context,
-    )
+    commands.export_dates(runtime, pp, export_dir, run_merge)
 
 
 @export_app.command("copy")

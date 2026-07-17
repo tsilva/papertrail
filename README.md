@@ -43,7 +43,7 @@ papertrail --profile personal gmail --months 2                 # download Gmail 
 papertrail --profile personal export excel --output /tmp/docs.xlsx
 papertrail --profile personal export dates --base-dir /tmp/export
 papertrail --profile personal export copy --pattern 2026-01 --dest /tmp/january
-.venv/bin/python -m pytest -q                                  # run tests
+uv run --frozen --extra dev pytest -q                          # run tests
 make regression-golden PROFILE=personal                         # run golden reconciliation months
 ```
 
