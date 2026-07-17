@@ -9,7 +9,7 @@ from copy import deepcopy
 from pathlib import Path
 
 import openai
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from papertrail.document_types import DEFAULT_DOCUMENT_TYPE_OVERRIDES
 from papertrail.qr.models import (
@@ -17,33 +17,6 @@ from papertrail.qr.models import (
     DEFAULT_QR_COUNTRY_CODE,
     DEFAULT_QR_CURRENCY,
     DEFAULT_QR_CURRENCY_BY_COUNTRY,
-)
-from papertrail.reconciliation_defaults import (
-    DEFAULT_AMOUNT_TOLERANCE,
-    DEFAULT_BANK_COUNTERPARTIES,
-    DEFAULT_BANK_EXPORT_PREFIX,
-    DEFAULT_BANK_GENERATED_DOC_TYPES,
-    DEFAULT_DATE_WINDOW_DAYS,
-    DEFAULT_DOCUMENT_FAMILIES,
-    DEFAULT_EVIDENCE_COUNTERPARTY_AMOUNT_OPTIONAL_CATEGORIES,
-    DEFAULT_EVIDENCE_COUNTERPARTY_CATEGORIES,
-    DEFAULT_EVIDENCE_COUNTERPARTY_REQUIRED_PATTERN,
-    DEFAULT_EVIDENCE_COUNTERPARTY_SKIP_IF_SUPPLIER_PRESENT_CATEGORIES,
-    DEFAULT_LLM_MATCH_CONFIDENCE,
-    DEFAULT_RECONCILIATION_CURRENCY,
-    DEFAULT_SAME_MONTH_SHARED_RULE_NAMES,
-    DEFAULT_SHARED_PERIOD_BANK_ANCHOR_ERROR_EXEMPT_RULE_NAMES,
-    DEFAULT_SHARED_PERIOD_LINK_CATEGORIES,
-    DEFAULT_SHARED_PERIOD_SUPPLIER_EVIDENCE_ERROR_EXEMPT_RULE_NAMES,
-    DEFAULT_SHARED_PERIOD_TITLE_TERMS,
-    DEFAULT_SHARED_PERIOD_TRANSACTION_KEYWORDS,
-    DEFAULT_STATEMENT_BANK_ISSUER_ALIASES,
-    DEFAULT_STATEMENT_BANK_SCOPED_DOC_TYPES,
-    DEFAULT_STRICT_STATEMENT_BANKS,
-    DEFAULT_SUPPORTING_DOC_TYPE_PATTERNS,
-    DEFAULT_SUPPORTING_EXPORT_PREFIXES,
-    DEFAULT_SUPPORTING_PAIR_EXEMPT_STATEMENT_BANKS,
-    DEFAULT_TAX_NUMBER_DEFAULT_COUNTRY_PREFIX,
 )
 
 try:
@@ -62,6 +35,25 @@ class ProfileNotFoundError(ConfigError):
 
 class ProfileParseError(ConfigError):
     """Raised when a profile file cannot be parsed."""
+
+
+def _load_bundled_reconciliation_policy() -> dict[str, object]:
+    policy_path = Path(__file__).with_name("reconciliation_policy.yaml")
+    if yaml is None:
+        raise ConfigError("PyYAML is not installed.")
+    try:
+        with open(policy_path, "r", encoding="utf-8") as handle:
+            data = yaml.safe_load(handle)
+    except (OSError, yaml.YAMLError) as exc:
+        raise ConfigError(
+            f"Could not load bundled reconciliation policy at {policy_path}: {exc}"
+        ) from exc
+    if not isinstance(data, dict):
+        raise ConfigError(f"Bundled reconciliation policy at {policy_path} must be a YAML mapping")
+    return data
+
+
+_BUNDLED_RECONCILIATION_POLICY = _load_bundled_reconciliation_policy()
 
 
 class SettingsModel(BaseModel):
@@ -370,84 +362,49 @@ class ReconciliationRule(SettingsModel):
 
 
 class ReconciliationSettings(SettingsModel):
+    @model_validator(mode="before")
+    @classmethod
+    def _merge_bundled_policy(cls, value: object) -> dict[str, object]:
+        overlay = dict(value) if isinstance(value, dict) else {}
+        base = _BUNDLED_RECONCILIATION_POLICY
+        if overlay.get("include_builtin_line_item_extractors") is False:
+            base = {**base, "line_item_extractors": {}}
+        return _merge_reconciliation_policy_data(base, overlay)
+
     policy_files: list[str] = Field(default_factory=list)
     exclude_prefixes: list[str] = Field(default_factory=list)
     rules: list[ReconciliationRule] = Field(default_factory=list)
     include_builtin_rules: bool = True
-    amount_tolerance: float = DEFAULT_AMOUNT_TOLERANCE
-    date_window_days: int = DEFAULT_DATE_WINDOW_DAYS
-    tax_number_default_country_prefix: str = DEFAULT_TAX_NUMBER_DEFAULT_COUNTRY_PREFIX
-    bank_generated_doc_types: list[str] = Field(
-        default_factory=lambda: list(DEFAULT_BANK_GENERATED_DOC_TYPES)
-    )
-    statement_bank_scoped_doc_types: list[str] = Field(
-        default_factory=lambda: list(DEFAULT_STATEMENT_BANK_SCOPED_DOC_TYPES)
-    )
-    statement_bank_issuer_aliases: dict[str, str] = Field(
-        default_factory=lambda: dict(DEFAULT_STATEMENT_BANK_ISSUER_ALIASES)
-    )
-    bank_export_prefix: str = DEFAULT_BANK_EXPORT_PREFIX
-    supporting_export_prefixes: list[str] = Field(
-        default_factory=lambda: list(DEFAULT_SUPPORTING_EXPORT_PREFIXES)
-    )
-    supporting_doc_type_patterns: list[str] = Field(
-        default_factory=lambda: list(DEFAULT_SUPPORTING_DOC_TYPE_PATTERNS)
-    )
-    document_families: dict[str, dict[str, object]] = Field(
-        default_factory=lambda: {
-            family: dict(settings)
-            for family, settings in DEFAULT_DOCUMENT_FAMILIES.items()
-            if isinstance(settings, dict)
-        }
-    )
-    bank_counterparties: list[str] = Field(
-        default_factory=lambda: list(DEFAULT_BANK_COUNTERPARTIES)
-    )
+    amount_tolerance: float = 0.01
+    date_window_days: int = 30
+    tax_number_default_country_prefix: str = "PT"
+    bank_generated_doc_types: list[str] = Field(default_factory=list)
+    statement_bank_scoped_doc_types: list[str] = Field(default_factory=list)
+    statement_bank_issuer_aliases: dict[str, str] = Field(default_factory=dict)
+    bank_export_prefix: str = "BNC_"
+    supporting_export_prefixes: list[str] = Field(default_factory=list)
+    supporting_doc_type_patterns: list[str] = Field(default_factory=list)
+    document_families: dict[str, dict[str, object]] = Field(default_factory=dict)
+    bank_counterparties: list[str] = Field(default_factory=list)
     counterparty_aliases: dict[str, str] = Field(default_factory=dict)
-    shared_period_transaction_keywords: dict[str, list[str]] = Field(
-        default_factory=lambda: {
-            party: list(keywords)
-            for party, keywords in DEFAULT_SHARED_PERIOD_TRANSACTION_KEYWORDS.items()
-        }
-    )
-    shared_period_title_terms: dict[str, list[str]] = Field(
-        default_factory=lambda: {
-            party: list(terms)
-            for party, terms in DEFAULT_SHARED_PERIOD_TITLE_TERMS.items()
-        }
-    )
-    same_month_shared_rule_names: list[str] = Field(
-        default_factory=lambda: list(DEFAULT_SAME_MONTH_SHARED_RULE_NAMES)
-    )
-    strict_statement_banks: list[str] = Field(
-        default_factory=lambda: list(DEFAULT_STRICT_STATEMENT_BANKS)
-    )
-    supporting_pair_exempt_statement_banks: list[str] = Field(
-        default_factory=lambda: list(DEFAULT_SUPPORTING_PAIR_EXEMPT_STATEMENT_BANKS)
-    )
-    shared_period_link_categories: list[str] = Field(
-        default_factory=lambda: list(DEFAULT_SHARED_PERIOD_LINK_CATEGORIES)
-    )
+    shared_period_transaction_keywords: dict[str, list[str]] = Field(default_factory=dict)
+    shared_period_title_terms: dict[str, list[str]] = Field(default_factory=dict)
+    same_month_shared_rule_names: list[str] = Field(default_factory=list)
+    strict_statement_banks: list[str] = Field(default_factory=list)
+    supporting_pair_exempt_statement_banks: list[str] = Field(default_factory=list)
+    shared_period_link_categories: list[str] = Field(default_factory=list)
     shared_period_supplier_evidence_error_exempt_rule_names: list[str] = Field(
-        default_factory=lambda: list(DEFAULT_SHARED_PERIOD_SUPPLIER_EVIDENCE_ERROR_EXEMPT_RULE_NAMES)
+        default_factory=list
     )
-    shared_period_bank_anchor_error_exempt_rule_names: list[str] = Field(
-        default_factory=lambda: list(DEFAULT_SHARED_PERIOD_BANK_ANCHOR_ERROR_EXEMPT_RULE_NAMES)
-    )
-    evidence_counterparty_categories: list[str] = Field(
-        default_factory=lambda: list(DEFAULT_EVIDENCE_COUNTERPARTY_CATEGORIES)
-    )
-    evidence_counterparty_required_pattern: str = DEFAULT_EVIDENCE_COUNTERPARTY_REQUIRED_PATTERN
+    shared_period_bank_anchor_error_exempt_rule_names: list[str] = Field(default_factory=list)
+    evidence_counterparty_categories: list[str] = Field(default_factory=list)
+    evidence_counterparty_required_pattern: str = "invoice"
     evidence_counterparty_skip_if_supplier_present_categories: list[str] = Field(
-        default_factory=lambda: list(
-            DEFAULT_EVIDENCE_COUNTERPARTY_SKIP_IF_SUPPLIER_PRESENT_CATEGORIES
-        )
+        default_factory=list
     )
-    evidence_counterparty_amount_optional_categories: list[str] = Field(
-        default_factory=lambda: list(DEFAULT_EVIDENCE_COUNTERPARTY_AMOUNT_OPTIONAL_CATEGORIES)
-    )
-    default_currency: str = DEFAULT_RECONCILIATION_CURRENCY
-    llm_default_confidence: float = DEFAULT_LLM_MATCH_CONFIDENCE
+    evidence_counterparty_amount_optional_categories: list[str] = Field(default_factory=list)
+    default_currency: str = "EUR"
+    llm_default_confidence: float = 0.5
     line_item_category_aliases: dict[str, dict[str, object]] = Field(default_factory=dict)
     include_builtin_line_item_extractors: bool = True
     line_item_extractors: dict[str, dict[str, object]] = Field(default_factory=dict)
@@ -526,6 +483,40 @@ def _deep_merge(base: dict[str, object], overlay: dict[str, object]) -> dict[str
     return merged
 
 
+_ADDITIVE_RECONCILIATION_MAPS = {
+    "document_families",
+    "line_item_category_aliases",
+    "line_item_extractors",
+}
+
+
+def _merge_reconciliation_policy_data(
+    base: dict[str, object],
+    overlay: dict[str, object],
+) -> dict[str, object]:
+    """Merge a policy overlay while extending list values in structured maps."""
+    merged = _deep_merge(base, overlay)
+    for map_name in _ADDITIVE_RECONCILIATION_MAPS:
+        base_map = base.get(map_name)
+        overlay_map = overlay.get(map_name)
+        merged_map = merged.get(map_name)
+        if not all(isinstance(value, dict) for value in (base_map, overlay_map, merged_map)):
+            continue
+        for item_name, overlay_settings in overlay_map.items():
+            base_settings = base_map.get(item_name)
+            merged_settings = merged_map.get(item_name)
+            if not all(
+                isinstance(value, dict)
+                for value in (base_settings, overlay_settings, merged_settings)
+            ):
+                continue
+            for key, overlay_value in overlay_settings.items():
+                base_value = base_settings.get(key)
+                if isinstance(base_value, list) and isinstance(overlay_value, list):
+                    merged_settings[key] = list(dict.fromkeys([*base_value, *overlay_value]))
+    return merged
+
+
 def _load_yaml_mapping(path: Path, *, description: str) -> dict[str, object]:
     if yaml is None:
         raise ConfigError("PyYAML is not installed.")
@@ -567,27 +558,7 @@ def _merge_reconciliation_policy_files(
 
 
 def _normalize_profile_data(data: dict[str, object], profile_path: Path | None) -> dict[str, object]:
-    normalized = dict(data)
-
-    defaults = {
-        "profile": {},
-        "paths": {},
-        "openrouter": {},
-        "gmail": {},
-        "passwords": {},
-        "nif_api": {},
-        "processing": {},
-        "workflow": {},
-        "tools": {},
-        "naming": {},
-        "dependencies": {},
-        "bank_statements": {},
-        "classification": {},
-        "reconciliation": {},
-        "export": {},
-    }
-    for key, value in defaults.items():
-        normalized.setdefault(key, value)
+    normalized = deepcopy(data)
 
     if isinstance(normalized.get("reconciliation"), dict):
         normalized["reconciliation"] = _merge_reconciliation_policy_files(
@@ -595,166 +566,42 @@ def _normalize_profile_data(data: dict[str, object], profile_path: Path | None) 
             profile_path,
         )
 
-    gmail = dict(normalized["gmail"])
+    gmail = dict(normalized.get("gmail") or {})
     settings = gmail.pop("settings", {})
     if isinstance(settings, dict):
         for key, value in settings.items():
             gmail.setdefault(key, value)
-    normalized["gmail"] = gmail
+    if gmail or "gmail" in normalized:
+        normalized["gmail"] = gmail
 
-    profile = normalized["profile"]
-    profile.setdefault("description", "")
-
-    openrouter = normalized["openrouter"]
-    openrouter.setdefault("base_url", DEFAULT_OPENROUTER_BASE_URL)
-    openrouter.setdefault("requests", {})
-    openrouter["requests"].setdefault("classification_retries", 2)
-
-    gmail.setdefault("enabled", False)
-    gmail.setdefault("default_months", 2)
-    gmail.setdefault("output_subdir", "gmail")
-    gmail.setdefault("output_raw_path", None)
-    gmail.setdefault("tracking_dir", None)
-    gmail.setdefault("tracking_subdir", "gmail_tracking")
-    gmail.setdefault("attachment_mime_types", ["application/pdf"])
-    gmail.setdefault("max_results_per_query", 500)
-    gmail.setdefault("skip_already_downloaded", True)
-    gmail.setdefault("scopes", list(DEFAULT_GMAIL_SCOPES))
-    gmail.setdefault("extension_mime_types", dict(DEFAULT_GMAIL_EXTENSION_MIME_TYPES))
-    gmail.setdefault("generic_mime_types", list(DEFAULT_GMAIL_GENERIC_MIME_TYPES))
-    gmail.setdefault("api_service", "gmail")
-    gmail.setdefault("api_version", "v1")
-    gmail.setdefault("api_page_size", 100)
-    gmail.setdefault("subject_slug_max_chars", 80)
-
-    normalized["nif_api"].setdefault("enabled", False)
-    normalized["nif_api"].setdefault("enabled_locales", ["pt-PT"])
-    normalized["nif_api"].setdefault("base_url", "https://www.nif.pt/{nif}/")
-    normalized["nif_api"].setdefault("timeout_seconds", 10)
-    normalized["nif_api"].setdefault("cache_path", None)
-    normalized["nif_api"].setdefault("country_prefixes", [DEFAULT_QR_COUNTRY_CODE])
-    normalized["processing"].setdefault("input", {})
-    normalized["processing"]["input"].setdefault("extensions", InputSettings().extensions)
-    normalized["processing"]["input"].setdefault(
-        "image_extensions",
-        InputSettings().image_extensions,
-    )
-    normalized["processing"]["input"].setdefault("skip_dirs", ["logs"])
-    normalized["processing"]["input"].setdefault("skip_dir_prefixes", ["_dupes"])
-    normalized["processing"]["input"].setdefault("skip_hidden_files", True)
-    normalized["processing"].setdefault("bundle", {})
-    normalized["processing"]["bundle"].setdefault("enabled", True)
-    normalized["processing"]["bundle"].setdefault(
-        "pagination_patterns",
-        BundleSettings().pagination_patterns,
-    )
-    normalized["processing"].setdefault("render", {})
-    normalized["processing"]["render"].setdefault("max_pages", 2)
-    normalized["processing"]["render"].setdefault("enhance_contrast", True)
-    normalized["processing"]["render"].setdefault("contrast_factor", 2.0)
-    normalized["processing"].setdefault("qr", {})
-    normalized["processing"]["qr"].setdefault("enabled", True)
-    normalized["processing"]["qr"].setdefault("dpi", 300)
-    normalized["processing"]["qr"].setdefault("max_pages", 5)
-    normalized["processing"]["qr"].setdefault("include_last", True)
-    normalized["processing"]["qr"].setdefault(
-        "currency_by_country",
-        dict(DEFAULT_QR_CURRENCY_BY_COUNTRY),
-    )
-    normalized["processing"]["qr"].setdefault("default_currency", DEFAULT_QR_CURRENCY)
-    normalized["processing"]["qr"].setdefault(
-        "document_type_codes",
-        QRSettings().document_type_codes,
-    )
-    normalized["processing"].setdefault("hashing", {})
-    normalized["processing"]["hashing"].setdefault("fast_chunk_size", 8192)
-    normalized["processing"]["hashing"].setdefault("content_dpi", 150)
-    normalized["processing"]["hashing"].setdefault("text_min_chars", 50)
-
-    normalized["workflow"].setdefault("default_months", 2)
-    normalized["workflow"].setdefault("sync_workers", 1)
-    normalized["workflow"].setdefault("metadata_load_workers", 16)
-    normalized["tools"].setdefault("preview_dpi", 150)
-    normalized["tools"].setdefault("xlsx_preview_max_rows", 100)
-    normalized["tools"].setdefault("llm_high_confidence_threshold", 0.8)
-    normalized["naming"].setdefault("component_max_chars", 80)
-    normalized["naming"].setdefault("pdf_export_max_chars", 60)
-    normalized["naming"].setdefault("filename_warning_max_chars", 60)
-    normalized["dependencies"].setdefault("zbar_library_paths", [])
-    normalized["bank_statements"].setdefault("formats", BankStatementsSettings().formats)
-    normalized["classification"].setdefault(
-        "document_type_overrides",
-        ClassificationSettings().document_type_overrides,
-    )
-    normalized["classification"].setdefault(
-        "prompt_document_type_rules",
-        ClassificationSettings().prompt_document_type_rules,
-    )
-    normalized["classification"].setdefault(
-        "prompt_issuing_party_rules",
-        ClassificationSettings().prompt_issuing_party_rules,
-    )
-    normalized["classification"].setdefault(
-        "issuer_tax_number_prefix_rule",
-        ClassificationSettings().issuer_tax_number_prefix_rule,
-    )
-    normalized["classification"].setdefault("document_title_max_chars", 60)
-    normalized["classification"].setdefault("bank_statement_locale", "pt-PT")
-    normalized["classification"].setdefault(
-        "legal_suffixes",
-        ClassificationSettings().legal_suffixes,
-    )
-
-    paths = normalized["paths"]
+    paths = dict(normalized.get("paths") or {})
     raw = paths.get("raw")
     if isinstance(raw, str):
         paths["raw"] = [raw]
-    elif raw is None:
-        paths["raw"] = []
-
-    reconciliation = normalized["reconciliation"]
-    reconciliation.setdefault("policy_files", [])
-    reconciliation.setdefault("exclude_prefixes", [])
-    reconciliation.setdefault("rules", [])
-    reconciliation.setdefault("include_builtin_rules", True)
-    reconciliation.setdefault("counterparty_aliases", {})
-    reconciliation.setdefault("include_builtin_line_item_extractors", True)
-    reconciliation.setdefault(
-        "evidence_counterparty_skip_if_supplier_present_categories",
-        list(DEFAULT_EVIDENCE_COUNTERPARTY_SKIP_IF_SUPPLIER_PRESENT_CATEGORIES),
-    )
-    reconciliation.setdefault(
-        "evidence_counterparty_amount_optional_categories",
-        list(DEFAULT_EVIDENCE_COUNTERPARTY_AMOUNT_OPTIONAL_CATEGORIES),
-    )
-    reconciliation.setdefault("default_currency", DEFAULT_RECONCILIATION_CURRENCY)
-    reconciliation.setdefault("llm_default_confidence", DEFAULT_LLM_MATCH_CONFIDENCE)
-
-    export = normalized["export"]
-    export.setdefault("file_mappings", {})
-    export["file_mappings"].setdefault("enabled", False)
-    export["file_mappings"].setdefault("default_prefix", "")
-    export["file_mappings"].setdefault("rules", [])
-    export["file_mappings"].setdefault("filename_fields", [])
-    export.setdefault("merge_rules", [])
-    export.setdefault("max_file_size_mb", None)
-    export.setdefault("compression", {})
-    export["compression"].setdefault("enabled", True)
-    export["compression"].setdefault("quality", "ebook")
-    export["compression"].setdefault("min_size_mb", None)
+    if paths or "paths" in normalized:
+        normalized["paths"] = paths
 
     if profile_path:
-        if paths.get("raw"):
-            paths["raw"] = [_resolve_path(path, profile_path) for path in paths["raw"]]
+        raw_paths = paths.get("raw") or []
+        if raw_paths:
+            paths["raw"] = [_resolve_path(path, profile_path) for path in raw_paths]
         paths["processed"] = _resolve_path(paths.get("processed"), profile_path)
         paths["export"] = _resolve_path(paths.get("export"), profile_path)
+        normalized["paths"] = paths
 
-        passwords = normalized["passwords"]
+        passwords = dict(normalized.get("passwords") or {})
         passwords["passwords_file"] = _resolve_path(passwords.get("passwords_file"), profile_path)
-        normalized["nif_api"]["cache_path"] = _resolve_path(
-            normalized["nif_api"].get("cache_path"),
+        if passwords or "passwords" in normalized:
+            normalized["passwords"] = passwords
+
+        nif_api = dict(normalized.get("nif_api") or {})
+        nif_api["cache_path"] = _resolve_path(
+            nif_api.get("cache_path"),
             profile_path,
         )
+        if nif_api or "nif_api" in normalized:
+            normalized["nif_api"] = nif_api
+
         if gmail.get("credentials_file"):
             gmail["credentials_file"] = _resolve_path(gmail["credentials_file"], profile_path)
         if gmail.get("token_file"):
@@ -763,6 +610,8 @@ def _normalize_profile_data(data: dict[str, object], profile_path: Path | None) 
             gmail["output_raw_path"] = _resolve_path(gmail["output_raw_path"], profile_path)
         if gmail.get("tracking_dir"):
             gmail["tracking_dir"] = _resolve_path(gmail["tracking_dir"], profile_path)
+        if gmail or "gmail" in normalized:
+            normalized["gmail"] = gmail
 
     normalized["profile_path"] = profile_path
     normalized["profile_dir"] = profile_path.parent if profile_path else None

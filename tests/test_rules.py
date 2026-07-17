@@ -234,9 +234,13 @@ class RuleEngineTests(unittest.TestCase):
 
         self.assertEqual(profile.reconciliation.amount_tolerance, 0.07)
         self.assertEqual(profile.reconciliation.bank_export_prefix, "BNK_")
-        self.assertEqual(
+        self.assertIn(
+            "custom-bank-doc",
             profile.reconciliation.document_families["bank_anchor"]["types"],
-            ["custom-bank-doc"],
+        )
+        self.assertIn(
+            "bank-note",
+            profile.reconciliation.document_families["bank_anchor"]["types"],
         )
         policy = _policy_from_profile(profile)
         self.assertIn("custom-bank-doc", policy.document_families["bank_anchor"]["types"])

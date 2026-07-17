@@ -10,14 +10,8 @@ import re
 from dataclasses import dataclass
 from typing import Any
 
+from papertrail.config import ReconciliationSettings
 from papertrail.models import clean_enum_string
-from papertrail.reconciliation_defaults import (
-    DEFAULT_BANK_COUNTERPARTIES,
-    DEFAULT_COUNTERPARTY_ALIASES,
-    DEFAULT_DOCUMENT_FAMILIES,
-    DEFAULT_SHARED_PERIOD_TITLE_TERMS,
-    DEFAULT_TAX_NUMBER_DEFAULT_COUNTRY_PREFIX,
-)
 from papertrail.utils import compact_match_key, strip_diacritics
 
 BANK_ANCHOR = "bank_anchor"
@@ -30,17 +24,7 @@ CONTRACT_EVIDENCE = "contract_evidence"
 IGNORE = "ignore"
 UNKNOWN = "unknown"
 
-_BANK_COUNTERPARTIES = set(DEFAULT_BANK_COUNTERPARTIES)
-_COUNTERPARTY_ALIASES = dict(DEFAULT_COUNTERPARTY_ALIASES)
-_SHARED_PERIOD_TITLE_TERMS = {
-    party: tuple(terms)
-    for party, terms in DEFAULT_SHARED_PERIOD_TITLE_TERMS.items()
-}
-_DOCUMENT_FAMILIES = {
-    str(family): dict(settings)
-    for family, settings in DEFAULT_DOCUMENT_FAMILIES.items()
-    if isinstance(settings, dict)
-}
+_DEFAULT_POLICY = ReconciliationSettings()
 
 
 @dataclass(frozen=True)
@@ -105,7 +89,9 @@ def counterparty_id(
     metadata: dict[str, Any],
     *,
     counterparty_aliases: dict[str, str] | None = None,
-    tax_number_default_country_prefix: str | None = DEFAULT_TAX_NUMBER_DEFAULT_COUNTRY_PREFIX,
+    tax_number_default_country_prefix: str | None = (
+        _DEFAULT_POLICY.tax_number_default_country_prefix
+    ),
 ) -> str:
     candidates = [
         metadata.get("issuer_tax_number"),
@@ -138,7 +124,9 @@ def build_document_evidence(
     bank_counterparties: list[str] | tuple[str, ...] | set[str] | None = None,
     shared_period_title_terms: dict[str, list[str]] | dict[str, tuple[str, ...]] | None = None,
     document_families: dict[str, dict[str, Any]] | None = None,
-    tax_number_default_country_prefix: str | None = DEFAULT_TAX_NUMBER_DEFAULT_COUNTRY_PREFIX,
+    tax_number_default_country_prefix: str | None = (
+        _DEFAULT_POLICY.tax_number_default_country_prefix
+    ),
 ) -> DocumentEvidence:
     family = document_family_for_type(
         metadata.get("document_type"),
@@ -150,7 +138,7 @@ def build_document_evidence(
         counterparty_aliases=counterparty_aliases,
         tax_number_default_country_prefix=tax_number_default_country_prefix,
     )
-    bank_parties = set(bank_counterparties or _BANK_COUNTERPARTIES)
+    bank_parties = set(bank_counterparties or _DEFAULT_POLICY.bank_counterparties)
     source_bank = party if family == BANK_ANCHOR and party in bank_parties else None
     return DocumentEvidence(
         document_family=family,
@@ -169,7 +157,7 @@ def build_document_evidence(
 def _document_families(
     document_families: dict[str, dict[str, Any]] | None = None,
 ) -> dict[str, dict[str, Any]]:
-    source = document_families or _DOCUMENT_FAMILIES
+    source = document_families or _DEFAULT_POLICY.document_families
     return {_normalize_family_name(family): dict(settings) for family, settings in source.items()}
 
 
@@ -234,7 +222,7 @@ def _is_shared_period_document(
     text = f"{title} {raw_type}"
     if any(term in text for term in terms_by_party.get(party, ())):
         return True
-    bank_parties = bank_counterparties or _BANK_COUNTERPARTIES
+    bank_parties = bank_counterparties or set(_DEFAULT_POLICY.bank_counterparties)
     if party in bank_parties and any(term in text for term in terms_by_party.get("$bank", ())):
         return True
     return False
@@ -249,8 +237,8 @@ def _alias_for_value(value: Any, counterparty_aliases: dict[str, str] | None = N
 
 def _counterparty_aliases(counterparty_aliases: dict[str, str] | None = None) -> dict[str, str]:
     if not counterparty_aliases:
-        return _COUNTERPARTY_ALIASES
-    merged = dict(_COUNTERPARTY_ALIASES)
+        return _DEFAULT_POLICY.counterparty_aliases
+    merged = dict(_DEFAULT_POLICY.counterparty_aliases)
     for alias, canonical in counterparty_aliases.items():
         normalized = _compact(alias)
         if normalized and canonical:
@@ -261,9 +249,13 @@ def _counterparty_aliases(counterparty_aliases: dict[str, str] | None = None) ->
 def _shared_period_terms(
     terms: dict[str, list[str]] | dict[str, tuple[str, ...]] | None = None,
 ) -> dict[str, tuple[str, ...]]:
+    default_terms = {
+        party: tuple(values)
+        for party, values in _DEFAULT_POLICY.shared_period_title_terms.items()
+    }
     if not terms:
-        return _SHARED_PERIOD_TITLE_TERMS
-    merged = dict(_SHARED_PERIOD_TITLE_TERMS)
+        return default_terms
+    merged = dict(default_terms)
     for party, values in terms.items():
         merged[party] = tuple(_compact(value) for value in values if _compact(value))
     return merged
@@ -272,7 +264,7 @@ def _shared_period_terms(
 def _normalize_tax_number(
     value: Any,
     *,
-    default_country_prefix: str | None = DEFAULT_TAX_NUMBER_DEFAULT_COUNTRY_PREFIX,
+    default_country_prefix: str | None = _DEFAULT_POLICY.tax_number_default_country_prefix,
 ) -> str:
     text = str(value or "").strip().upper()
     if not text:

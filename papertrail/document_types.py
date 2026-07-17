@@ -9,6 +9,7 @@ from papertrail.utils import strip_diacritics
 
 DEFAULT_DOCUMENT_TYPE_OVERRIDES = (
     {"target": "bank-note", "raw_types": ("movimento", "notadelancamento")},
+    {"target": "receipt", "raw_types": ("comprovativodecarregamento",)},
     {
         "target": "investment-acquisition-summary",
         "context_all": ("mapa", "resumo", "datas", "valores", "aquisicao", "mobiliarios"),

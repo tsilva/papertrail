@@ -10,6 +10,7 @@ from papertrail.commands.reconcile import (
     _candidate_sort_name,
     _filename_hash_key,
     _is_prior_reconciled_candidate,
+    _link_evidence_counterparty_documents,
     _link_via_verde_period_documents,
     _reconciliation_rules,
 )
@@ -57,6 +58,74 @@ class ReconcileLinkingTests(unittest.TestCase):
         )
 
         self.assertEqual(_candidate_sort_name(candidate), candidate.source_filename)
+
+    def test_unrelated_shared_bank_invoice_does_not_satisfy_supplier_evidence(self):
+        txn = Transaction(
+            row_number=9,
+            date_posting="2026-06-30",
+            date_value="2026-06-30",
+            description="Ordem Pagamento s/Estrangeiro Ref.20260460130",
+            amount=-364.80,
+            currency="EUR",
+            notes="",
+            treated="",
+        )
+        bank_note = PDFCandidate(
+            json_path=Path("coverflex-bank-note.json"),
+            pdf_filename="BNC_2026-06-30 - bank-note - millennium.pdf",
+            date_issued="2026-06-30",
+            document_type="bank-note",
+            document_type_raw="Nota de Lançamento",
+            document_title="Ordem de Pagamento sobre o Estrangeiro",
+            issuing_party="MillenniumBCP",
+            total_amount=364.80,
+            total_amount_currency="EUR",
+            file_extension=".pdf",
+            hash_file="bank0001",
+            counterparty_id="millennium-bcp",
+            is_bank_anchor=True,
+        )
+        unrelated_bank_invoice = PDFCandidate(
+            json_path=Path("monthly-card-fees.json"),
+            pdf_filename="CMP_2026-06-30 - invoice-receipt - millennium.pdf",
+            date_issued="2026-06-30",
+            document_type="invoice-receipt",
+            document_type_raw="Fatura-Recibo",
+            document_title="Operação: Cartões",
+            issuing_party="MillenniumBCP",
+            total_amount=0.72,
+            total_amount_currency="EUR",
+            file_extension=".pdf",
+            hash_file="fees0001",
+            counterparty_id="millennium-bcp",
+            is_supplier_evidence=True,
+            is_shared_period_document=True,
+        )
+        match = MatchResult(
+            transaction=txn,
+            pdf_candidates=[bank_note],
+            method="exact",
+            confidence=1.0,
+            reasoning="Amount match",
+        )
+
+        token = _ACTIVE_RECONCILIATION_POLICY.set(
+            ReconciliationPolicy(
+                bank_counterparties=("millennium-bcp",),
+                shared_period_transaction_keywords={"via-verde": ("VIAVERDE",)},
+            )
+        )
+        try:
+            evidence_ids = _link_evidence_counterparty_documents(
+                [match],
+                [unrelated_bank_invoice],
+                _reconciliation_rules(),
+            )
+        finally:
+            _ACTIVE_RECONCILIATION_POLICY.reset(token)
+
+        self.assertEqual(evidence_ids, set())
+        self.assertEqual(match.pdf_candidates, [bank_note])
 
     def test_via_verde_shared_period_link_does_not_duplicate_existing_file(self):
         txn = Transaction(

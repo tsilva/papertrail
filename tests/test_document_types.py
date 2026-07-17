@@ -4,6 +4,16 @@ from papertrail.document_types import normalize_document_type
 
 
 class DocumentTypeTests(unittest.TestCase):
+    def test_top_up_confirmation_is_canonical_receipt(self):
+        self.assertEqual(
+            normalize_document_type(
+                "top-up-confirmation",
+                "Comprovativo de carregamento",
+                "Carregamento subsídio de alimentação",
+            ),
+            "receipt",
+        )
+
     def test_investment_acquisition_summary_is_not_generic_bank_investment(self):
         self.assertEqual(
             normalize_document_type(

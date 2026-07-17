@@ -13,41 +13,10 @@ from typing import Optional
 import fitz
 
 from papertrail.bank_statement.extractor import load_transactions as load_bank_statement_transactions
-from papertrail.config import ReconciliationRule
+from papertrail.config import ReconciliationRule, ReconciliationSettings
 from papertrail.document_types import normalize_document_type
 from papertrail.llm import _extract_json_from_response
 from papertrail.logging_utils import get_logger
-from papertrail.reconciliation_defaults import (
-    DEFAULT_AMOUNT_TOLERANCE,
-    DEFAULT_BANK_COUNTERPARTIES,
-    DEFAULT_BANK_EXPORT_PREFIX,
-    DEFAULT_BANK_GENERATED_DOC_TYPES,
-    DEFAULT_COUNTERPARTY_ALIASES,
-    DEFAULT_DATE_WINDOW_DAYS,
-    DEFAULT_DOCUMENT_FAMILIES,
-    DEFAULT_EVIDENCE_COUNTERPARTY_AMOUNT_OPTIONAL_CATEGORIES,
-    DEFAULT_EVIDENCE_COUNTERPARTY_CATEGORIES,
-    DEFAULT_EVIDENCE_COUNTERPARTY_REQUIRED_PATTERN,
-    DEFAULT_EVIDENCE_COUNTERPARTY_SKIP_IF_SUPPLIER_PRESENT_CATEGORIES,
-    DEFAULT_LINE_ITEM_CATEGORY_ALIASES,
-    DEFAULT_LINE_ITEM_EXTRACTORS,
-    DEFAULT_LLM_MATCH_CONFIDENCE,
-    DEFAULT_RECONCILIATION_CURRENCY,
-    DEFAULT_RECONCILIATION_RULES,
-    DEFAULT_SAME_MONTH_SHARED_RULE_NAMES,
-    DEFAULT_SHARED_PERIOD_BANK_ANCHOR_ERROR_EXEMPT_RULE_NAMES,
-    DEFAULT_SHARED_PERIOD_LINK_CATEGORIES,
-    DEFAULT_SHARED_PERIOD_SUPPLIER_EVIDENCE_ERROR_EXEMPT_RULE_NAMES,
-    DEFAULT_SHARED_PERIOD_TITLE_TERMS,
-    DEFAULT_SHARED_PERIOD_TRANSACTION_KEYWORDS,
-    DEFAULT_STATEMENT_BANK_ISSUER_ALIASES,
-    DEFAULT_STATEMENT_BANK_SCOPED_DOC_TYPES,
-    DEFAULT_STRICT_STATEMENT_BANKS,
-    DEFAULT_SUPPORTING_DOC_TYPE_PATTERNS,
-    DEFAULT_SUPPORTING_EXPORT_PREFIXES,
-    DEFAULT_SUPPORTING_PAIR_EXEMPT_STATEMENT_BANKS,
-    DEFAULT_TAX_NUMBER_DEFAULT_COUNTRY_PREFIX,
-)
 from papertrail.reconciliation_evidence import build_document_evidence
 from papertrail.repository import DocumentRepository
 from papertrail.rules import RuleEngine
@@ -69,83 +38,16 @@ _DATE_DMY_RE = re.compile(r"\b(\d{2})[/-](\d{2})[/-](20\d{2})\b")
 _DATE_DM_RE = re.compile(r"\b(\d{2})[/-](\d{2})\b")
 
 
-@dataclass(frozen=True)
-class ReconciliationPolicy:
-    amount_tolerance: float = DEFAULT_AMOUNT_TOLERANCE
-    date_window_days: int = DEFAULT_DATE_WINDOW_DAYS
-    tax_number_default_country_prefix: str = DEFAULT_TAX_NUMBER_DEFAULT_COUNTRY_PREFIX
-    bank_generated_doc_types: tuple[str, ...] = DEFAULT_BANK_GENERATED_DOC_TYPES
-    statement_bank_scoped_doc_types: tuple[str, ...] = DEFAULT_STATEMENT_BANK_SCOPED_DOC_TYPES
-    statement_bank_issuer_aliases: dict[str, str] = field(
-        default_factory=lambda: dict(DEFAULT_STATEMENT_BANK_ISSUER_ALIASES)
-    )
-    bank_export_prefix: str = DEFAULT_BANK_EXPORT_PREFIX
-    supporting_export_prefixes: tuple[str, ...] = DEFAULT_SUPPORTING_EXPORT_PREFIXES
-    supporting_doc_type_patterns: tuple[str, ...] = DEFAULT_SUPPORTING_DOC_TYPE_PATTERNS
-    document_families: dict[str, dict[str, object]] = field(
-        default_factory=lambda: {
-            family: dict(settings)
-            for family, settings in DEFAULT_DOCUMENT_FAMILIES.items()
-            if isinstance(settings, dict)
-        }
-    )
-    bank_counterparties: tuple[str, ...] = DEFAULT_BANK_COUNTERPARTIES
-    counterparty_aliases: dict[str, str] = field(default_factory=dict)
-    shared_period_transaction_keywords: dict[str, tuple[str, ...]] = field(
-        default_factory=lambda: {
-            party: tuple(keywords)
-            for party, keywords in DEFAULT_SHARED_PERIOD_TRANSACTION_KEYWORDS.items()
-        }
-    )
-    shared_period_title_terms: dict[str, tuple[str, ...]] = field(
-        default_factory=lambda: {
-            party: tuple(terms)
-            for party, terms in DEFAULT_SHARED_PERIOD_TITLE_TERMS.items()
-        }
-    )
-    same_month_shared_rule_names: tuple[str, ...] = DEFAULT_SAME_MONTH_SHARED_RULE_NAMES
-    strict_statement_banks: tuple[str, ...] = DEFAULT_STRICT_STATEMENT_BANKS
-    supporting_pair_exempt_statement_banks: tuple[str, ...] = (
-        DEFAULT_SUPPORTING_PAIR_EXEMPT_STATEMENT_BANKS
-    )
-    shared_period_link_categories: tuple[str, ...] = DEFAULT_SHARED_PERIOD_LINK_CATEGORIES
-    shared_period_supplier_evidence_error_exempt_rule_names: tuple[str, ...] = (
-        DEFAULT_SHARED_PERIOD_SUPPLIER_EVIDENCE_ERROR_EXEMPT_RULE_NAMES
-    )
-    shared_period_bank_anchor_error_exempt_rule_names: tuple[str, ...] = (
-        DEFAULT_SHARED_PERIOD_BANK_ANCHOR_ERROR_EXEMPT_RULE_NAMES
-    )
-    evidence_counterparty_categories: tuple[str, ...] = DEFAULT_EVIDENCE_COUNTERPARTY_CATEGORIES
-    evidence_counterparty_required_pattern: str = DEFAULT_EVIDENCE_COUNTERPARTY_REQUIRED_PATTERN
-    evidence_counterparty_skip_if_supplier_present_categories: tuple[str, ...] = (
-        DEFAULT_EVIDENCE_COUNTERPARTY_SKIP_IF_SUPPLIER_PRESENT_CATEGORIES
-    )
-    evidence_counterparty_amount_optional_categories: tuple[str, ...] = (
-        DEFAULT_EVIDENCE_COUNTERPARTY_AMOUNT_OPTIONAL_CATEGORIES
-    )
-    default_currency: str = DEFAULT_RECONCILIATION_CURRENCY
-    llm_default_confidence: float = DEFAULT_LLM_MATCH_CONFIDENCE
-    line_item_category_aliases: dict[str, dict[str, object]] = field(
-        default_factory=lambda: {
-            name: dict(settings)
-            for name, settings in DEFAULT_LINE_ITEM_CATEGORY_ALIASES.items()
-        }
-    )
-    line_item_extractors: dict[str, dict[str, object]] = field(
-        default_factory=lambda: {
-            name: dict(settings)
-            for name, settings in DEFAULT_LINE_ITEM_EXTRACTORS.items()
-        }
-    )
+ReconciliationPolicy = ReconciliationSettings
 
 
-_ACTIVE_RECONCILIATION_POLICY: ContextVar[ReconciliationPolicy] = ContextVar(
+_ACTIVE_RECONCILIATION_POLICY: ContextVar[ReconciliationSettings] = ContextVar(
     "papertrail_reconciliation_policy",
-    default=ReconciliationPolicy(),
+    default=ReconciliationSettings(),
 )
 
 
-def _reconciliation_policy() -> ReconciliationPolicy:
+def _reconciliation_policy() -> ReconciliationSettings:
     return _ACTIVE_RECONCILIATION_POLICY.get()
 
 
@@ -165,182 +67,19 @@ def _default_currency() -> str:
     return _reconciliation_policy().default_currency
 
 
-def _sequence(value, fallback: tuple[str, ...] | list[str]) -> tuple[str, ...]:
-    if value is None:
-        return tuple(fallback)
-    return tuple(str(item) for item in value)
-
-
-def _string_map(value, fallback: dict[str, str] | None = None) -> dict[str, str]:
-    merged = dict(fallback or {})
-    if not value:
-        return merged
-    for key, item in dict(value).items():
-        if key and item:
-            merged[str(key)] = str(item)
-    return merged
-
-
-def _keywords_map(value, fallback: dict[str, tuple[str, ...]]) -> dict[str, tuple[str, ...]]:
-    merged = dict(fallback)
-    if not value:
-        return merged
-    for key, items in dict(value).items():
-        if key and items:
-            merged[str(key)] = tuple(str(item) for item in items)
-    return merged
-
-
-def _settings_map(value, fallback: dict[str, dict[str, object]]) -> dict[str, dict[str, object]]:
-    merged = {name: dict(settings) for name, settings in fallback.items()}
-    if not value:
-        return merged
-    for name, settings in dict(value).items():
-        if not isinstance(settings, dict):
-            continue
-        existing = merged.get(str(name), {})
-        combined = {**existing, **settings}
-        for key, overlay_value in settings.items():
-            existing_value = existing.get(key)
-            if isinstance(existing_value, list) and isinstance(overlay_value, list):
-                combined[key] = list(dict.fromkeys([*existing_value, *overlay_value]))
-        merged[str(name)] = combined
-    return merged
-
-
-def _settings_map_with_optional_builtin(
-    value,
-    fallback: dict[str, dict[str, object]],
-    *,
-    include_builtin: bool,
-) -> dict[str, dict[str, object]]:
-    return _settings_map(value, fallback if include_builtin else {})
-
-
-def _policy_from_profile(profile) -> ReconciliationPolicy:
-    settings = profile.reconciliation
-    statement_aliases = {
+def _policy_from_profile(profile) -> ReconciliationSettings:
+    policy = profile.reconciliation.model_copy(deep=True)
+    policy.statement_bank_issuer_aliases = {
         _normalize_for_match(alias): canonical
-        for alias, canonical in _string_map(
-            getattr(settings, "statement_bank_issuer_aliases", None),
-            DEFAULT_STATEMENT_BANK_ISSUER_ALIASES,
-        ).items()
+        for alias, canonical in policy.statement_bank_issuer_aliases.items()
+        if alias and canonical
     }
-    return ReconciliationPolicy(
-        amount_tolerance=float(getattr(settings, "amount_tolerance", DEFAULT_AMOUNT_TOLERANCE)),
-        date_window_days=int(getattr(settings, "date_window_days", DEFAULT_DATE_WINDOW_DAYS)),
-        tax_number_default_country_prefix=str(
-            getattr(
-                settings,
-                "tax_number_default_country_prefix",
-                DEFAULT_TAX_NUMBER_DEFAULT_COUNTRY_PREFIX,
-            )
-            or ""
-        ),
-        bank_generated_doc_types=_sequence(
-            getattr(settings, "bank_generated_doc_types", None),
-            DEFAULT_BANK_GENERATED_DOC_TYPES,
-        ),
-        statement_bank_scoped_doc_types=_sequence(
-            getattr(settings, "statement_bank_scoped_doc_types", None),
-            DEFAULT_STATEMENT_BANK_SCOPED_DOC_TYPES,
-        ),
-        statement_bank_issuer_aliases=statement_aliases,
-        bank_export_prefix=str(getattr(settings, "bank_export_prefix", DEFAULT_BANK_EXPORT_PREFIX)),
-        supporting_export_prefixes=_sequence(
-            getattr(settings, "supporting_export_prefixes", None),
-            DEFAULT_SUPPORTING_EXPORT_PREFIXES,
-        ),
-        supporting_doc_type_patterns=_sequence(
-            getattr(settings, "supporting_doc_type_patterns", None),
-            DEFAULT_SUPPORTING_DOC_TYPE_PATTERNS,
-        ),
-        document_families=_settings_map(
-            getattr(settings, "document_families", None),
-            DEFAULT_DOCUMENT_FAMILIES,
-        ),
-        bank_counterparties=_sequence(
-            getattr(settings, "bank_counterparties", None),
-            DEFAULT_BANK_COUNTERPARTIES,
-        ),
-        counterparty_aliases=_string_map(
-            getattr(settings, "counterparty_aliases", None),
-            DEFAULT_COUNTERPARTY_ALIASES,
-        ),
-        shared_period_transaction_keywords=_keywords_map(
-            getattr(settings, "shared_period_transaction_keywords", None),
-            DEFAULT_SHARED_PERIOD_TRANSACTION_KEYWORDS,
-        ),
-        shared_period_title_terms=_keywords_map(
-            getattr(settings, "shared_period_title_terms", None),
-            DEFAULT_SHARED_PERIOD_TITLE_TERMS,
-        ),
-        same_month_shared_rule_names=_sequence(
-            getattr(settings, "same_month_shared_rule_names", None),
-            DEFAULT_SAME_MONTH_SHARED_RULE_NAMES,
-        ),
-        strict_statement_banks=_sequence(
-            getattr(settings, "strict_statement_banks", None),
-            DEFAULT_STRICT_STATEMENT_BANKS,
-        ),
-        supporting_pair_exempt_statement_banks=_sequence(
-            getattr(settings, "supporting_pair_exempt_statement_banks", None),
-            DEFAULT_SUPPORTING_PAIR_EXEMPT_STATEMENT_BANKS,
-        ),
-        shared_period_link_categories=_sequence(
-            getattr(settings, "shared_period_link_categories", None),
-            DEFAULT_SHARED_PERIOD_LINK_CATEGORIES,
-        ),
-        shared_period_supplier_evidence_error_exempt_rule_names=_sequence(
-            getattr(settings, "shared_period_supplier_evidence_error_exempt_rule_names", None),
-            DEFAULT_SHARED_PERIOD_SUPPLIER_EVIDENCE_ERROR_EXEMPT_RULE_NAMES,
-        ),
-        shared_period_bank_anchor_error_exempt_rule_names=_sequence(
-            getattr(settings, "shared_period_bank_anchor_error_exempt_rule_names", None),
-            DEFAULT_SHARED_PERIOD_BANK_ANCHOR_ERROR_EXEMPT_RULE_NAMES,
-        ),
-        evidence_counterparty_categories=_sequence(
-            getattr(settings, "evidence_counterparty_categories", None),
-            DEFAULT_EVIDENCE_COUNTERPARTY_CATEGORIES,
-        ),
-        evidence_counterparty_required_pattern=str(
-            getattr(
-                settings,
-                "evidence_counterparty_required_pattern",
-                DEFAULT_EVIDENCE_COUNTERPARTY_REQUIRED_PATTERN,
-            )
-        ),
-        evidence_counterparty_skip_if_supplier_present_categories=_sequence(
-            getattr(settings, "evidence_counterparty_skip_if_supplier_present_categories", None),
-            DEFAULT_EVIDENCE_COUNTERPARTY_SKIP_IF_SUPPLIER_PRESENT_CATEGORIES,
-        ),
-        evidence_counterparty_amount_optional_categories=_sequence(
-            getattr(settings, "evidence_counterparty_amount_optional_categories", None),
-            DEFAULT_EVIDENCE_COUNTERPARTY_AMOUNT_OPTIONAL_CATEGORIES,
-        ),
-        default_currency=str(
-            getattr(settings, "default_currency", DEFAULT_RECONCILIATION_CURRENCY)
-            or DEFAULT_RECONCILIATION_CURRENCY
-        ),
-        llm_default_confidence=float(
-            getattr(settings, "llm_default_confidence", DEFAULT_LLM_MATCH_CONFIDENCE)
-            or DEFAULT_LLM_MATCH_CONFIDENCE
-        ),
-        line_item_category_aliases=_settings_map(
-            getattr(settings, "line_item_category_aliases", None),
-            DEFAULT_LINE_ITEM_CATEGORY_ALIASES,
-        ),
-        line_item_extractors=_settings_map_with_optional_builtin(
-            getattr(settings, "line_item_extractors", None),
-            DEFAULT_LINE_ITEM_EXTRACTORS,
-            include_builtin=getattr(settings, "include_builtin_line_item_extractors", True),
-        ),
-    )
+    return policy
 
 
 def _reconciliation_rules() -> list[ReconciliationRule]:
     """Broad default reconciliation rules built on derived evidence families."""
-    return [ReconciliationRule.model_validate(rule) for rule in DEFAULT_RECONCILIATION_RULES]
+    return list(ReconciliationSettings().rules)
 
 
 def _rules_from_profile(profile) -> list[ReconciliationRule]:
@@ -1855,7 +1594,7 @@ def _is_bank_export_candidate(candidate: PDFCandidate) -> bool:
 
 def _is_supporting_export_candidate(candidate: PDFCandidate) -> bool:
     policy = _reconciliation_policy()
-    if not candidate.pdf_filename.startswith(policy.supporting_export_prefixes):
+    if not candidate.pdf_filename.startswith(tuple(policy.supporting_export_prefixes)):
         return False
     return _candidate_matches_patterns(candidate, list(policy.supporting_doc_type_patterns))
 
@@ -2393,7 +2132,10 @@ def _link_evidence_counterparty_documents(
                 and candidate.counterparty_id == anchor.counterparty_id
                 and _same_calendar_month(txn_date, candidate.date_issued)
                 and (
-                    candidate.is_shared_period_document
+                    (
+                        candidate.is_shared_period_document
+                        and _is_shared_period_transaction(match.transaction)
+                    )
                     or category in set(policy.evidence_counterparty_amount_optional_categories)
                     or _candidate_amount_matches_transaction(match, candidate)
                 )
@@ -2724,7 +2466,9 @@ def _validate_supporting_documents_have_bank_pair(
     errors: dict[int, list[str]] = {}
     for match in matches:
         has_supporting_doc = any(
-            candidate.pdf_filename.startswith(_reconciliation_policy().supporting_export_prefixes)
+            candidate.pdf_filename.startswith(
+                tuple(_reconciliation_policy().supporting_export_prefixes)
+            )
             for candidate in match.pdf_candidates
         )
         has_bank_doc = any(
