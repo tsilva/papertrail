@@ -93,6 +93,7 @@ ExpectedPageCount = int | list[int]
 
 
 DEFAULT_OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
+DEFAULT_OPENROUTER_MODEL_ID = "google/gemini-3.7-flash"
 DEFAULT_GMAIL_SCOPES = ["https://www.googleapis.com/auth/gmail.readonly"]
 DEFAULT_GMAIL_EXTENSION_MIME_TYPES = {
     ".pdf": "application/pdf",
@@ -119,7 +120,7 @@ class OpenRouterRequestSettings(SettingsModel):
 
 
 class OpenRouterSettings(SettingsModel):
-    model_id: str | None = None
+    model_id: str | None = DEFAULT_OPENROUTER_MODEL_ID
     api_key: str | None = None
     base_url: str = DEFAULT_OPENROUTER_BASE_URL
     requests: OpenRouterRequestSettings = Field(default_factory=OpenRouterRequestSettings)
