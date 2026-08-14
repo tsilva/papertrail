@@ -20,7 +20,7 @@ paths:
 
 # OpenRouter API configuration
 openrouter:
-  model_id: "google/gemini-2.5-flash"  # or "openai/gpt-4.1"
+  model_id: "google/gemini-3.7-flash"
   # Use ${VAR} syntax to reference environment variables for security
   api_key: "${OPENROUTER_API_KEY}"
   base_url: "https://openrouter.ai/api/v1"
