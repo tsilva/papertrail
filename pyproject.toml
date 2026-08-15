@@ -17,11 +17,11 @@ dependencies = [
     "pydantic",
     "pyyaml>=6.0",
     "openpyxl",
-    "pillow",
+    "pillow>=12.3.0",
     "google-api-python-client",
     "google-auth-httplib2",
     "google-auth-oauthlib",
-    "gradio>=6.15.1",
+    "gradio>=6.16.0",
     "orjson>=3.9.0",
     "mbox-extractor",
     "pyzbar>=0.1.9",
@@ -33,7 +33,11 @@ dependencies = [
 requires-python = ">=3.12"
 
 [project.optional-dependencies]
-dev = ["pytest"]
+dev = [
+    "pip-audit>=2.9.0",
+    "pytest>=9.0.3",
+    "ruff>=0.14.0",
+]
 
 [project.scripts]
 papertrail = "main:app"
@@ -52,8 +56,12 @@ line-length = 100
 select = ["E", "F", "I"]
 
 [tool.uv]
+required-version = "==0.11.13"
 exclude-newer = "7 days"
 constraint-dependencies = [
+  "click>=8.3.3",
+  "httplib2>=0.32.0",
   "mistralai!=2.4.6",
   "guardrails-ai!=0.10.1",
+  "pyasn1>=0.6.4",
 ]
