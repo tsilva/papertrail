@@ -22,7 +22,7 @@ dependencies = [
     "google-auth-httplib2",
     "google-auth-oauthlib",
     "gradio>=6.16.0",
-    "orjson>=3.9.0",
+    "orjson>=3.11.9",
     "mbox-extractor",
     "pyzbar>=0.1.9",
     "pikepdf",
