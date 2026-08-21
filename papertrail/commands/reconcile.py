@@ -1750,8 +1750,24 @@ def _prune_rule_aware_exact_candidates(
         if max_count is not None:
             matching = matching[:max_count]
         else:
+            ranked_bank_generated = [
+                (candidate, _candidate_rank_for_transaction(txn, candidate, rule.name))
+                for candidate in matching
+                if _is_bank_generated_candidate(candidate)
+            ]
+            ranked_bank_generated = [
+                (candidate, rank)
+                for candidate, rank in ranked_bank_generated
+                if rank is not None
+            ]
+            best_bank_rank = min(
+                (rank for _, rank in ranked_bank_generated),
+                default=None,
+            )
             bank_generated = [
-                candidate for candidate in matching if _is_bank_generated_candidate(candidate)
+                candidate
+                for candidate, rank in ranked_bank_generated
+                if rank == best_bank_rank
             ]
             best_by_signature: dict[tuple[str, str], PDFCandidate] = {}
             for candidate in matching:

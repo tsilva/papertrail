@@ -1396,7 +1396,7 @@ def pipeline(
         if extract_stats is None:
             console.warning("Extraction locked by another process")
         elif extract_stats["failed"] > 0:
-            console.error(f"OpenRouter API error ({extract_stats['failed']} failed)")
+            console.error(f"LLM API error ({extract_stats['failed']} failed)")
     except Exception as exc:
         console.error(str(exc))
         sys.exit(1)

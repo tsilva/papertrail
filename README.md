@@ -4,13 +4,13 @@
   **🧾 Sort documents into sidecar-backed order 🧾**
 </div>
 
-papertrail is a Python CLI for classifying, deduplicating, renaming, exporting, and reconciling personal or business documents. It handles PDFs with a vision LLM through OpenRouter, image files converted to PDF, and supported bank-statement XLSX exports with deterministic parsers.
+papertrail is a Python CLI for classifying, deduplicating, renaming, exporting, and reconciling personal or business documents. By default, it handles PDFs with Codex through a local AgentBridge server, converts image files to PDF, and parses supported bank-statement XLSX exports deterministically.
 
 The processed folder contains the document files and authoritative `.json` sidecars. Filenames are derived from sidecar metadata, while `sync`, `check`, and `rename` repair the collection when metadata changes.
 
 ## Install
 
-papertrail requires Python 3.12+, `uv`, and an OpenRouter API key for LLM classification.
+papertrail requires Python 3.12+, `uv`, AgentBridge, and an authenticated Codex CLI for LLM classification.
 
 ```bash
 git clone https://github.com/tsilva/papertrail.git
@@ -18,15 +18,23 @@ cd papertrail
 uv venv --python 3.12
 source .venv/bin/activate
 uv pip install -e '.[dev]'
+uv tool install agentbridge-cli
+codex login
 mkdir -p ~/.config/papertrail/profiles/personal
 cp profile.yaml.example ~/.config/papertrail/profiles/personal/profile.yaml
 ```
 
-Edit `~/.config/papertrail/profiles/personal/profile.yaml` with your raw, processed, export, and OpenRouter settings, then run:
+Edit `~/.config/papertrail/profiles/personal/profile.yaml` with your raw, processed, and export paths. Start AgentBridge in one terminal, then run the pipeline in another:
+
+```bash
+agentbridge
+```
 
 ```bash
 papertrail --profile personal pipeline
 ```
+
+The historical `openrouter:` profile key configures the OpenAI-compatible LLM endpoint. Its defaults are `http://127.0.0.1:8082/api/v1`, `codex/gpt-5.6-sol`, and the AgentBridge placeholder key `not-needed`. Existing profiles can still select OpenRouter or another compatible provider by overriding those three values.
 
 ## Commands
 

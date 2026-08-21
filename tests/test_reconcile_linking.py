@@ -11,9 +11,10 @@ from papertrail.commands.reconcile import (
     _is_prior_reconciled_candidate,
     _link_evidence_counterparty_documents,
     _link_shared_period_documents,
+    _prune_rule_aware_exact_candidates,
     _reconciliation_rules,
 )
-from papertrail.config import ReconciliationSettings
+from papertrail.config import ReconciliationRule, ReconciliationSettings
 
 
 class ReconcileLinkingTests(unittest.TestCase):
@@ -58,6 +59,91 @@ class ReconcileLinkingTests(unittest.TestCase):
         )
 
         self.assertEqual(_candidate_sort_name(candidate), candidate.source_filename)
+
+    def test_unbounded_bank_anchors_keep_only_the_closest_date_group(self):
+        txn = Transaction(
+            row_number=12,
+            date_posting="2026-07-30",
+            date_value="2026-07-30",
+            description="TRF. P/O PUZZLE MESSAGE, UNIPESSOAL, LDA",
+            amount=5000.0,
+            currency="EUR",
+            notes="",
+            treated="",
+        )
+        closest = PDFCandidate(
+            json_path=Path("closest.json"),
+            pdf_filename="BNC_2026-07-30 - bank-note - millenniumbcp - cc942388.pdf",
+            date_issued="2026-07-30",
+            document_type="bank-note",
+            document_type_raw="bank-note",
+            document_title="Transferência a crédito",
+            issuing_party="millenniumbcp",
+            total_amount=5000.0,
+            total_amount_currency="EUR",
+            hash_file="cc942388",
+        )
+        other_transaction = PDFCandidate(
+            json_path=Path("other-transaction.json"),
+            pdf_filename="BNC_2026-07-02 - bank-note - millenniumbcp - dcfed10f.pdf",
+            date_issued="2026-07-02",
+            document_type="bank-note",
+            document_type_raw="bank-note",
+            document_title="Transferência a crédito - salários e despesas",
+            issuing_party="millenniumbcp",
+            total_amount=5000.0,
+            total_amount_currency="EUR",
+            hash_file="dcfed10f",
+        )
+        rule = ReconciliationRule(
+            name="bank-only",
+            direction="credit",
+            required_types={"bank-anchor": [1, None]},
+        )
+
+        selected = _prune_rule_aware_exact_candidates(
+            txn,
+            [closest, other_transaction],
+            rule,
+        )
+
+        self.assertEqual(selected, [closest])
+
+    def test_unbounded_bank_anchors_keep_all_candidates_tied_for_closest_date(self):
+        txn = Transaction(
+            row_number=30,
+            date_posting="2026-04-02",
+            date_value="2026-04-02",
+            description="TRF. P/O PUZZLE MESSAGE, UNIPESSOAL, LDA",
+            amount=6100.0,
+            currency="EUR",
+            notes="",
+            treated="",
+        )
+        candidates = [
+            PDFCandidate(
+                json_path=Path(f"same-day-{index}.json"),
+                pdf_filename=f"BNC_2026-04-02 - bank-note - millenniumbcp - hash000{index}.pdf",
+                date_issued="2026-04-02",
+                document_type="bank-note",
+                document_type_raw="bank-note",
+                document_title="Transferência a crédito",
+                issuing_party="millenniumbcp",
+                total_amount=6100.0,
+                total_amount_currency="EUR",
+                hash_file=f"hash000{index}",
+            )
+            for index in range(2)
+        ]
+        rule = ReconciliationRule(
+            name="bank-only",
+            direction="credit",
+            required_types={"bank-anchor": [1, None]},
+        )
+
+        selected = _prune_rule_aware_exact_candidates(txn, candidates, rule)
+
+        self.assertEqual(selected, candidates)
 
     def test_unrelated_shared_bank_invoice_does_not_satisfy_supplier_evidence(self):
         txn = Transaction(
