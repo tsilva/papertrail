@@ -92,8 +92,14 @@ ExportMatchValue = str | int | float | bool
 ExpectedPageCount = int | list[int]
 
 
-DEFAULT_OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
-DEFAULT_OPENROUTER_MODEL_ID = "google/gemini-3.7-flash"
+DEFAULT_AGENTBRIDGE_BASE_URL = "http://127.0.0.1:8082/api/v1"
+DEFAULT_AGENTBRIDGE_MODEL_ID = "codex/gpt-5.6-sol"
+DEFAULT_AGENTBRIDGE_API_KEY = "not-needed"
+
+# Compatibility aliases for callers that imported the historical names. The
+# profile section remains `openrouter` so existing profiles continue to load.
+DEFAULT_OPENROUTER_BASE_URL = DEFAULT_AGENTBRIDGE_BASE_URL
+DEFAULT_OPENROUTER_MODEL_ID = DEFAULT_AGENTBRIDGE_MODEL_ID
 DEFAULT_GMAIL_SCOPES = ["https://www.googleapis.com/auth/gmail.readonly"]
 DEFAULT_GMAIL_EXTENSION_MIME_TYPES = {
     ".pdf": "application/pdf",
@@ -120,8 +126,10 @@ class OpenRouterRequestSettings(SettingsModel):
 
 
 class OpenRouterSettings(SettingsModel):
+    """OpenAI-compatible LLM settings under the historical profile key."""
+
     model_id: str | None = DEFAULT_OPENROUTER_MODEL_ID
-    api_key: str | None = None
+    api_key: str | None = DEFAULT_AGENTBRIDGE_API_KEY
     base_url: str = DEFAULT_OPENROUTER_BASE_URL
     requests: OpenRouterRequestSettings = Field(default_factory=OpenRouterRequestSettings)
 
@@ -662,8 +670,8 @@ def build_openai_client(profile: ProfileSettings) -> openai.OpenAI:
     api_key = profile.openrouter.api_key
     if not api_key:
         raise RuntimeError(
-            f"No OpenRouter API key configured in profile '{profile.profile.name}'. "
-            "Set openrouter.api_key in your profile YAML."
+            f"No LLM API key configured in profile '{profile.profile.name}'. "
+            "Set openrouter.api_key in your profile YAML; AgentBridge accepts 'not-needed'."
         )
     return openai.OpenAI(api_key=api_key, base_url=profile.openrouter.base_url)
 
