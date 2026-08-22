@@ -1,0 +1,4 @@
+interface:
+  display_name: "Extract Last Month"
+  short_description: "Extract and reconcile the previous month"
+  default_prompt: "Use $extract-last-month to extract and fully reconcile the previous calendar month, then report status and data smells."
