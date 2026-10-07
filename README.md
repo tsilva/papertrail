@@ -1,8 +1,10 @@
-<div align="center">
+<p align="center">
   <img src="./logo.png" alt="papertrail" width="512" />
-
-  **🧾 Sort documents into sidecar-backed order 🧾**
-</div>
+  <br />
+  <!-- repo-tagline:start -->
+  <strong>🧾 Sort documents into sidecar-backed order 🧾</strong>
+  <!-- repo-tagline:end -->
+</p>
 
 papertrail is a Python CLI for classifying, deduplicating, renaming, exporting, and reconciling personal or business documents. By default, it handles PDFs with Codex through a local AgentBridge server, converts image files to PDF, and parses supported bank-statement XLSX exports deterministically.
 
