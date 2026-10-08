@@ -226,7 +226,7 @@ def _phase1_llm_extract(
 
     tool_calls = response.choices[0].message.tool_calls
     if not tool_calls:
-        raise ValueError("OpenRouter did not return structured classification.")
+        raise ValueError("LLM provider did not return structured classification.")
 
     args = tool_calls[0].function.arguments
     if pre_extracted:
