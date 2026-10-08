@@ -22,13 +22,13 @@ dependencies = [
     "google-auth-httplib2",
     "google-auth-oauthlib",
     "gradio>=6.16.0",
-    "orjson>=3.9.0",
+    "orjson>=3.11.9",
     "mbox-extractor",
     "pyzbar>=0.1.9",
     "pikepdf",
     "pdfpress>=1.0.5",
-    "rich>=13.0.0",
-    "typer>=0.9.0",
+    "rich>=15.0.0",
+    "typer>=0.27.1",
 ]
 requires-python = ">=3.12"
 
@@ -36,7 +36,7 @@ requires-python = ">=3.12"
 dev = [
     "pip-audit>=2.10.1",
     "pytest>=9.0.3",
-    "ruff>=0.14.0",
+    "ruff>=0.16.2",
 ]
 
 [project.scripts]

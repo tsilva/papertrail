@@ -868,7 +868,14 @@ def _parse_bpi_stock_settlement_date(lines: list[str], sale_index: int) -> Optio
         session_date = date(year, month, day)
     except ValueError:
         return None
-    return (session_date + timedelta(days=_config_int(config, "settlement_offset_days", 1))).isoformat()
+
+    settlement_date = session_date
+    business_days = _config_int(config, "settlement_offset_days", 1)
+    while business_days > 0:
+        settlement_date += timedelta(days=1)
+        if settlement_date.weekday() < 5:
+            business_days -= 1
+    return settlement_date.isoformat()
 
 
 def _extract_bpi_stock_invoice_line_items(pdf_path: Path, data: dict) -> list[CandidateLineItem]:
@@ -937,8 +944,9 @@ def _extract_bpi_stock_invoice_line_items(pdf_path: Path, data: dict) -> list[Ca
             first_sale_index,
         )
         sale_count = min(len(sale_entries), len(total_credit_indices))
-        if len(amount_entries) >= 2 * sale_count:
-            credit_entries = amount_entries[1 : 2 * sale_count : 2]
+        if sale_count and len(amount_entries) % sale_count == 0:
+            columns_per_sale = len(amount_entries) // sale_count
+            credit_entries = amount_entries[columns_per_sale - 1 :: columns_per_sale]
         elif len(amount_entries) >= sale_count:
             credit_entries = amount_entries[-sale_count:]
         else:
@@ -1750,8 +1758,24 @@ def _prune_rule_aware_exact_candidates(
         if max_count is not None:
             matching = matching[:max_count]
         else:
+            ranked_bank_generated = [
+                (candidate, _candidate_rank_for_transaction(txn, candidate, rule.name))
+                for candidate in matching
+                if _is_bank_generated_candidate(candidate)
+            ]
+            ranked_bank_generated = [
+                (candidate, rank)
+                for candidate, rank in ranked_bank_generated
+                if rank is not None
+            ]
+            best_bank_rank = min(
+                (rank for _, rank in ranked_bank_generated),
+                default=None,
+            )
             bank_generated = [
-                candidate for candidate in matching if _is_bank_generated_candidate(candidate)
+                candidate
+                for candidate, rank in ranked_bank_generated
+                if rank == best_bank_rank
             ]
             best_by_signature: dict[tuple[str, str], PDFCandidate] = {}
             for candidate in matching:

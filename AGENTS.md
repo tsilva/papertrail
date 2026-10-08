@@ -108,3 +108,10 @@ The Gradio tools are active supported surfaces:
 The `papertrail review` command launches the reconciliation review tool. Preserve
 the standalone launchers and the unified app unless a product decision explicitly
 retires one of those modes.
+
+## Project skills
+
+- Use `/extract-last-month` from
+  `.agents/skills/extract-last-month/SKILL.md` for recurring previous-month
+  ingestion, AgentBridge + Codex classification, reconciliation completion, data-smell
+  triage, and the final monthly status report.

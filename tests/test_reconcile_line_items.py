@@ -230,6 +230,59 @@ class ReconcileLineItemTests(unittest.TestCase):
         self.assertEqual(items[0].document_type, "bank-stock-sell")
         self.assertFalse(items[0].amount_match_required)
 
+    def test_extracts_multiple_bpi_stock_sales_with_sec_fees_and_weekend_settlement(self):
+        lines = [
+            "FACTURA",
+            "Data de Emissão: 31-08-2026",
+            "TÍTULOS",
+            "OPERAÇÃO BOLSA",
+            "SEC COMISSION",
+            "TOTAL A CRÉDITO",
+            "OPERAÇÃO BOLSA",
+            "SEC COMISSION",
+            "TOTAL A CRÉDITO",
+            "5 820,00",
+            "-0,12",
+            "5 804,28",
+            "6 536,32",
+            "-0,13",
+            "6 520,59",
+            "USD",
+            "USD",
+            "USD",
+            "USD",
+            "USD",
+            "USD",
+            "VENDA DE 60,0000 ACÇÕES STRATEGY INC(XNGS)",
+            "AO PREÇO DE: 97,000000 USD NA SESSÃO DE BOLSA: 04-08-2026 DA NASDAQ",
+            "Nº ORDEM: V8986465",
+            "VENDA DE 64,0000 ACÇÕES STRATEGY INC(XNGS)",
+            "AO PREÇO DE: 102,130000 USD NA SESSÃO DE BOLSA: 07-08-2026 DA NASDAQ",
+            "Nº ORDEM: V9033445",
+        ]
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            path = Path(tmp_dir) / "bpi.pdf"
+            doc = fitz.open()
+            page = doc.new_page()
+            page.insert_text((72, 72), "\n".join(lines), fontsize=10)
+            doc.save(path)
+            doc.close()
+
+            items = _extract_bpi_stock_invoice_line_items(
+                path,
+                {
+                    "date_issued": "2026-08-31",
+                    "document_type": "invoice",
+                    "issuing_party": "BPI",
+                    "document_title": "Comissões de conta e títulos",
+                },
+            )
+
+        self.assertEqual([item.amount for item in items], [5804.28, 6520.59])
+        self.assertEqual([item.amount_currency for item in items], ["USD", "USD"])
+        self.assertEqual([item.date_issued for item in items], ["2026-08-05", "2026-08-10"])
+        self.assertEqual([item.reference for item in items], ["V8986465", "V9033445"])
+
     def test_extracts_insurance_notice_direct_debit_line_item(self):
         lines = [
             "Companhia de Seguros Insurance Provider Portugal, S.A.",
