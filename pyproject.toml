@@ -10,6 +10,8 @@ authors = [
     { name = "Employee Two", email = "eng.employee-two.silva@gmail.com" }
 ]
 dependencies = [
+    "fastapi>=0.139.0",
+    "uvicorn>=0.40.0",
     "unarch>=0.6.0",
     "openai",
     "PyMuPDF",

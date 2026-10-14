@@ -210,3 +210,7 @@ var/
 venv.bak/
 wheels/
 !.cache/*.example
+
+# Keep Svelte source tracked despite the general Python lib/ exclusion.
+!frontend/src/lib/
+!frontend/src/lib/**
