@@ -21,7 +21,7 @@ paths:
 # OpenAI-compatible LLM configuration. The `openrouter` key is retained for
 # compatibility with existing profiles; AgentBridge + Codex is the default.
 openrouter:
-  model_id: "codex/gpt-5.6-sol"
+  model_id: "codex/gpt-6.1-sol"  # High reasoning effort
   api_key: "not-needed"  # AgentBridge uses the authenticated local Codex CLI
   base_url: "http://127.0.0.1:8082/api/v1"
   requests:
@@ -131,7 +131,17 @@ gmail:
   output_raw_path: null
   tracking_dir: null
   tracking_subdir: "gmail_tracking"
-  # Defaults to ~/.config/papertrail/credentials/ when null.
+  credential_backend: "file"  # "infisical" reads/writes OAuth JSON in Infisical.
+  infisical:
+    project_id: null  # Required when credential_backend is "infisical".
+    environment: "prod"
+    path: "/"
+    client_secret_name: "PAPERTRAIL_GMAIL_CLIENT_JSON"
+    token_secret_name: "PAPERTRAIL_GMAIL_TOKEN_JSON"
+    login_profile: null  # Uses the active CLI login when null.
+    executable: "infisical"
+    timeout_seconds: 60
+  # Used only by the "file" backend; defaults to the credentials directory when null.
   credentials_file: null  # Defaults to ~/.config/papertrail/credentials/gmail_credentials.json
   token_file: null  # Defaults to ~/.config/papertrail/credentials/gmail_token.json
   # Or specify custom path: "/custom/path/gmail_credentials.json"

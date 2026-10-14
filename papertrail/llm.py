@@ -10,6 +10,7 @@ from typing import TypedDict
 
 import openai
 
+from papertrail.agentbridge import model_id as gateway_model
 from papertrail.config import ClassificationSettings
 from papertrail.logging_utils import get_logger
 from papertrail.models import DocumentMetadataRaw
@@ -30,6 +31,7 @@ class QRPreExtractedFields(TypedDict, total=False):
 class MultiQRInfo(TypedDict):
     count: int
     issuers: list[str]
+
 
 _LEGAL_SUFFIXES = {
     "inc",
@@ -62,7 +64,9 @@ def _ascii_fold(value: str) -> str:
     return unicodedata.normalize("NFKD", value).encode("ascii", "ignore").decode("ascii")
 
 
-def _legal_suffixes(legal_suffixes: list[str] | tuple[str, ...] | set[str] | None = None) -> set[str]:
+def _legal_suffixes(
+    legal_suffixes: list[str] | tuple[str, ...] | set[str] | None = None,
+) -> set[str]:
     return {suffix.lower() for suffix in (legal_suffixes or _LEGAL_SUFFIXES)}
 
 
@@ -179,7 +183,9 @@ def build_extraction_tools(exclude_fields: set[str] | None = None) -> list[dict]
         for field in exclude_fields:
             schema["properties"].pop(field, None)
         if "required" in schema:
-            schema["required"] = [field for field in schema["required"] if field not in exclude_fields]
+            schema["required"] = [
+                field for field in schema["required"] if field not in exclude_fields
+            ]
 
     return [
         {
@@ -363,7 +369,12 @@ def normalize_issuing_party_with_status(
 
     try:
         response = client.chat.completions.create(
-            model=model_id,
+            model=gateway_model(model_id),
+            **(
+                {"reasoning_effort": "high" if model_id == "codex/gpt-6.1-sol" else "low"}
+                if model_id in {"codex/gpt-6.1-sol", "codex/gpt-6-astra"}
+                else {}
+            ),
             max_tokens=max_tokens,
             temperature=temperature,
             messages=[{"role": "user", "content": prompt}],

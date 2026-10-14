@@ -10,6 +10,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from papertrail.agentbridge import model_id as gateway_model
 from papertrail.bank_statement.extractor import (
     BankStatementParseError,
     BankStatementReadError,
@@ -201,7 +202,12 @@ def _phase1_llm_extract(
 
     t0 = _time.monotonic()
     response = runtime.openai_client.chat.completions.create(
-        model=runtime.model_id,
+        model=gateway_model(runtime.model_id),
+        **(
+            {"reasoning_effort": "high" if runtime.model_id == "codex/gpt-6.1-sol" else "low"}
+            if runtime.model_id in {"codex/gpt-6.1-sol", "codex/gpt-6-astra"}
+            else {}
+        ),
         max_tokens=runtime.profile.openrouter.requests.classification_max_tokens,
         temperature=runtime.profile.openrouter.requests.classification_temperature,
         messages=messages,
@@ -249,11 +255,7 @@ def _enrich_nif(
     scope: str | Path,
     doc_logger: DocumentLogger | None,
 ) -> tuple[str | None, str | None]:
-    if not (
-        tax_number
-        and runtime.nif_cache
-        and runtime.nif_cache.is_supported_nif(tax_number)
-    ):
+    if not (tax_number and runtime.nif_cache and runtime.nif_cache.is_supported_nif(tax_number)):
         return None, None
 
     official_issuer, lookup_source, lookup_error = runtime.nif_cache.lookup(tax_number)
@@ -295,7 +297,9 @@ def _enrich_nif(
             doc_logger.log_nif_enrichment(tax_number, official_issuer, canonical or nif_normalized)
         return canonical or nif_normalized, official_issuer
 
-    logger.debug(f"[NIF-ENRICH] Keeping original issuer (NIF name didn't normalize): {official_issuer}")
+    logger.debug(
+        f"[NIF-ENRICH] Keeping original issuer (NIF name didn't normalize): {official_issuer}"
+    )
     return None, official_issuer
 
 
@@ -578,12 +582,16 @@ class DocumentEngine:
             }
             if qr_metadata and not is_multi_qr:
                 _merge_qr_metadata(qr_metadata, merged, doc_logger)
-                merged["document_type"] = self.repository.registry.canonicalize_document_type(merged["document_type"])
+                merged["document_type"] = self.repository.registry.canonicalize_document_type(
+                    merged["document_type"]
+                )
 
             if merged["document_type"] != "$UNKNOWN$":
                 self.repository.registry.register_document_type(merged["document_type"])
 
-            normalized_issuing_party = self.repository.registry.canonicalize_issuing_party(raw_metadata.issuing_party)
+            normalized_issuing_party = self.repository.registry.canonicalize_issuing_party(
+                raw_metadata.issuing_party
+            )
             normalized_issuing_party = _phase4_nif_enrich(
                 merged,
                 normalized_issuing_party or "$UNKNOWN$",
@@ -605,7 +613,9 @@ class DocumentEngine:
                 total_amount=merged["total_amount"],
                 total_amount_currency=merged["total_amount_currency"],
                 class_confidence=(
-                    raw_metadata.confidence if is_multi_qr else (1.0 if qr_metadata else raw_metadata.confidence)
+                    raw_metadata.confidence
+                    if is_multi_qr
+                    else (1.0 if qr_metadata else raw_metadata.confidence)
                 ),
                 class_reasoning=raw_metadata.reasoning,
                 hash_content=file_hash,
@@ -734,7 +744,11 @@ class DocumentEngine:
                 data = {}
 
             changed = False
-            if data.get("page_count") is None and source_path.exists() and source_path.suffix.lower() == ".pdf":
+            if (
+                data.get("page_count") is None
+                and source_path.exists()
+                and source_path.suffix.lower() == ".pdf"
+            ):
                 data["page_count"] = get_page_count(source_path)
                 changed = True
             if data.get("file_size_kb") is None and source_path.exists():
@@ -811,10 +825,14 @@ class DocumentEngine:
                 )
 
         bundle_settings = self.runtime.profile.processing.bundle
-        if mode == "ingest" and suffix == ".pdf" and is_splittable_bundle(
-            source_path,
-            enabled=bundle_settings.enabled,
-            pagination_patterns=bundle_settings.pagination_patterns,
+        if (
+            mode == "ingest"
+            and suffix == ".pdf"
+            and is_splittable_bundle(
+                source_path,
+                enabled=bundle_settings.enabled,
+                pagination_patterns=bundle_settings.pagination_patterns,
+            )
         ):
             with tempfile.TemporaryDirectory() as tmp_dir:
                 split_paths = split_pdf_bundle(source_path, Path(tmp_dir))
@@ -871,7 +889,11 @@ class DocumentEngine:
 
             metadata.file_size_kb = round(source_path.stat().st_size / 1024)
             if mode == "resync" and existing_metadata:
-                old_data = existing_metadata.model_dump() if isinstance(existing_metadata, DocumentMetadata) else existing_metadata
+                old_data = (
+                    existing_metadata.model_dump()
+                    if isinstance(existing_metadata, DocumentMetadata)
+                    else existing_metadata
+                )
                 metadata.date_created = old_data.get("date_created") or self.runtime.today
                 metadata.date_updated = self.runtime.today
 
@@ -895,7 +917,11 @@ class DocumentEngine:
 
         old_data = None
         if existing_metadata:
-            old_data = existing_metadata.model_dump() if isinstance(existing_metadata, DocumentMetadata) else existing_metadata
+            old_data = (
+                existing_metadata.model_dump()
+                if isinstance(existing_metadata, DocumentMetadata)
+                else existing_metadata
+            )
 
         hashing_settings = self.runtime.profile.processing.hashing
         file_hash = old_data.get("hash_file") if old_data else None
@@ -969,7 +995,12 @@ class DocumentEngine:
         run_start = _time.monotonic()
 
         logger.debug("Building hash index from metadata files...")
-        known_content_hashes_idx, known_file_hashes_idx, known_text_hashes_idx, known_issuers_before = self.repository.build_indexes(processed_path)
+        (
+            known_content_hashes_idx,
+            known_file_hashes_idx,
+            known_text_hashes_idx,
+            known_issuers_before,
+        ) = self.repository.build_indexes(processed_path)
         known_content_hashes = set(known_content_hashes_idx.keys())
         known_file_hashes = set(known_file_hashes_idx.keys())
         known_text_hashes = set(known_text_hashes_idx.keys())
@@ -1048,7 +1079,11 @@ class DocumentEngine:
                 if content_hash not in new_hashes:
                     continue
                 issuing_party = data.get("issuing_party")
-                if issuing_party and issuing_party != "$UNKNOWN$" and issuing_party not in known_issuers_before:
+                if (
+                    issuing_party
+                    and issuing_party != "$UNKNOWN$"
+                    and issuing_party not in known_issuers_before
+                ):
                     new_issuers.add(issuing_party)
                 if data.get("document_type") == "$UNKNOWN$":
                     unknown_dt_count += 1
@@ -1063,7 +1098,9 @@ class DocumentEngine:
             if totals["xlsx_new"] > 0:
                 console.success(f"{totals['xlsx_new']} XLSX file(s) processed", indent=False)
             if totals["failed"] > 0:
-                console.warning(f"{totals['new']} processed, {totals['failed']} failed", indent=False)
+                console.warning(
+                    f"{totals['new']} processed, {totals['failed']} failed", indent=False
+                )
 
         logger.debug(
             f"=== SUMMARY: {totals['new']} success, {totals['failed']} failed, "

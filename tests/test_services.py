@@ -1,6 +1,7 @@
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import yaml
@@ -13,7 +14,7 @@ from papertrail.config import (
     build_openai_client,
 )
 from papertrail.engine import DocumentEngine
-
+from papertrail.llm import normalize_issuing_party_with_status
 from tests.support import make_test_runtime
 
 
@@ -31,13 +32,38 @@ class DocumentEngineTests(unittest.TestCase):
     def test_backfill_adds_derived_fields_without_llm(self):
         doc_path = self.processed / "statement.xlsx"
         doc_path.write_text("xlsx")
-        metadata = {"date_issued": "2026-01-01", "document_type": "bank-statement", "issuing_party": "bank"}
+        metadata = {
+            "date_issued": "2026-01-01",
+            "document_type": "bank-statement",
+            "issuing_party": "bank",
+        }
         result = self.engine.upsert(doc_path, "backfill", existing_metadata=metadata, dry_run=True)
         self.assertEqual(result.processed, 1)
         self.assertIn(doc_path, result.outputs)
 
 
 class AgentBridgeDefaultTests(unittest.TestCase):
+    def test_sol_normalization_requests_high_reasoning(self):
+        requests = []
+
+        def create(**kwargs):
+            requests.append(kwargs)
+            return SimpleNamespace(
+                choices=[
+                    SimpleNamespace(
+                        message=SimpleNamespace(content='{"issuing_party": "synthetic-party"}')
+                    )
+                ]
+            )
+
+        client = SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=create)))
+        result = normalize_issuing_party_with_status(
+            "Synthetic Party", client, "codex/gpt-6.1-sol", []
+        )
+
+        self.assertEqual(result, ("synthetic-party", "llm"))
+        self.assertEqual(requests[0]["reasoning_effort"], "high")
+
     def test_typed_profile_defaults_to_agentbridge_codex(self):
         profile = ProfileSettings.model_validate({"profile": {"name": "test"}})
 

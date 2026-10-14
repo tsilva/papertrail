@@ -115,3 +115,20 @@ retires one of those modes.
   `.agents/skills/extract-last-month/SKILL.md` for recurring previous-month
   ingestion, AgentBridge + Codex classification, reconciliation completion, data-smell
   triage, and the final monthly status report.
+
+## Svelte dashboard
+
+`papertrail review` now launches `tools/dashboard.py`, the loopback FastAPI
+service for the bundled Svelte UI in `frontend/`. Documents and Review use
+profile-scoped document identities; source sidecars remain authoritative.
+Approvals retain the existing groundtruth schema, with a separate `rejections`
+collection for rejected pairings. Retain all unrelated groundtruth fields when
+writing decisions. Missing evidence must not be approved, and stale revisions
+must return a conflict before any write.
+
+Run `pnpm --dir frontend check`, `pnpm --dir frontend test`, and
+`pnpm --dir frontend build` after frontend changes. Commit the generated
+`tools/static/dashboard/` assets with the source; installed Python users do not
+need Node.js. Preserve all supported standalone Gradio tools. Keep private
+profile documents and browser screenshots outside tracked paths; use synthetic
+fixtures for browser verification.
