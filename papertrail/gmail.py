@@ -10,14 +10,16 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional
 
+from google.auth.exceptions import RefreshError
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 
-from papertrail.config import GmailSettings, get_gmail_config_paths
+from papertrail.config import ConfigError, GmailSettings, get_gmail_config_paths
 from papertrail.console import PapertrailConsole
+from papertrail.gmail_credentials import gmail_credential_store
 from papertrail.logging_utils import get_logger, setup_failure_logger
 
 logger = get_logger("gmail")
@@ -57,26 +59,28 @@ class GmailDownloader:
         self.service = None
         self.failure_logger = None
 
-    def authenticate(self) -> bool:
+    def authenticate(self, *, reauthorize: bool = False) -> bool:
         creds = None
         scopes = list(self.settings.scopes)
-        if self.token_path.exists():
-            creds = Credentials.from_authorized_user_file(str(self.token_path), scopes)
+        store = gmail_credential_store(self.settings, self.credentials_path, self.token_path)
+        token = None if reauthorize else store.load_token()
+        if token is not None:
+            creds = Credentials.from_authorized_user_info(token, scopes)
 
         if not creds or not creds.valid:
             if creds and creds.expired and creds.refresh_token:
-                creds.refresh(Request())
+                try:
+                    creds.refresh(Request())
+                except RefreshError:
+                    raise ConfigError(
+                        "Gmail authorization could not be refreshed. Run "
+                        "`papertrail --profile <name> gmail-auth` to reconnect."
+                    ) from None
             else:
-                if not self.credentials_path.exists():
-                    raise FileNotFoundError(
-                        f"Gmail credentials not found at {self.credentials_path}. "
-                        "Download from Google Cloud Console and save to this path."
-                    )
-                flow = InstalledAppFlow.from_client_secrets_file(str(self.credentials_path), scopes)
-                creds = flow.run_local_server(port=0)
+                flow = InstalledAppFlow.from_client_config(store.load_client(), scopes)
+                creds = flow.run_local_server(port=0, timeout_seconds=300)
 
-            with open(self.token_path, "w", encoding="utf-8") as token_file:
-                token_file.write(creds.to_json())
+            store.save_token(creds.to_json())
 
         self.service = build(
             self.settings.api_service,

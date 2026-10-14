@@ -7,10 +7,12 @@ import urllib.error
 import urllib.request
 from copy import deepcopy
 from pathlib import Path
+from typing import Literal
 
 import openai
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from papertrail.agentbridge import base_url as gateway_base_url
 from papertrail.document_types import DEFAULT_DOCUMENT_TYPE_OVERRIDES
 from papertrail.qr.models import (
     DEFAULT_PORTUGUESE_INVOICE_DOCUMENT_TYPE_CODES,
@@ -93,7 +95,7 @@ ExpectedPageCount = int | list[int]
 
 
 DEFAULT_AGENTBRIDGE_BASE_URL = "http://127.0.0.1:8082/api/v1"
-DEFAULT_AGENTBRIDGE_MODEL_ID = "codex/gpt-5.6-sol"
+DEFAULT_AGENTBRIDGE_MODEL_ID = "codex/gpt-6.1-sol"
 DEFAULT_AGENTBRIDGE_API_KEY = "not-needed"
 
 # Compatibility aliases for callers that imported the historical names. The
@@ -133,6 +135,26 @@ class OpenRouterSettings(SettingsModel):
     base_url: str = DEFAULT_OPENROUTER_BASE_URL
     requests: OpenRouterRequestSettings = Field(default_factory=OpenRouterRequestSettings)
 
+    @field_validator("base_url")
+    @classmethod
+    def _validate_gateway_url(cls, value: str) -> str:
+        return gateway_base_url(value)
+
+
+class GmailInfisicalSettings(SettingsModel):
+    project_id: str | None = None
+    environment: str = "prod"
+    path: str = "/"
+    client_secret_name: str = Field(
+        default="PAPERTRAIL_GMAIL_CLIENT_JSON", pattern=r"^[A-Za-z_][A-Za-z0-9_]*$"
+    )
+    token_secret_name: str = Field(
+        default="PAPERTRAIL_GMAIL_TOKEN_JSON", pattern=r"^[A-Za-z_][A-Za-z0-9_]*$"
+    )
+    login_profile: str | None = None
+    executable: str = "infisical"
+    timeout_seconds: int = Field(default=60, gt=0)
+
 
 class GmailSettings(SettingsModel):
     enabled: bool = False
@@ -147,6 +169,8 @@ class GmailSettings(SettingsModel):
     skip_already_downloaded: bool = True
     credentials_file: str | None = None
     token_file: str | None = None
+    credential_backend: Literal["file", "infisical"] = "file"
+    infisical: GmailInfisicalSettings = Field(default_factory=GmailInfisicalSettings)
     scopes: list[str] = Field(default_factory=lambda: list(DEFAULT_GMAIL_SCOPES))
     extension_mime_types: dict[str, str] = Field(
         default_factory=lambda: dict(DEFAULT_GMAIL_EXTENSION_MIME_TYPES)
@@ -424,6 +448,7 @@ class ProfileSettings(SettingsModel):
     profile_path: Path | None = Field(default=None, exclude=True)
     profile_dir: Path | None = Field(default=None, exclude=True)
 
+
 def _resolve_path(path_str: str | None, profile_path: Path | None) -> str | None:
     if not path_str:
         return None
@@ -518,7 +543,9 @@ def _merge_reconciliation_policy_files(
     return merged
 
 
-def _normalize_profile_data(data: dict[str, object], profile_path: Path | None) -> dict[str, object]:
+def _normalize_profile_data(
+    data: dict[str, object], profile_path: Path | None
+) -> dict[str, object]:
     normalized = deepcopy(data)
 
     if isinstance(normalized.get("reconciliation"), dict):
@@ -667,13 +694,8 @@ def get_gmail_config_paths(profile: ProfileSettings | None = None) -> dict[str, 
 
 
 def build_openai_client(profile: ProfileSettings) -> openai.OpenAI:
-    api_key = profile.openrouter.api_key
-    if not api_key:
-        raise RuntimeError(
-            f"No LLM API key configured in profile '{profile.profile.name}'. "
-            "Set openrouter.api_key in your profile YAML; AgentBridge accepts 'not-needed'."
-        )
-    return openai.OpenAI(api_key=api_key, base_url=profile.openrouter.base_url)
+    api_key = os.getenv("AGENTBRIDGE_API_KEY") or "not-needed"
+    return openai.OpenAI(api_key=api_key, base_url=gateway_base_url(profile.openrouter.base_url))
 
 
 def check_api_accessibility(base_url: str, timeout: int = 10) -> bool:

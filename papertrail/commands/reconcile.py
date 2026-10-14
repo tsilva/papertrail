@@ -12,6 +12,7 @@ from typing import Optional
 
 import fitz
 
+from papertrail.agentbridge import model_id as gateway_model
 from papertrail.bank_statement.extractor import (
     load_transactions as load_bank_statement_transactions,
 )
@@ -33,9 +34,7 @@ class LineItemExtractionError(RuntimeError):
 
 
 _AMOUNT_LINE_RE = re.compile(r"^-?\d[\d\s.]*,\d{2}$")
-_PERIOD_TOKEN_RE = re.compile(
-    r"\b(JAN|FEV|MAR|ABR|MAI|JUN|JUL|AGO|SET|OUT|NOV|DEZ)\s+(20\d{2})\b"
-)
+_PERIOD_TOKEN_RE = re.compile(r"\b(JAN|FEV|MAR|ABR|MAI|JUN|JUL|AGO|SET|OUT|NOV|DEZ)\s+(20\d{2})\b")
 _DATE_DMY_RE = re.compile(r"\b(\d{2})[/-](\d{2})[/-](20\d{2})\b")
 _DATE_DM_RE = re.compile(r"\b(\d{2})[/-](\d{2})\b")
 
@@ -96,7 +95,9 @@ def _line_item_config(name: str) -> dict[str, object]:
     return dict(_reconciliation_policy().line_item_extractors.get(name, {}))
 
 
-def _config_sequence(config: dict[str, object], key: str, default: tuple[str, ...] = ()) -> tuple[str, ...]:
+def _config_sequence(
+    config: dict[str, object], key: str, default: tuple[str, ...] = ()
+) -> tuple[str, ...]:
     value = config.get(key, default)
     if isinstance(value, str):
         return (value,)
@@ -124,9 +125,13 @@ def _config_regex(config: dict[str, object], key: str, *, flags: int = 0) -> re.
     return re.compile(str(pattern), flags)
 
 
-def _doc_matches_line_item_config(doc_type: str, issuing_party: str, config: dict[str, object]) -> bool:
+def _doc_matches_line_item_config(
+    doc_type: str, issuing_party: str, config: dict[str, object]
+) -> bool:
     doc_types = {item.lower() for item in _config_sequence(config, "document_types")}
-    issuing_parties = {_normalize_for_match(item) for item in _config_sequence(config, "issuing_parties")}
+    issuing_parties = {
+        _normalize_for_match(item) for item in _config_sequence(config, "issuing_parties")
+    }
     return (
         bool(doc_types)
         and bool(issuing_parties)
@@ -202,7 +207,9 @@ class PDFCandidate:
     @property
     def effective_document_type(self) -> Optional[str]:
         if (self.file_extension or "").lower() == ".pdf":
-            return normalize_document_type(self.document_type, self.document_type_raw, self.document_title)
+            return normalize_document_type(
+                self.document_type, self.document_type_raw, self.document_title
+            )
         return self.document_type
 
 
@@ -361,7 +368,9 @@ def _load_transactions(runtime: Runtime, excel_path: Path) -> list[Transaction]:
     ]
 
 
-def _load_statement_issuing_party(repository: DocumentRepository, excel_path: Path) -> Optional[str]:
+def _load_statement_issuing_party(
+    repository: DocumentRepository, excel_path: Path
+) -> Optional[str]:
     json_path = excel_path.with_suffix(".json")
     if not json_path.exists():
         return None
@@ -435,8 +444,7 @@ def _prior_reconciliation_paths(export_path: Path) -> list[Path]:
     return [
         search_path
         for search_path in _reconciliation_search_paths(export_path)
-        if (path_key := _export_month_key(search_path)) is not None
-        and path_key < current_key
+        if (path_key := _export_month_key(search_path)) is not None and path_key < current_key
     ]
 
 
@@ -473,7 +481,9 @@ def _load_reconciled_candidate_keys(search_paths: list[Path]) -> set[str]:
     return reconciled
 
 
-def _is_prior_reconciled_candidate(candidate: PDFCandidate, prior_reconciled_keys: set[str]) -> bool:
+def _is_prior_reconciled_candidate(
+    candidate: PDFCandidate, prior_reconciled_keys: set[str]
+) -> bool:
     return bool(
         candidate.pdf_filename in prior_reconciled_keys
         or (candidate.hash_file and candidate.hash_file.lower() in prior_reconciled_keys)
@@ -490,7 +500,9 @@ def _date_from_iso(value: Optional[str]) -> Optional[date]:
         return None
 
 
-def _transaction_date_bounds(transactions: list[Transaction]) -> tuple[Optional[date], Optional[date]]:
+def _transaction_date_bounds(
+    transactions: list[Transaction],
+) -> tuple[Optional[date], Optional[date]]:
     dates = [
         parsed
         for txn in transactions
@@ -540,7 +552,9 @@ def _relevant_companion_amounts(transactions: list[Transaction], rules: list) ->
     return relevant_amounts
 
 
-def _shared_requirements(transactions: list[Transaction], rules: list) -> list[tuple[str, Optional[str]]]:
+def _shared_requirements(
+    transactions: list[Transaction], rules: list
+) -> list[tuple[str, Optional[str]]]:
     requirements: list[tuple[str, Optional[str]]] = []
     seen: set[tuple[str, Optional[str]]] = set()
     for txn in transactions:
@@ -713,13 +727,20 @@ def _extract_bpi_fee_invoice_line_items(pdf_path: Path, data: dict) -> list[Cand
     title = _normalize_for_match(data.get("document_title") or "")
     if not _doc_matches_line_item_config(doc_type, issuing_party, config):
         return []
-    title_terms = tuple(_normalize_for_match(item) for item in _config_sequence(config, "title_terms"))
+    title_terms = tuple(
+        _normalize_for_match(item) for item in _config_sequence(config, "title_terms")
+    )
     if title_terms and not any(term in title for term in title_terms):
         return []
 
     try:
         with fitz.open(pdf_path) as pdf:
-            lines = [line.strip() for page in pdf for line in page.get_text().splitlines() if line.strip()]
+            lines = [
+                line.strip()
+                for page in pdf
+                for line in page.get_text().splitlines()
+                if line.strip()
+            ]
     except Exception as exc:
         raise LineItemExtractionError(f"Failed to read {pdf_path.name}: {exc}") from exc
 
@@ -731,7 +752,9 @@ def _extract_bpi_fee_invoice_line_items(pdf_path: Path, data: dict) -> list[Cand
         maintenance_marker = str(config.get("maintenance_marker", ""))
         if maintenance_marker not in line:
             continue
-        amounts = _amounts_near(lines, index, after=_config_int(config, "maintenance_search_after", 25))
+        amounts = _amounts_near(
+            lines, index, after=_config_int(config, "maintenance_search_after", 25)
+        )
         pair = _find_bpi_stamp_duty_pair(
             amounts,
             rate=_config_float(config, "stamp_duty_rate", 0.04),
@@ -762,10 +785,14 @@ def _extract_bpi_fee_invoice_line_items(pdf_path: Path, data: dict) -> list[Cand
         custody_matched = False
         total_marker = str(config.get("total_debit_marker", ""))
         total_search_after = _config_int(config, "custody_total_search_after", 20)
-        for offset, candidate_line in enumerate(normalized_lines[index : index + total_search_after]):
+        for offset, candidate_line in enumerate(
+            normalized_lines[index : index + total_search_after]
+        ):
             if candidate_line != total_marker:
                 continue
-            amount = _amounts_near(lines, index + offset, after=_config_int(config, "custody_total_amount_after", 3))
+            amount = _amounts_near(
+                lines, index + offset, after=_config_int(config, "custody_total_amount_after", 3)
+            )
             if amount:
                 _append_line_item(
                     line_items,
@@ -781,7 +808,9 @@ def _extract_bpi_fee_invoice_line_items(pdf_path: Path, data: dict) -> list[Cand
         max_amount = _config_float(config, "custody_fallback_max_amount", 100)
         amounts_after = [
             amount
-            for amount in _amounts_near(lines, index, after=_config_int(config, "custody_fallback_after", 15))
+            for amount in _amounts_near(
+                lines, index, after=_config_int(config, "custody_fallback_after", 15)
+            )
             if 0 < amount <= max_amount
         ]
         if index > 0 and maintenance_marker in normalized_lines[index - 1]:
@@ -796,7 +825,9 @@ def _extract_bpi_fee_invoice_line_items(pdf_path: Path, data: dict) -> list[Cand
                 continue
         amounts_before = [
             amount
-            for amount in _amounts_near(lines, index, before=_config_int(config, "custody_fallback_before", 15))
+            for amount in _amounts_near(
+                lines, index, before=_config_int(config, "custody_fallback_before", 15)
+            )
             if 0 < amount <= max_amount
         ]
         if amounts_before:
@@ -885,7 +916,9 @@ def _extract_bpi_stock_invoice_line_items(pdf_path: Path, data: dict) -> list[Ca
     title = _normalize_for_match(data.get("document_title") or "")
     if not _doc_matches_line_item_config(doc_type, issuing_party, config):
         return []
-    title_terms = tuple(_normalize_for_match(item) for item in _config_sequence(config, "title_terms"))
+    title_terms = tuple(
+        _normalize_for_match(item) for item in _config_sequence(config, "title_terms")
+    )
     if title_terms and not any(term in title for term in title_terms):
         return []
 
@@ -983,10 +1016,7 @@ def _extract_bpi_stock_invoice_line_items(pdf_path: Path, data: dict) -> list[Ca
             f"{item.category}={item.amount:.2f} {item.amount_currency or ''}@{item.date_issued}"
             for item in line_items
         )
-        logger.debug(
-            f"[LINE-ITEMS] {pdf_path.name}: "
-            f"{summary}"
-        )
+        logger.debug(f"[LINE-ITEMS] {pdf_path.name}: {summary}")
     return line_items
 
 
@@ -1021,7 +1051,9 @@ def _extract_bpi_transfer_line_items(pdf_path: Path, data: dict) -> list[Candida
             if not match:
                 continue
 
-            amounts = _amounts_near(lines, index, before=_config_int(config, "amount_search_before", 8))
+            amounts = _amounts_near(
+                lines, index, before=_config_int(config, "amount_search_before", 8)
+            )
             if not amounts:
                 continue
 
@@ -1051,7 +1083,9 @@ def _extract_bpi_transfer_line_items(pdf_path: Path, data: dict) -> list[Candida
     return line_items
 
 
-def _extract_millennium_fee_invoice_line_items(pdf_path: Path, data: dict) -> list[CandidateLineItem]:
+def _extract_millennium_fee_invoice_line_items(
+    pdf_path: Path, data: dict
+) -> list[CandidateLineItem]:
     config = _line_item_config("millennium_fee_invoice")
     doc_type = (data.get("document_type") or "").lower()
     issuing_party = _normalize_for_match(data.get("issuing_party") or "")
@@ -1060,17 +1094,26 @@ def _extract_millennium_fee_invoice_line_items(pdf_path: Path, data: dict) -> li
 
     try:
         with fitz.open(pdf_path) as pdf:
-            lines = [line.strip() for page in pdf for line in page.get_text().splitlines() if line.strip()]
+            lines = [
+                line.strip()
+                for page in pdf
+                for line in page.get_text().splitlines()
+                if line.strip()
+            ]
     except Exception as exc:
         raise LineItemExtractionError(f"Failed to read {pdf_path.name}: {exc}") from exc
 
     normalized_lines = [strip_diacritics(line).upper() for line in lines]
-    movement_date = _extract_millennium_movement_date(lines, normalized_lines) or data.get("date_issued")
+    movement_date = _extract_millennium_movement_date(lines, normalized_lines) or data.get(
+        "date_issued"
+    )
     line_items: list[CandidateLineItem] = []
     seen: set[tuple[str, float, str]] = set()
 
     for index, normalized_line in enumerate(normalized_lines):
-        amount = _next_amount_line(lines, index, after=_config_int(config, "amount_search_after", 5))
+        amount = _next_amount_line(
+            lines, index, after=_config_int(config, "amount_search_after", 5)
+        )
         if amount is None:
             continue
 
@@ -1089,7 +1132,10 @@ def _extract_millennium_fee_invoice_line_items(pdf_path: Path, data: dict) -> li
                 date_issued=movement_date,
             )
         elif (
-            any(marker in normalized_line for marker in _config_sequence(config, "stamp_duty_markers"))
+            any(
+                marker in normalized_line
+                for marker in _config_sequence(config, "stamp_duty_markers")
+            )
             and str(config.get("stamp_duty_legal_reference", "")) in normalized_line
         ):
             _append_line_item(
@@ -1109,7 +1155,9 @@ def _extract_millennium_fee_invoice_line_items(pdf_path: Path, data: dict) -> li
     return line_items
 
 
-def _extract_millennium_movement_date(lines: list[str], normalized_lines: list[str]) -> Optional[str]:
+def _extract_millennium_movement_date(
+    lines: list[str], normalized_lines: list[str]
+) -> Optional[str]:
     config = _line_item_config("millennium_fee_invoice")
     marker = str(config.get("movement_date_marker", "DATA DO MOVIMENTO"))
     amount_search_after = _config_int(config, "amount_search_after", 5)
@@ -1250,7 +1298,9 @@ def _extract_reconciliation_line_items(pdf_path: Path, data: dict) -> list[Candi
     ]
 
 
-def _candidate_matches_relevant_amounts(candidate: PDFCandidate, relevant_amounts: set[float]) -> bool:
+def _candidate_matches_relevant_amounts(
+    candidate: PDFCandidate, relevant_amounts: set[float]
+) -> bool:
     amounts = []
     if candidate.total_amount is not None:
         amounts.append(candidate.total_amount)
@@ -1276,7 +1326,9 @@ def _candidate_matches_shared_requirements(
             continue
         if issuing_party_filter is None:
             return True
-        if _normalize_for_match(candidate.issuing_party or "") == _normalize_for_match(issuing_party_filter):
+        if _normalize_for_match(candidate.issuing_party or "") == _normalize_for_match(
+            issuing_party_filter
+        ):
             return True
     return False
 
@@ -1513,7 +1565,9 @@ def _candidate_signature(cand: PDFCandidate) -> tuple[str, str]:
     return doc_type, issuing_party
 
 
-def _candidate_date_rank(txn_date: Optional[str], cand: PDFCandidate) -> Optional[tuple[int, bool, int]]:
+def _candidate_date_rank(
+    txn_date: Optional[str], cand: PDFCandidate
+) -> Optional[tuple[int, bool, int]]:
     days = _days_between(txn_date, cand.date_issued)
     if days is None or days > _date_window_days():
         return None
@@ -1642,8 +1696,7 @@ def _transfer_line_item_count(candidate: PDFCandidate) -> int:
 def _is_statement_bank_scoped_candidate(candidate: PDFCandidate) -> bool:
     doc_type = candidate.effective_document_type or candidate.document_type
     return bool(
-        doc_type
-        and doc_type.lower() in _reconciliation_policy().statement_bank_scoped_doc_types
+        doc_type and doc_type.lower() in _reconciliation_policy().statement_bank_scoped_doc_types
     )
 
 
@@ -1733,8 +1786,7 @@ def _prune_rule_aware_exact_candidates(
             continue
 
         same_month_exists = any(
-            _same_calendar_month(txn_date, candidate.date_issued)
-            for candidate in matching
+            _same_calendar_month(txn_date, candidate.date_issued) for candidate in matching
         )
         if same_month_exists:
             matching = [
@@ -1764,18 +1816,14 @@ def _prune_rule_aware_exact_candidates(
                 if _is_bank_generated_candidate(candidate)
             ]
             ranked_bank_generated = [
-                (candidate, rank)
-                for candidate, rank in ranked_bank_generated
-                if rank is not None
+                (candidate, rank) for candidate, rank in ranked_bank_generated if rank is not None
             ]
             best_bank_rank = min(
                 (rank for _, rank in ranked_bank_generated),
                 default=None,
             )
             bank_generated = [
-                candidate
-                for candidate, rank in ranked_bank_generated
-                if rank == best_bank_rank
+                candidate for candidate, rank in ranked_bank_generated if rank == best_bank_rank
             ]
             best_by_signature: dict[tuple[str, str], PDFCandidate] = {}
             for candidate in matching:
@@ -1834,7 +1882,11 @@ def _phase1_deterministic_match(
             for candidate in matched_pdfs:
                 key = _candidate_signature(candidate)
                 current = best_by_signature.get(key)
-                candidate_rank = _candidate_rank_for_transaction(txn, candidate, category) or (9999, True, 9999)
+                candidate_rank = _candidate_rank_for_transaction(txn, candidate, category) or (
+                    9999,
+                    True,
+                    9999,
+                )
                 current_rank = (
                     _candidate_rank_for_transaction(txn, current, category) or (9999, True, 9999)
                     if current is not None
@@ -1867,7 +1919,9 @@ def _phase1_deterministic_match(
             )
         )
 
-    remaining = [candidate for candidate in candidates if candidate.candidate_id not in used_candidates]
+    remaining = [
+        candidate for candidate in candidates if candidate.candidate_id not in used_candidates
+    ]
     return matches, unmatched, remaining
 
 
@@ -1916,11 +1970,15 @@ def _link_line_item_documents(
                     line_item.label,
                 )
                 best_key = (
-                    best_match[2],
-                    best_match[0].page_count or 9999,
-                    best_match[0].pdf_filename,
-                    best_match[1].label,
-                ) if best_match is not None else None
+                    (
+                        best_match[2],
+                        best_match[0].page_count or 9999,
+                        best_match[0].pdf_filename,
+                        best_match[1].label,
+                    )
+                    if best_match is not None
+                    else None
+                )
                 if best_match is None or candidate_key < best_key:
                     best_match = current
 
@@ -1971,8 +2029,7 @@ def _line_item_category_matches(category: str, line_item: CandidateLineItem) -> 
     if line_item.category in set(_config_sequence(aliases, "categories")):
         return True
     return any(
-        line_item.category.startswith(prefix)
-        for prefix in _config_sequence(aliases, "prefixes")
+        line_item.category.startswith(prefix) for prefix in _config_sequence(aliases, "prefixes")
     )
 
 
@@ -1983,9 +2040,7 @@ def _link_related_no_amount_documents(
 ) -> set[str]:
     related_candidate_ids: set[str] = set()
     claimed_candidate_ids = {
-        candidate.candidate_id
-        for match in all_matches
-        for candidate in match.pdf_candidates
+        candidate.candidate_id for match in all_matches for candidate in match.pdf_candidates
     }
     engine = _rule_engine()
 
@@ -2014,7 +2069,10 @@ def _link_related_no_amount_documents(
                 continue
 
             for candidate in sorted(all_candidates, key=_candidate_sort_name):
-                if candidate.candidate_id in existing_ids or candidate.candidate_id in claimed_candidate_ids:
+                if (
+                    candidate.candidate_id in existing_ids
+                    or candidate.candidate_id in claimed_candidate_ids
+                ):
                     continue
                 if candidate.total_amount is not None:
                     continue
@@ -2054,25 +2112,24 @@ def _link_paired_supporting_documents(
 ) -> set[str]:
     supporting_candidate_ids: set[str] = set()
     claimed_candidate_ids = {
-        candidate.candidate_id
-        for match in all_matches
-        for candidate in match.pdf_candidates
+        candidate.candidate_id for match in all_matches for candidate in match.pdf_candidates
     }
 
     for match in all_matches:
         category, _ = _classify_transaction(match.transaction, rules)
         existing_ids = {candidate.candidate_id for candidate in match.pdf_candidates}
         bank_anchors = [
-            candidate
-            for candidate in match.pdf_candidates
-            if _is_bank_export_candidate(candidate)
+            candidate for candidate in match.pdf_candidates if _is_bank_export_candidate(candidate)
         ]
         if not bank_anchors:
             continue
 
         related_for_match: list[PDFCandidate] = []
         for candidate in sorted(all_candidates, key=_candidate_sort_name):
-            if candidate.candidate_id in existing_ids or candidate.candidate_id in claimed_candidate_ids:
+            if (
+                candidate.candidate_id in existing_ids
+                or candidate.candidate_id in claimed_candidate_ids
+            ):
                 continue
             if not _is_supporting_export_candidate(candidate):
                 continue
@@ -2123,7 +2180,9 @@ def _link_evidence_counterparty_documents(
         if rule is None or category not in set(policy.evidence_counterparty_categories):
             continue
         required_pattern = policy.evidence_counterparty_required_pattern
-        if not any(engine.match_doc_type(required_pattern, pattern) for pattern in rule.required_types):
+        if not any(
+            engine.match_doc_type(required_pattern, pattern) for pattern in rule.required_types
+        ):
             continue
         skip_supplier_present_categories = set(
             policy.evidence_counterparty_skip_if_supplier_present_categories
@@ -2182,7 +2241,9 @@ def _link_evidence_counterparty_documents(
 
         if related_for_match:
             related_names = ", ".join(candidate.pdf_filename for candidate in related_for_match)
-            match.reasoning = f"{match.reasoning}; counterparty evidence document(s): {related_names}"
+            match.reasoning = (
+                f"{match.reasoning}; counterparty evidence document(s): {related_names}"
+            )
             logger.debug(
                 f"[COUNTERPARTY-EVIDENCE] Row {match.transaction.row_number}: {related_names}"
             )
@@ -2257,7 +2318,9 @@ def _phase2_llm_match(
     txn_lines = []
     for index, txn in enumerate(transactions, 1):
         txn_date = txn.date_posting or txn.date_value or "unknown"
-        txn_lines.append(f'[{index}] {txn_date} | {txn.amount:.2f} {txn.currency} | "{txn.description}"')
+        txn_lines.append(
+            f'[{index}] {txn_date} | {txn.amount:.2f} {txn.currency} | "{txn.description}"'
+        )
 
     cand_lines = []
     for index, candidate in enumerate(candidates):
@@ -2299,7 +2362,12 @@ Respond in JSON:
 
     try:
         response = runtime.openai_client.chat.completions.create(
-            model=runtime.model_id,
+            model=gateway_model(runtime.model_id),
+            **(
+                {"reasoning_effort": "high" if runtime.model_id == "codex/gpt-6.1-sol" else "low"}
+                if runtime.model_id in {"codex/gpt-6.1-sol", "codex/gpt-6-astra"}
+                else {}
+            ),
             max_tokens=runtime.profile.openrouter.requests.reconciliation_max_tokens,
             temperature=runtime.profile.openrouter.requests.reconciliation_temperature,
             messages=[{"role": "user", "content": prompt}],
@@ -2446,8 +2514,7 @@ def _validate_required_documents(matches: list[MatchResult], rules: list) -> dic
                     and rule.name in policy.shared_period_bank_anchor_error_exempt_rule_names
                     and _is_shared_period_transaction(match.transaction)
                     and any(
-                        _is_shared_period_candidate(candidate)
-                        for candidate in match.pdf_candidates
+                        _is_shared_period_candidate(candidate) for candidate in match.pdf_candidates
                     )
                 )
             ]
@@ -2498,8 +2565,7 @@ def _validate_supporting_documents_have_bank_pair(
             for candidate in match.pdf_candidates
         )
         has_shared_period_doc = _is_shared_period_transaction(match.transaction) and any(
-            _is_shared_period_candidate(candidate)
-            for candidate in match.pdf_candidates
+            _is_shared_period_candidate(candidate) for candidate in match.pdf_candidates
         )
         if (
             has_supporting_doc
@@ -2600,7 +2666,9 @@ def _link_shared_documents(
                 if not _is_same_month_shared_candidate(rule, txn_date, cand):
                     continue
                 if issuing_party_filter is not None and cand.issuing_party:
-                    if _normalize_for_match(cand.issuing_party) != _normalize_for_match(issuing_party_filter):
+                    if _normalize_for_match(cand.issuing_party) != _normalize_for_match(
+                        issuing_party_filter
+                    ):
                         continue
                 if not _candidate_matches_shared_filters(rule, type_pattern, cand):
                     continue
@@ -2736,9 +2804,7 @@ def _link_companion_documents(
         txns_by_rule.setdefault(category, []).append(txn)
 
     already_matched_ids = {
-        candidate.candidate_id
-        for match in all_matches
-        for candidate in match.pdf_candidates
+        candidate.candidate_id for match in all_matches for candidate in match.pdf_candidates
     }
 
     newly_matched: list[MatchResult] = []
@@ -2829,7 +2895,9 @@ def _write_reconciliation_file(
     total_reconciled = sum(1 for match in matches if match.transaction.row_number not in errors)
     total_incomplete = sum(1 for match in matches if match.transaction.row_number in errors)
     total_unmatched = total_transactions - len(matches)
-    reconciliation_rate = (total_reconciled / total_transactions * 100) if total_transactions > 0 else 0
+    reconciliation_rate = (
+        (total_reconciled / total_transactions * 100) if total_transactions > 0 else 0
+    )
 
     data = {
         "source": excel_path.name,
@@ -2843,7 +2911,9 @@ def _write_reconciliation_file(
             "reconciliation_rate": round(reconciliation_rate, 1),
         },
         "matches": [_serialize_match(match, errors=errors, rules=rules) for match in matches],
-        "unmatched": [_serialize_unmatched_transaction(txn, rules) for txn in unmatched_transactions],
+        "unmatched": [
+            _serialize_unmatched_transaction(txn, rules) for txn in unmatched_transactions
+        ],
         "unmatched_files": [_serialize_unmatched_candidate(cand) for cand in unmatched_files],
     }
     output_path.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
@@ -2951,7 +3021,9 @@ def reconcile_single(
     candidate_match_counts: dict[str, int] = {}
     for match in all_matches:
         for cand in match.pdf_candidates:
-            candidate_match_counts[cand.candidate_id] = candidate_match_counts.get(cand.candidate_id, 0) + 1
+            candidate_match_counts[cand.candidate_id] = (
+                candidate_match_counts.get(cand.candidate_id, 0) + 1
+            )
     for candidate_id, count in candidate_match_counts.items():
         if count > 1:
             is_sub_doc = any(
@@ -2971,9 +3043,7 @@ def reconcile_single(
                 logger.warning(f"[REDUNDANT-MATCH] {candidate_id} matched {count} transactions")
 
     matched_candidate_ids = {
-        candidate.candidate_id
-        for match in all_matches
-        for candidate in match.pdf_candidates
+        candidate.candidate_id for match in all_matches for candidate in match.pdf_candidates
     }
     matched_shared_period_filenames = {
         candidate.pdf_filename
@@ -2998,7 +3068,9 @@ def reconcile_single(
         ),
     )
     for row_num, row_errors in validation_errors.items():
-        txn = next(match.transaction for match in all_matches if match.transaction.row_number == row_num)
+        txn = next(
+            match.transaction for match in all_matches if match.transaction.row_number == row_num
+        )
         category, _ = _classify_transaction(txn, rules)
         logger.debug(f"[INCOMPLETE] Row {row_num} ({category}): {', '.join(row_errors)}")
 
@@ -3024,7 +3096,9 @@ def reconcile_single(
 
     if not quiet:
         console.info("")
-        console.success(f"{total_reconciled}/{total_txns} transactions reconciled ({pct:.1f}%)", indent=False)
+        console.success(
+            f"{total_reconciled}/{total_txns} transactions reconciled ({pct:.1f}%)", indent=False
+        )
         if total_incomplete > 0:
             console.warning(f"{total_incomplete} matched transactions with errors", indent=False)
             for row_num, row_errors in validation_errors.items():
@@ -3032,7 +3106,10 @@ def reconcile_single(
         if total_unmatched > 0:
             console.warning(f"{total_unmatched} transactions unmatched", indent=False)
             for txn in final_unmatched:
-                console.detail(f"Row {txn.row_number}: {txn.description[:50]} ({txn.amount:.2f} {txn.currency})")
+                console.detail(
+                    f"Row {txn.row_number}: {txn.description[:50]} "
+                    f"({txn.amount:.2f} {txn.currency})"
+                )
         if total_unmatched_files > 0:
             console.warning(f"{total_unmatched_files} document files unmatched", indent=False)
             for cand in unmatched_files:

@@ -695,12 +695,14 @@ class CommandTests(unittest.TestCase):
 
         with (
             patch("papertrail.commands.reconcile_single") as reconcile_single_mock,
-            patch("tools.review.launch") as launch_mock,
+            patch("tools.dashboard.launch") as launch_mock,
         ):
             review(self.runtime, self.export)
 
         reconcile_single_mock.assert_not_called()
-        launch_mock.assert_called_once_with(export_path=self.export, argv=[])
+        launch_mock.assert_called_once_with(
+            processed_path=self.runtime.paths.processed, export_path=self.export, argv=[]
+        )
 
     def test_reconcile_keeps_pdf_bank_screenshots_and_prefers_nearest_same_signature(self):
         feb_dir = self.export / "2026-02"

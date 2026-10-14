@@ -1301,9 +1301,9 @@ def reconcile(
 
 
 def review(runtime: Runtime, export_path: Path) -> None:
-    from tools.review import launch
+    from tools.dashboard import launch
 
-    launch(export_path=export_path, argv=[])
+    launch(processed_path=runtime.paths.processed, export_path=export_path, argv=[])
 
 
 def pipeline(

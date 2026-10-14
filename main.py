@@ -9,7 +9,8 @@ from typing import Optional
 import typer
 
 from papertrail import commands
-from papertrail.config import ConfigError, ProfileNotFoundError
+from papertrail.config import ConfigError, ProfileNotFoundError, get_gmail_config_paths
+from papertrail.gmail import GmailDownloader
 from papertrail.logging_utils import get_logger
 from papertrail.runtime import Runtime, create_runtime
 
@@ -276,6 +277,28 @@ def regression(
     for failure in result.failures:
         runtime.console.error(failure, indent=False)
     _fail(f"Regression failed with {len(result.failures)} issue(s).")
+
+
+@app.command("gmail-auth")
+def gmail_auth(
+    ctx: typer.Context,
+    profile: Optional[str] = typer.Option(None, help=PROFILE_OPTION_HELP),
+    verbose: bool = typer.Option(False, "-v", "--verbose", help="Enable verbose output."),
+):
+    """Reconnect Gmail in your browser and save auth to the selected credential backend."""
+    runtime = _resolve_runtime(
+        ctx, profile=profile, verbose=verbose, enable_client=False, probe_api=False
+    )
+    paths = get_gmail_config_paths(runtime.profile)
+    downloader = GmailDownloader(
+        paths["credentials"], paths["token"], paths["token"].parent,
+        settings=runtime.profile.gmail,
+    )
+    try:
+        downloader.authenticate(reauthorize=True)
+    except ConfigError as exc:
+        _fail(str(exc))
+    typer.echo("Gmail authorization saved to the configured credential backend.")
 
 
 @app.command()

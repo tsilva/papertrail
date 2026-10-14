@@ -2,6 +2,8 @@
   "name": "papertrail-tools",
   "private": true,
   "scripts": {
-    "dev": "uv run python tools/app.py"
+    "dev": "uv run python -m tools.dashboard",
+    "dev:gradio": "uv run python tools/app.py",
+    "build": "pnpm --dir frontend build"
   }
 }

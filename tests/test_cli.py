@@ -18,6 +18,7 @@ def _stub_module(name: str, **attrs):
 
 _stub_module("google")
 _stub_module("google.auth")
+_stub_module("google.auth.exceptions", RefreshError=type("RefreshError", (Exception,), {}))
 _stub_module("google.auth.transport")
 _stub_module("google.auth.transport.requests", Request=MagicMock())
 _stub_module("google.oauth2")
@@ -35,6 +36,22 @@ import main as cli_main  # noqa: E402
 class CliTests(unittest.TestCase):
     def setUp(self):
         self.runner = CliRunner()
+
+    def test_gmail_auth_only_reconnects_selected_backend_without_llm_probe(self):
+        runtime = SimpleNamespace(profile=SimpleNamespace(gmail=MagicMock()))
+        paths = {"credentials": Path("client.json"), "token": Path("token.json")}
+        with (
+            patch("main._resolve_runtime", return_value=runtime) as resolve,
+            patch("main.get_gmail_config_paths", return_value=paths),
+            patch("main.GmailDownloader") as downloader,
+            patch("main.commands.gmail") as import_gmail,
+        ):
+            result = self.runner.invoke(cli_main.app, ["--profile", "personal", "gmail-auth"])
+        self.assertEqual(result.exit_code, 0, result.output)
+        self.assertFalse(resolve.call_args.kwargs["enable_client"])
+        self.assertFalse(resolve.call_args.kwargs["probe_api"])
+        downloader.return_value.authenticate.assert_called_once_with(reauthorize=True)
+        import_gmail.assert_not_called()
 
     def test_bare_command_skips_default_pipeline_when_api_is_unavailable(self):
         runtime = SimpleNamespace(api_accessible=False, console=MagicMock())
