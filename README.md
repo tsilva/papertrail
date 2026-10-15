@@ -128,23 +128,48 @@ must configure a reachable AgentBridge URL instead of the loopback default.
 
 ## Light Svelte dashboard
 
-`papertrail --profile personal review` opens the unified Documents and Review
-screens on an available loopback port. Documents supports search, document-type
-and month filters, PDF/XLSX previews, original-file downloads, and links to bank
-matches. Review shows a transaction queue, source evidence, and an amount/date
-comparison, with approve, reject, clear, and undo actions. Multi-document matches
-can be inspected one document at a time. Missing evidence cannot be approved.
+`papertrail --profile personal review` opens the light Svelte dashboard with
+Transactions as its starting screen. Choose a month to see tables for every bank
+and account, with dates, signed amounts, numeric linked-document counts, and review status.
+Dates use `YYYY-MM-DD`; the month selector uses `YYYY - Month` (for example, `2026 - August`). The desktop evidence preview fills the remaining viewport
+height and adapts when the window or header changes.
+Row references, rules, method, confidence, and reasoning remain in Match details
+on the focused review screen. Filter by account or status, search transactions,
+inspect document/statement previews, and approve pairings inline. Review opens
+the focused comparison and decision screen. Document options groups opening the
+original, download, raw sidecar JSON, and fullscreen in one preview menu.
+Statements without reconciliation remain visible with their reported count.
+Documents without a transaction use the same table layout and row selection as
+bank transactions, with their expected/undo action in the Status column.
+
+Documents supports search, type/month filters, PDF/XLSX previews, original-file
+downloads, and links back to bank transactions. Click anywhere in a document row
+to select its preview, or focus its document button and press Enter or Space.
+Extracted document details can be expanded below the preview.
+Search, type, account, and status filters survive tab changes and refreshes.
+Undated documents remain available under All months. Unreadable previews offer
+a retry after restoring the source file.
+
+Review supports approve, reject, clear, and undo; undo returns to the restored
+transaction and month. Multi-document matches can be inspected one document at a
+time. Missing evidence cannot be approved. Documents without a transaction appear
+beneath the monthly bank tables and can be marked expected or have that decision
+removed. Export month ZIP downloads the selected month's files. See the
+[old-to-new workflow map](dashboard-workflow.md) for the preserved tasks.
 
 Approvals use the existing `.reconciliation.groundtruth.json` files; rejections
 are stored in their `rejections` collection. Undo restores the previous decision.
 Changed evidence invalidates prior decisions, and stale requests must be
 refreshed before saving. The dashboard never changes extracted sidecars, source
 files, or reconciliation matches. Keyboard shortcuts: `Y` approve, `N` reject,
-`U` undo, and arrow keys or `j`/`k` to navigate.
+`U` undo, and arrow keys or `j`/`k` to navigate, including after clicking
+a queue row. Shortcuts pause while editing fields. Escape or clicking outside
+closes action menus. Use the header refresh button to reload data; the month ZIP
+action is available once on Transactions.
 
 The installed Python package includes the built frontend; Node.js is only needed
 when editing the UI. The existing Gradio browse, dedupe, review, and unified
-launchers remain available, including the expected-unmatched-document workflow:
+launchers remain available:
 
 ```bash
 PAPERTRAIL_UI_PROFILE=personal uv run python -m tools.dashboard --port auto

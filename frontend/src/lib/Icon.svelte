@@ -8,8 +8,9 @@
   import more from '@phosphor-icons/core/assets/regular/dots-three.svg';
   import download from '@phosphor-icons/core/assets/regular/download-simple.svg';
   import arrow from '@phosphor-icons/core/assets/regular/arrow-right.svg';
+  import refresh from '@phosphor-icons/core/assets/regular/arrow-clockwise.svg';
   import expand from '@phosphor-icons/core/assets/regular/arrows-out.svg';
-  const icons = { file, review, left, right, check, close, more, download, arrow, expand };
+  const icons = { file, review, left, right, check, close, more, download, arrow, expand, refresh };
   let { name, size = 22 }: { name: keyof typeof icons; size?: number } = $props();
 </script>
 
