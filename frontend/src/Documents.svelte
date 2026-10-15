@@ -2,8 +2,7 @@
   import Icon from './lib/Icon.svelte';
   import Preview from './lib/Preview.svelte';
   import { money, date, type Document, type Transaction } from './lib/format';
-  let { documents, transactions, month, onreview }: { documents: Document[]; transactions: Transaction[]; month: string; onreview: (id: string) => void } = $props();
-  let query = $state(''), type = $state(''), selected = $state('');
+  let { documents, transactions, month, onreview, query = $bindable(''), type = $bindable(''), selected = $bindable('') }: { documents: Document[]; transactions: Transaction[]; month: string; query: string; type: string; selected: string; onreview: (id: string) => void } = $props();
   let types = $derived([...new Map(documents.map(d => [d.type_key, d.type])).entries()]);
   let filtered = $derived(documents.filter(d => (!month || d.date.startsWith(month)) && (!type || d.type_key === type) && `${d.title} ${d.issuer} ${d.filename} ${d.type}`.toLowerCase().includes(query.toLowerCase())));
   let doc = $derived(filtered.find(d => d.id === selected) || filtered[0]);
@@ -26,9 +25,9 @@
     </section>
     <section class="document-detail" aria-label="Selected document">
       {#if doc}
-        <div class="detail-heading"><h1>{doc.title}</h1><div class="actions"><a class="button primary" href={`/api/documents/${doc.id}/file`} target="_blank" rel="noreferrer">Open document</a><a class="icon-button" aria-label="Download document" href={`/api/documents/${doc.id}/file?download=true`}><Icon name="download"/></a></div></div>
-        {#key doc.id}<Preview document={doc}/>{/key}
-        <div class="metadata"><h2>Extracted details</h2><dl><div><dt>Document type</dt><dd>{doc.type}</dd></div><div><dt>Issuer</dt><dd>{doc.issuer}</dd></div><div><dt>Date</dt><dd>{date(doc.date)}</dd></div><div><dt>Amount</dt><dd>{money(doc.amount, doc.currency)}</dd></div></dl></div>
+        <div class="detail-heading"><h1>{doc.title}</h1></div>
+        {#key doc.id}<Preview document={doc} showTitle={false}/>{/key}
+        <details class="metadata"><summary>Extracted details</summary><dl><div><dt>Document type</dt><dd>{doc.type}</dd></div><div><dt>Issuer</dt><dd>{doc.issuer}</dd></div><div><dt>Date</dt><dd>{date(doc.date)}</dd></div><div><dt>Amount</dt><dd>{money(doc.amount, doc.currency)}</dd></div></dl></details>
         {#if matches.length}<div class="document-matches">{#each matches as match}<button onclick={() => onreview(match.id)}><Icon name="check"/><span><strong>{match.status === 'approved' ? 'Approved bank match' : match.status === 'rejected' ? 'Rejected bank match' : 'Matched to bank transaction'}</strong><small>{date(match.date)} · {money(match.amount, match.currency)}</small></span><Icon name="arrow" size={18}/></button>{/each}</div>{:else}<p class="unmatched-note">No linked bank transaction</p>{/if}
       {:else}<div class="empty">Select a document to preview.</div>{/if}
     </section>

@@ -12,7 +12,7 @@ import tempfile
 import threading
 import webbrowser
 import zipfile
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 from typing import Literal
 
@@ -22,12 +22,14 @@ import uvicorn
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
+from openpyxl.utils.exceptions import InvalidFileException
 from pydantic import BaseModel
 from starlette.background import BackgroundTask
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from papertrail.reconciliation_groundtruth import (
     approval_map,
+    document_matches_approval,
     document_sets_match,
     groundtruth_path_for_document,
     load_groundtruth,
@@ -36,6 +38,11 @@ from papertrail.reconciliation_groundtruth import (
 )
 from tools import review
 from tools.shared import find_companion, get_export_dir, get_processed_dir, iter_sidecars
+
+
+class UnmatchedDecision(BaseModel):
+    expected: bool
+    revision: str
 
 
 class Decision(BaseModel):
@@ -49,6 +56,36 @@ def digest(value: object) -> str:
 
 def label(value: object, fallback: str = "Unknown") -> str:
     return str(value) if value and value != "$UNKNOWN$" else fallback
+
+
+def calendar_month(value: object, *, full_date: bool = False) -> str:
+    """Exclude unknown markers and invalid calendar values from month filters."""
+    if not isinstance(value, str):
+        return ""
+    pattern = r"\d{4}-\d{2}-\d{2}" if full_date else r"\d{4}-\d{2}"
+    if not re.fullmatch(pattern, value):
+        return ""
+    try:
+        date.fromisoformat(value if full_date else f"{value}-01")
+    except ValueError:
+        return ""
+    return value[:7]
+
+
+def open_pdf(path: Path) -> fitz.Document:
+    """Turn unreadable source evidence into a recoverable dashboard error."""
+    try:
+        pdf = fitz.open(path)
+    except (fitz.FileDataError, fitz.EmptyFileError, OSError) as exc:
+        raise HTTPException(
+            422, "This PDF cannot be read. Restore the source file and try again."
+        ) from exc
+    if pdf.needs_pass:
+        pdf.close()
+        raise HTTPException(
+            422, "This PDF is password-protected. Unlock the source file and try again."
+        )
+    return pdf
 
 
 def atomic_save(path: Path, data: dict) -> None:
@@ -71,6 +108,8 @@ class DashboardStore:
         self.lock = threading.RLock()
         self.documents: dict[str, dict] = {}
         self.rows: dict[str, dict] = {}
+        self.statements: dict[str, dict] = {}
+        self.unmatched: dict[str, dict] = {}
 
     def contain(self, path: Path) -> Path:
         """Prevent symlink access outside the explicitly selected profile."""
@@ -88,6 +127,7 @@ class DashboardStore:
         self.documents[identity] = {
             "id": identity,
             "_path": path,
+            "_metadata": meta,
             "date": meta.get("date_issued") or "",
             "title": label(meta.get("document_title"), path.stem),
             "issuer": label(meta.get("issuing_party_raw"), label(meta.get("issuing_party"))),
@@ -138,13 +178,32 @@ class DashboardStore:
         self.rows[identity] = {
             "id": identity,
             "month": month,
+            "statement_id": statement["_dashboard_id"],
+            "statement_document": statement["_dashboard_document"],
+            "bank": label(
+                statement["metadata"].get("issuing_party_raw"),
+                label(statement["metadata"].get("issuing_party")),
+            ),
+            "account": statement["metadata"].get("bank_statement", {}).get("account_number") or "",
+            "row_number": row.get("row"),
+            "category": row.get("transaction_category") or "",
+            "method": row.get("method") or "",
+            "confidence": row.get("confidence"),
+            "match_status": "unclassified"
+            if row.get("transaction_category") == "unclassified"
+            else "unmatched"
+            if not row.get("files")
+            else review._match_status(row),
+            "file_names": row.get("files", []),
             "date": row.get("date") or "",
             "description": row.get("description") or "Transaction",
             "amount": row.get("amount"),
             "currency": row.get("currency") or "EUR",
             "files": files,
             "status": status,
-            "missing_files": [n for n in row.get("files", []) if n not in index],
+            "missing_files": [
+                n for n in row.get("files", []) if n not in index or not index[n].get("doc_path")
+            ],
             "warnings": row.get("warnings", []) + row.get("errors", []),
             "reason": row.get("reasoning") or "",
             "revision": digest([row, identities, groundtruth]),
@@ -161,12 +220,69 @@ class DashboardStore:
         for entry in data["file_index"].values():
             self.add_document(Path(entry["doc_path"]), entry["metadata"])
         for statement in data["bank_statements"]:
-            for row in rows_with_transaction_keys(statement.get("reconciliation") or {}):
+            meta = statement["metadata"]
+            bank = meta.get("bank_statement") or {}
+            source = Path(statement["doc_path"]) if statement.get("doc_path") else None
+            identity = digest([month, statement["json_path"]])[:24]
+            document_id = self.add_document(source, meta) if source else ""
+            statement["_dashboard_id"] = identity
+            statement["_dashboard_document"] = document_id
+            rows = rows_with_transaction_keys(statement.get("reconciliation") or {})
+            self.statements[identity] = {
+                "id": identity,
+                "month": month,
+                "document_id": document_id,
+                "bank": label(meta.get("issuing_party_raw"), label(meta.get("issuing_party"))),
+                "account": bank.get("account_number") or "",
+                "period_start": bank.get("period_start") or "",
+                "period_end": bank.get("period_end") or "",
+                "filename": source.name if source else Path(statement["json_path"]).name,
+                "has_reconciliation": bool(statement.get("reconciliation")),
+                "transaction_count": len(rows)
+                if statement.get("reconciliation")
+                else bank.get("transaction_count", 0),
+            }
+            for row in rows:
                 self.add_transaction(month or (row.get("date") or "")[:7], statement, row, data)
+        # Preserve the legacy month-wide unmatched list and its owning statement.
+        for item in data["unmatched_files"]:
+            statement = review._find_bank_statement(data, item["_statement_file"])
+            if not statement or not statement.get("doc_path"):
+                continue
+            document = review._document_identity(item.get("file", ""), data)
+            index = {**data["cross_file_index"], **data["file_index"]}
+            evidence = index.get(item.get("file", ""))
+            document_id = (
+                self.add_document(Path(evidence["doc_path"]), evidence["metadata"])
+                if evidence and evidence.get("doc_path")
+                else ""
+            )
+            path = self.contain(groundtruth_path_for_document(Path(statement["doc_path"])))
+            groundtruth = load_groundtruth(path)
+            saved = next(
+                (
+                    a
+                    for a in groundtruth.get("unmatched_file_approvals", [])
+                    if document_matches_approval(document, a.get("document", {}), strict_hash=True)
+                ),
+                None,
+            )
+            identity = digest([month, str(path), item.get("file")])[:24]
+            self.unmatched[identity] = {
+                "id": identity,
+                "month": month,
+                "document_id": document_id,
+                "filename": item.get("file", ""),
+                "expected": bool(saved),
+                "revision": digest([item, document, groundtruth]),
+                "_path": path,
+                "_document": document,
+                "_source": item["_statement_file"],
+            }
 
     def snapshot(self) -> dict:
         """Reload disk state and strip internal paths before responding."""
-        self.documents, self.rows = {}, {}
+        self.documents, self.rows, self.statements, self.unmatched = {}, {}, {}, {}
         errors = []
         # A profile can have only processed documents or only monthly exports.
         if self.processed and self.processed.is_dir():
@@ -178,7 +294,7 @@ class DashboardStore:
         base, months, _ = (
             review._export_folder_options(self.export) if self.export else (None, [], None)
         )
-        export_months = [m for m in months if re.fullmatch(r"\d{4}-\d{2}", m)]
+        export_months = [m for m in months if calendar_month(m)]
         for month in months:
             try:
                 self.scan_month(month if month in export_months else "", self.contain(base / month))
@@ -186,8 +302,12 @@ class DashboardStore:
                 errors.append(f"Could not read reconciliation for {month}.")
         months = sorted(
             set(export_months)
-            | {r["month"] for r in self.rows.values() if r["month"]}
-            | {d["date"][:7] for d in self.documents.values() if len(d["date"]) >= 7},
+            | {m for r in self.rows.values() if (m := calendar_month(r["month"]))}
+            | {
+                m
+                for d in self.documents.values()
+                if (m := calendar_month(d["date"], full_date=True))
+            },
             reverse=True,
         )
         documents = [
@@ -198,6 +318,11 @@ class DashboardStore:
             "documents": documents,
             "transactions": [
                 {k: v for k, v in r.items() if not k.startswith("_")} for r in self.rows.values()
+            ],
+            "statements": list(self.statements.values()),
+            "unmatched_documents": [
+                {k: v for k, v in d.items() if not k.startswith("_")}
+                for d in self.unmatched.values()
             ],
             "months": months,
             "export_months": export_months,
@@ -211,7 +336,41 @@ class DashboardStore:
         if doc is None:
             raise HTTPException(404, "Document no longer exists. Refresh the dashboard.")
         self.contain(doc["_path"])
+        if not doc["_path"].is_file():
+            raise HTTPException(
+                404,
+                "Source file is unavailable. Restore it and try again, or refresh the dashboard.",
+            )
         return doc
+
+    def decide_unmatched(self, identity: str, command: UnmatchedDecision) -> dict:
+        self.snapshot()
+        entry = self.unmatched.get(identity)
+        if entry is None:
+            raise HTTPException(404, "Unmatched document no longer exists.")
+        if command.revision != entry["revision"]:
+            raise HTTPException(409, "This document changed. Refresh and inspect it again.")
+        if command.expected and not entry["document_id"]:
+            raise HTTPException(422, "The document must be available before review.")
+        data = load_groundtruth(entry["_path"])
+        data["unmatched_file_approvals"] = [
+            a
+            for a in data.get("unmatched_file_approvals", [])
+            if not document_matches_approval(entry["_document"], a.get("document", {}))
+        ]
+        if command.expected:
+            data["unmatched_file_approvals"].append(
+                {
+                    "confirmed_at": datetime.now().isoformat(timespec="seconds"),
+                    "document": entry["_document"],
+                    "status": "expected_unreconciled",
+                    "source_hint": {"statement_file": entry["_source"]},
+                }
+            )
+        data["source"] = entry["_source"]
+        data["updated"] = datetime.now().isoformat(timespec="seconds")
+        atomic_save(entry["_path"], data)
+        return self.snapshot()
 
     def decide(self, identity: str, command: Decision) -> dict:
         self.snapshot()
@@ -279,6 +438,16 @@ def create_app(processed: Path | None, export: Path | None) -> FastAPI:
         with store.lock:
             return {**store.decide(identity, command), "token": token}
 
+    @app.post("/api/unmatched/{identity}/decision")
+    def decide_unmatched(identity: str, command: UnmatchedDecision):
+        with store.lock:
+            return {**store.decide_unmatched(identity, command), "token": token}
+
+    @app.get("/api/documents/{identity}/metadata")
+    def metadata(identity: str):
+        with store.lock:
+            return store.document(identity)["_metadata"]
+
     @app.get("/api/documents/{identity}/file")
     def file(identity: str, download: bool = False):
         with store.lock:
@@ -296,7 +465,13 @@ def create_app(processed: Path | None, export: Path | None) -> FastAPI:
         with store.lock:
             path = store.document(identity)["_path"]
             if path.suffix.lower() == ".xlsx":
-                book = openpyxl.load_workbook(path, data_only=True, read_only=True)
+                try:
+                    book = openpyxl.load_workbook(path, data_only=True, read_only=True)
+                except (OSError, ValueError, zipfile.BadZipFile, InvalidFileException) as exc:
+                    raise HTTPException(
+                        422,
+                        "This spreadsheet cannot be read. Restore the source file and try again.",
+                    ) from exc
                 try:
                     from itertools import islice
 
@@ -309,7 +484,7 @@ def create_app(processed: Path | None, export: Path | None) -> FastAPI:
                     book.close()
             if path.suffix.lower() != ".pdf":
                 raise HTTPException(422, "Preview supports PDF and XLSX documents.")
-            with fitz.open(path) as pdf:
+            with open_pdf(path) as pdf:
                 if page < 0 or page >= len(pdf):
                     raise HTTPException(404, "Page is unavailable.")
                 return {
@@ -325,7 +500,7 @@ def create_app(processed: Path | None, export: Path | None) -> FastAPI:
             path = store.document(identity)["_path"]
             if path.suffix.lower() != ".pdf":
                 raise HTTPException(422, "This document is not a PDF.")
-            with fitz.open(path) as pdf:
+            with open_pdf(path) as pdf:
                 if page < 0 or page >= len(pdf):
                     raise HTTPException(404, "Page is unavailable.")
                 return Response(
