@@ -196,3 +196,120 @@ def test_empty_export_root_does_not_hide_processed_documents(tmp_path):
     assert data["months"] == ["2026-10"]
     assert data["export_months"] == []
     assert len(data["documents"]) == 5
+
+
+@pytest.mark.parametrize("issued", ["$UNKNOWN$", "2026-13-01", "2026-02-30", "not-a-date"])
+def test_invalid_document_dates_do_not_create_month_choices(tmp_path, issued):
+    processed, _ = make_dashboard_fixture(tmp_path)
+    for sidecar in processed.glob("*.json"):
+        meta = json.loads(sidecar.read_text())
+        meta["date_issued"] = issued
+        sidecar.write_text(json.dumps(meta))
+    with TestClient(create_app(processed, None)) as client:
+        state = client.get("/api/state").json()
+        assert state["months"] == []
+        assert len(state["documents"]) == 5
+
+
+@pytest.mark.parametrize("suffix", [".pdf", ".xlsx"])
+def test_unreadable_sources_return_recoverable_errors(client, suffix):
+    state = client.get("/api/state").json()
+    doc = next(d for d in state["documents"] if d["filename"].endswith(suffix))
+    path = client.app.state.store.documents[doc["id"]]["_path"]
+    original = path.read_bytes()
+    path.write_bytes(b"not a readable document")
+    result = client.get(f"/api/documents/{doc['id']}/preview")
+    assert result.status_code == 422
+    assert "cannot be read" in result.json()["detail"]
+    if suffix == ".pdf":
+        assert client.get(f"/api/documents/{doc['id']}/image").status_code == 422
+    path.write_bytes(original)
+    assert client.get(f"/api/documents/{doc['id']}/preview").status_code == 200
+    path.unlink()
+    for endpoint in ("preview", "file", "image"):
+        result = client.get(f"/api/documents/{doc['id']}/{endpoint}")
+        assert result.status_code == 404
+        assert "Source file is unavailable" in result.json()["detail"]
+
+
+def test_monthly_transactions_preserve_all_bank_context_and_unreconciled_statements(tmp_path):
+    from tests.dashboard_fixtures import make_monthly_dashboard_fixture
+
+    processed, export = make_monthly_dashboard_fixture(tmp_path)
+    with TestClient(create_app(processed, export)) as client:
+        data = client.get("/api/state").json()
+        october = [t for t in data["transactions"] if t["month"] == "2026-10"]
+        assert {t["bank"] for t in october} == {"Rivermere Bank", "Coast Bank"}
+        assert len(october) == 6
+        northline = [t for t in october if t["description"] == "NORTHLINE STUDIO"]
+        assert len({t["id"] for t in northline}) == 2
+        assert {t["amount"] for t in northline} == {-184.5, 184.5}
+        assert {t["account"] for t in northline} == {"RIVER-001", "COAST-002"}
+        assert len([s for s in data["statements"] if s["month"] == "2026-10"]) == 3
+        waiting = next(
+            s for s in data["statements"] if s["account"] == "COAST-003" and s["month"] == "2026-10"
+        )
+        assert not waiting["has_reconciliation"]
+        assert waiting["transaction_count"] == 7
+        low = next(t for t in october if t["category"] == "hosting")
+        assert low["method"] == "llm" and low["confidence"] == 0.6
+        assert low["match_status"] == "incomplete"
+        assert low["reason"] and low["warnings"]
+        assert data["months"] == ["2026-10", "2026-09"]
+        approved = command(client, northline[0], "approve", data["token"]).json()
+        assert (
+            next(t for t in approved["transactions"] if t["id"] == northline[1]["id"])["status"]
+            == ""
+        )
+
+
+def test_unmatched_document_decisions_preserve_transaction_approvals_and_check_revisions(tmp_path):
+    from tests.dashboard_fixtures import make_monthly_dashboard_fixture
+
+    processed, export = make_monthly_dashboard_fixture(tmp_path)
+    with TestClient(create_app(processed, export)) as client:
+        data = client.get("/api/state").json()
+        row = next(t for t in data["transactions"] if t["bank"] == "Rivermere Bank" and t["files"])
+        data = command(client, row, "approve", data["token"]).json()
+        item = next(d for d in data["unmatched_documents"] if d["month"] == row["month"])
+        endpoint = f"/api/unmatched/{item['id']}/decision"
+        headers = {"x-papertrail-token": data["token"]}
+        assert (
+            client.post(endpoint, json={"expected": True, "revision": item["revision"]}).status_code
+            == 403
+        )
+        response = client.post(
+            endpoint, json={"expected": True, "revision": item["revision"]}, headers=headers
+        )
+        assert response.status_code == 200
+        updated = next(d for d in response.json()["unmatched_documents"] if d["id"] == item["id"])
+        assert updated["expected"]
+        assert (
+            client.post(
+                endpoint, json={"expected": False, "revision": item["revision"]}, headers=headers
+            ).status_code
+            == 409
+        )
+        persisted = json.loads(client.app.state.store.unmatched[item["id"]]["_path"].read_text())
+        assert (
+            persisted["approvals"]
+            and persisted["unmatched_file_approvals"][0]["status"] == "expected_unreconciled"
+        )
+        cleared = client.post(
+            endpoint, json={"expected": False, "revision": updated["revision"]}, headers=headers
+        ).json()
+        assert not next(d for d in cleared["unmatched_documents"] if d["id"] == item["id"])[
+            "expected"
+        ]
+        assert (
+            next(t for t in cleared["transactions"] if t["id"] == row["id"])["status"] == "approved"
+        )
+
+
+def test_document_metadata_is_scoped_and_matches_sidecar(client):
+    data = client.get("/api/state").json()
+    doc = data["documents"][0]
+    response = client.get(f"/api/documents/{doc['id']}/metadata")
+    assert response.status_code == 200
+    assert response.json()["document_title"] == doc["title"]
+    assert client.get("/api/documents/arbitrary-path/metadata").status_code == 404
