@@ -1,0 +1,9 @@
+{
+  "version": 1,
+  "exceptions": {
+    "dependencies.releaseAge": {
+      "pypi:gradio@7.0.0.dev0#age": "Explicitly approved exact prerelease for the Pillow 13 security update. Verified official source and wheel integrity.",
+      "pypi:gradio-client@2.8.0.dev0#age": "Explicitly approved exact prerelease for the Pillow 13 security update. Verified official source and wheel integrity."
+    }
+  }
+}

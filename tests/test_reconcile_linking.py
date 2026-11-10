@@ -1,5 +1,9 @@
 import unittest
+from dataclasses import replace
 from pathlib import Path
+from tempfile import TemporaryDirectory
+
+import fitz
 
 from papertrail.commands.reconcile import (
     _ACTIVE_RECONCILIATION_POLICY,
@@ -8,8 +12,10 @@ from papertrail.commands.reconcile import (
     Transaction,
     _candidate_sort_name,
     _filename_hash_key,
+    _is_paired_supporting_candidate,
     _is_prior_reconciled_candidate,
     _link_evidence_counterparty_documents,
+    _link_paired_supporting_documents,
     _link_shared_period_documents,
     _prune_rule_aware_exact_candidates,
     _reconciliation_rules,
@@ -38,6 +44,68 @@ class ReconcileLinkingTests(unittest.TestCase):
 
         self.assertIn("52c84f00", prior_keys)
         self.assertTrue(_is_prior_reconciled_candidate(candidate, prior_keys))
+
+    def test_bank_beneficiary_links_only_unambiguous_supporting_pdf(self):
+        iban = "GB82WEST12345698765432"
+
+        def pdf(directory, name, text):
+            path = Path(directory) / name
+            with fitz.open() as document:
+                document.new_page().insert_text((72, 72), text)
+                document.save(path)
+            return path
+
+        txn = Transaction(1, "2026-01-21", "2026-01-21", "Bank transfer", -49.0, "EUR", "", "")
+        with TemporaryDirectory() as directory:
+            bank = PDFCandidate(
+                json_path=Path("bank.json"),
+                pdf_filename="BNC_bank.pdf",
+                date_issued="2026-01-21",
+                document_type="bank-note",
+                document_type_raw="bank-note",
+                document_title="Bank transfer",
+                issuing_party="Example Bank",
+                total_amount=49.0,
+                total_amount_currency="EUR",
+                is_bank_anchor=True,
+                document_path=pdf(directory, "bank.pdf", f"Beneficiary account\n{iban}"),
+            )
+            receipt = replace(
+                bank,
+                json_path=Path("receipt.json"),
+                pdf_filename="CMP_receipt.pdf",
+                document_type="receipt",
+                issuing_party="Example Supplier",
+                is_bank_anchor=False,
+                is_supplier_evidence=True,
+                document_path=pdf(directory, "receipt.pdf", f"Paid to {iban}"),
+            )
+            unrelated = replace(
+                receipt,
+                json_path=Path("unrelated.json"),
+                pdf_filename="CMP_unrelated.pdf",
+                document_path=pdf(directory, "unrelated.pdf", f"Account {iban[:-1]}3"),
+            )
+            match = MatchResult(txn, [bank])
+            self.assertEqual(
+                _link_paired_supporting_documents([match], [receipt, unrelated], []),
+                {receipt.candidate_id},
+            )
+            self.assertEqual(match.pdf_candidates, [bank, receipt])
+            self.assertTrue(_is_paired_supporting_candidate(match, receipt))
+
+            competitor = replace(receipt, json_path=Path("competitor.json"))
+            ambiguous = MatchResult(txn, [bank])
+            self.assertFalse(
+                _link_paired_supporting_documents([ambiguous], [receipt, competitor], [])
+            )
+            self.assertEqual(ambiguous.pdf_candidates, [bank])
+
+            other_row = MatchResult(replace(txn, row_number=2), [bank])
+            self.assertFalse(
+                _link_paired_supporting_documents([ambiguous, other_row], [receipt], [])
+            )
+            self.assertEqual(other_row.pdf_candidates, [bank])
 
     def test_candidate_sort_name_prefers_source_filename(self):
         candidate = PDFCandidate(

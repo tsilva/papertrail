@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import json
 import re
+from collections import Counter
 from contextvars import ContextVar
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
+from functools import cached_property
 from pathlib import Path
 from typing import Optional
 
@@ -37,6 +39,8 @@ _AMOUNT_LINE_RE = re.compile(r"^-?\d[\d\s.]*,\d{2}$")
 _PERIOD_TOKEN_RE = re.compile(r"\b(JAN|FEV|MAR|ABR|MAI|JUN|JUL|AGO|SET|OUT|NOV|DEZ)\s+(20\d{2})\b")
 _DATE_DMY_RE = re.compile(r"\b(\d{2})[/-](\d{2})[/-](20\d{2})\b")
 _DATE_DM_RE = re.compile(r"\b(\d{2})[/-](\d{2})\b")
+_IBAN_RE = re.compile(r"\b[A-Z]{2}[0-9]{2}[A-Z0-9]{11,30}\b")
+_BENEFICIARY_LABEL_RE = re.compile(r"\b(?:BENEFICIARIO|BENEFICIARY|PAYEE)\b")
 
 _ACTIVE_RECONCILIATION_POLICY: ContextVar[ReconciliationSettings] = ContextVar(
     "papertrail_reconciliation_policy",
@@ -196,6 +200,29 @@ class PDFCandidate:
     is_ignored_for_reconciliation: bool = False
     is_shared_period_document: bool = False
     line_items: list[CandidateLineItem] = field(default_factory=list)
+    document_path: Path | None = None
+
+    @cached_property
+    def payment_accounts(self) -> tuple[set[str], set[str]]:
+        mentions: set[str] = set()
+        beneficiaries: set[str] = set()
+        if self.document_path is None or self.document_path.suffix.lower() != ".pdf":
+            return mentions, beneficiaries
+        try:
+            with fitz.open(self.document_path) as pdf:
+                for page in pdf:
+                    text = strip_diacritics(page.get_text(sort=True)).upper()
+                    mentions.update(_valid_ibans(text))
+                    if self.is_bank_anchor:
+                        lines = text.splitlines()
+                        for index, line in enumerate(lines):
+                            if _BENEFICIARY_LABEL_RE.search(line):
+                                beneficiaries.update(
+                                    _valid_ibans(" ".join(lines[index : index + 2]))
+                                )
+        except (OSError, RuntimeError, ValueError):
+            return set(), set()
+        return mentions, beneficiaries
 
     @property
     def candidate_id(self) -> str:
@@ -221,6 +248,7 @@ class MatchResult:
     confidence: float = 0.0
     reasoning: str = ""
     line_items: list[MatchedLineItem] = field(default_factory=list)
+    beneficiary_support_ids: set[str] = field(default_factory=set)
 
 
 def _coerce_amount(value) -> Optional[float]:
@@ -245,6 +273,7 @@ def _build_candidate(
     exclude_from_matching: bool = False,
     line_items: list[CandidateLineItem] | None = None,
     policy: ReconciliationSettings | None = None,
+    document_path: Path | None = None,
 ) -> PDFCandidate:
     policy = policy or _reconciliation_policy()
     evidence = build_document_evidence(
@@ -280,6 +309,7 @@ def _build_candidate(
         is_ignored_for_reconciliation=evidence.is_ignored_for_reconciliation,
         is_shared_period_document=evidence.is_shared_period_document,
         line_items=line_items or [],
+        document_path=document_path,
     )
 
 
@@ -1447,6 +1477,7 @@ def _load_pdf_candidates(
             file_extension=doc_path.suffix.lower(),
             exclude_from_matching=excluded,
             line_items=_extract_reconciliation_line_items(doc_path, data),
+            document_path=doc_path,
             policy=policy,
         )
         if candidate.candidate_id in seen_candidate_ids:
@@ -1665,6 +1696,31 @@ def _candidate_parties_match(left: PDFCandidate, right: PDFCandidate) -> bool:
     return bool(left_party and right_party and left_party == right_party)
 
 
+def _valid_ibans(text: str) -> set[str]:
+    valid = set()
+    for account in _IBAN_RE.findall(text):
+        rotated = account[4:] + account[:4]
+        digits = "".join(str(ord(char) - 55) if char.isalpha() else char for char in rotated)
+        if int(digits) % 97 == 1:
+            valid.add(account)
+    return valid
+
+
+def _matches_bank_beneficiary(
+    candidate: PDFCandidate, anchor: PDFCandidate, currency: str
+) -> bool:
+    if not (
+        candidate.is_supplier_evidence
+        and not candidate.is_sub_document
+        and anchor.is_bank_anchor
+        and candidate.total_amount_currency
+        and candidate.total_amount_currency == anchor.total_amount_currency == currency
+    ):
+        return False
+    _, beneficiaries = anchor.payment_accounts
+    return len(beneficiaries) == 1 and beneficiaries.issubset(candidate.payment_accounts[0])
+
+
 def _candidate_sort_name(candidate: PDFCandidate) -> str:
     return candidate.source_filename or candidate.pdf_filename
 
@@ -1679,7 +1735,7 @@ def _is_paired_supporting_candidate(match: MatchResult, candidate: PDFCandidate)
     txn_date = match.transaction.date_posting or match.transaction.date_value
     if _candidate_date_rank(txn_date, candidate) is None:
         return False
-    return any(
+    return candidate.candidate_id in match.beneficiary_support_ids or any(
         _is_bank_export_candidate(anchor) and _candidate_parties_match(candidate, anchor)
         for anchor in match.pdf_candidates
     )
@@ -2111,6 +2167,7 @@ def _link_paired_supporting_documents(
     rules: list,
 ) -> set[str]:
     supporting_candidate_ids: set[str] = set()
+    beneficiary_pairs: list[tuple[MatchResult, PDFCandidate]] = []
     claimed_candidate_ids = {
         candidate.candidate_id for match in all_matches for candidate in match.pdf_candidates
     }
@@ -2140,6 +2197,11 @@ def _link_paired_supporting_documents(
             if _candidate_rank_for_transaction(match.transaction, candidate, category) is None:
                 continue
             if not any(_candidate_parties_match(candidate, anchor) for anchor in bank_anchors):
+                if any(
+                    _matches_bank_beneficiary(candidate, anchor, match.transaction.currency)
+                    for anchor in bank_anchors
+                ):
+                    beneficiary_pairs.append((match, candidate))
                 continue
             candidate_party = _normalize_for_match(candidate.issuing_party or "")
             if any(
@@ -2162,6 +2224,23 @@ def _link_paired_supporting_documents(
                 f"[PAIRED-SUPPORT] Row {match.transaction.row_number}: "
                 f"{', '.join(candidate.pdf_filename for candidate in related_for_match)}"
             )
+
+    beneficiary_pairs = [
+        (match, candidate)
+        for match, candidate in beneficiary_pairs
+        if candidate.candidate_id not in claimed_candidate_ids
+    ]
+    candidates_per_row = Counter(match.transaction.row_number for match, _ in beneficiary_pairs)
+    rows_per_candidate = Counter(candidate.candidate_id for _, candidate in beneficiary_pairs)
+    for match, candidate in beneficiary_pairs:
+        if candidates_per_row[match.transaction.row_number] != 1:
+            continue
+        if rows_per_candidate[candidate.candidate_id] != 1:
+            continue
+        match.pdf_candidates.append(candidate)
+        match.beneficiary_support_ids.add(candidate.candidate_id)
+        supporting_candidate_ids.add(candidate.candidate_id)
+        match.reasoning += f"; paired support document: {candidate.pdf_filename}"
 
     return supporting_candidate_ids
 
