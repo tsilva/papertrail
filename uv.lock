@@ -12,19 +12,8 @@ exclude-newer = "0001-01-01T00:00:00Z" # This has no effect and is included for 
 exclude-newer-span = "P7D"
 
 [options.exclude-newer-package]
-mlflow-skinny = "2026-10-21T02:08:46Z"
 gradio = "2026-11-09T22:31:16Z"
-env-vizdoom-turbo = false
-unsloth = false
-gradlab = false
-env-gradoom-turbo-torch = false
-env-supermariobrosnes-turbo-emu = false
-unsloth-zoo = false
 gradio-client = "2026-11-09T22:31:28Z"
-mlflow = "2026-10-21T02:08:46Z"
-env-stableretro-turbo = false
-mlflow-tracing = "2026-10-21T02:08:46Z"
-env-breakoutatari2600-turbo-native = false
 
 [manifest]
 constraints = [
