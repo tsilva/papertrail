@@ -132,3 +132,12 @@ Run `pnpm --dir frontend check`, `pnpm --dir frontend test`, and
 need Node.js. Preserve all supported standalone Gradio tools. Keep private
 profile documents and browser screenshots outside tracked paths; use synthetic
 fixtures for browser verification.
+
+## Internal reports
+
+Keep session QA reports in `.internal/qa/YYYY-MM-DD-<topic>.md`, reusable private
+notes in `.internal/reference/`, and browser captures/measurements in
+`.internal/evidence/`, all beneath the Git root. Verify `/.internal/` is ignored
+and contains no tracked files before writing. Public testing/development docs
+retain reproducible checks and known limitations; do not link them to private
+reports or add machine paths and operator/session details.

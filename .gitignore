@@ -214,3 +214,6 @@ wheels/
 # Keep Svelte source tracked despite the general Python lib/ exclusion.
 !frontend/src/lib/
 !frontend/src/lib/**
+
+# Private working reports and QA evidence
+/.internal/

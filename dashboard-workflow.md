@@ -29,7 +29,24 @@ The light theme, navy text, teal selection/actions, flat dividers, existing bran
 asset and Phosphor icons remain. Dense transaction tables can scroll horizontally
 inside their own region on a phone; persistent page controls fit the screen.
 
-Browser verification used fictional data and changed no real profile approvals.
-The January–April golden reconciliation baselines were not modified. Screenshot
-and visual comparison evidence is recorded in `design-qa.md` outside private data
-paths in Git.
+## Regression checks
+
+Use isolated fictional documents and synthetic approvals for browser checks. Do
+not exercise review actions against a real profile merely to test the UI.
+
+From the repository root, run `uv run --frozen --extra dev pytest -q` and
+`make regression-golden` for reconciliation changes. Frontend changes also require
+`pnpm --dir frontend check`, `pnpm --dir frontend test` and
+`pnpm --dir frontend build`; retain the rebuilt bundled assets with the source.
+Never refresh golden approvals merely to make a regression pass.
+
+Check month/account/search isolation, signed amounts, missing evidence, document
+and statement previews, and the navigation/review actions described above.
+Exercise approve/reject, clearing decisions, Undo, expected-unmatched documents,
+and stale-write conflicts against isolated state. Missing evidence must disable
+decisions. Inspect console errors, focus and keyboard operation. At desktop,
+tablet and narrow phone sizes, persistent controls must remain reachable without
+document-wide horizontal overflow; dense tables may scroll within their region.
+
+Keep session reports and screenshots in ignored `.internal/` storage. Public
+guidance records repeatable scenarios and limitations rather than run receipts.

@@ -19,11 +19,12 @@ dependencies = [
     "pydantic",
     "pyyaml>=6.0",
     "openpyxl",
-    "pillow>=12.3.0",
+    "pillow>=13.0.0",
     "google-api-python-client",
     "google-auth-httplib2",
     "google-auth-oauthlib",
-    "gradio>=6.16.0",
+    "gradio==7.0.0.dev0",
+    "gradio-client==2.8.0.dev0",
     "orjson>=3.11.9",
     "mbox-extractor",
     "pyzbar>=0.1.9",
@@ -60,10 +61,19 @@ select = ["E", "F", "I"]
 [tool.uv]
 required-version = "==0.11.13"
 exclude-newer = "7 days"
+# Approved prereleases for the Pillow 13 security update.
+exclude-newer-package = {gradio = "2026-11-09T22:31:16Z", gradio-client = "2026-11-09T22:31:28Z"}
 constraint-dependencies = [
   "click>=8.3.3",
   "httplib2>=0.32.0",
   "mistralai!=2.4.6",
   "guardrails-ai!=0.10.1",
-  "pyasn1>=0.6.4",
+  "brotli>=1.2.1",
+  "brotlicffi>=1.2.1.0",
+  "certifi>=2026.10.18",
+  "filelock>=4.2.1",
+  "google-auth>=2.62.1",
+  "msgpack>=1.2.3",
+  "oauthlib>=4.0.1",
+  "pyasn1>=0.6.5",
 ]
