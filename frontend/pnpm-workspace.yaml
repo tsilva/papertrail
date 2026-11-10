@@ -6,3 +6,7 @@ onlyBuiltDependencies:
   - esbuild
 overrides:
   esbuild: 0.28.1
+  '@sveltejs/vite-plugin-svelte@6.2.4>deepmerge': npm:@fastify/deepmerge@3.2.4
+
+patchedDependencies:
+  "@sveltejs/vite-plugin-svelte@6.2.4": patches/svelte-vite-plugin-6.2.4.patch
