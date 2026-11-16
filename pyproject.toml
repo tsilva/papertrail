@@ -11,7 +11,7 @@ authors = [
 ]
 dependencies = [
     "fastapi>=0.139.0",
-    "uvicorn>=0.40.0",
+    "uvicorn>=0.54.0",
     "unarch>=0.6.0",
     "openai",
     "PyMuPDF",
