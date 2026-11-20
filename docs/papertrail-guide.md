@@ -1,0 +1,184 @@
+# Papertrail setup and operator reference
+
+## Install
+
+papertrail requires Python 3.12+, `uv`, AgentBridge, and an authenticated Codex CLI for LLM classification.
+
+```bash
+git clone https://github.com/tsilva/papertrail.git
+cd papertrail
+uv venv --python 3.12
+source .venv/bin/activate
+uv pip install -e '.[dev]'
+uv tool install agentbridge-cli
+codex login
+mkdir -p ~/.config/papertrail/profiles/personal
+cp profile.yaml.example ~/.config/papertrail/profiles/personal/profile.yaml
+```
+
+Edit `~/.config/papertrail/profiles/personal/profile.yaml` with your raw, processed, and export paths. Start AgentBridge in one terminal, then run the pipeline in another:
+
+```bash
+agentbridge
+```
+
+```bash
+papertrail --profile personal pipeline
+```
+
+The historical `openrouter:` profile key configures the OpenAI-compatible LLM endpoint. Its defaults are `http://127.0.0.1:8082/api/v1`, `codex/gpt-6.1-sol` with high reasoning, and the AgentBridge placeholder key `not-needed`. Configure the AgentBridge endpoint and model through this profile section; upstream provider credentials are managed by AgentBridge. `AGENTBRIDGE_BASE_URL` and `AGENTBRIDGE_API_KEY` override the local gateway settings.
+
+## Commands
+
+```bash
+papertrail --profile personal pipeline                         # ingest, classify, export, reconcile
+papertrail --profile personal extract                          # process new raw PDFs, images, and XLSX files
+papertrail --profile personal sync --all-unknown               # reprocess unknown metadata
+papertrail --profile personal check --verify-hashes            # audit metadata and hashes
+papertrail --profile personal rename                           # rename files from sidecar JSON
+papertrail --profile personal reconcile                        # reconcile exported documents to bank rows
+papertrail --profile personal review                           # open reconciliation review UI
+papertrail --profile personal regression --export-date 2026-04 # check approved reconciliation groundtruth
+papertrail --profile personal gmail --months 2                 # download Gmail attachments
+papertrail --profile personal gmail-auth                       # reconnect Gmail in the browser
+papertrail --profile personal export excel --output /tmp/docs.xlsx
+papertrail --profile personal export dates --base-dir /tmp/export
+papertrail --profile personal export copy --pattern 2026-01 --dest /tmp/january
+uv run --frozen --extra dev pytest -q                          # run tests
+make regression-golden PROFILE=personal                         # run golden reconciliation months
+```
+
+## Notes
+
+- Profiles live under `~/.config/papertrail/profiles/<name>/profile.yaml`.
+- Caches live under `~/.config/papertrail/cache/`; the Gmail file backend uses `~/.config/papertrail/credentials/`. The Infisical backend keeps OAuth state in Infisical.
+- Logs are written to `{processed}/logs/` for extraction, sync, pipeline, and classification failures.
+- Reconciliation policy defaults can be overridden in `profile.yaml` under `reconciliation`.
+- QR extraction requires the `pyzbar` package and the system `zbar` library.
+- Duplicate detection uses `hash_content`; filenames use `hash_file`, so visually identical PDFs can still keep distinct byte-based names.
+- `$UNKNOWN$` is the fallback sentinel for unrecognized metadata.
+- Sidecar JSON is the source of truth. If a filename and sidecar disagree, `rename` fixes the filename.
+- Local Gradio tools can be run directly with `python tools/browse.py`, `python tools/dedupe.py`, and `python tools/review.py`.
+
+## Architecture
+
+### Gmail credentials in Infisical
+
+Install and log into the Infisical CLI, then store the OAuth client configuration
+and authorized-user token JSON in a dedicated project. For an existing file-based
+login, upload the files without placing their values in command arguments:
+
+```bash
+infisical secrets set --projectId <project-id> --env prod \
+  PAPERTRAIL_GMAIL_CLIENT_JSON=@"$HOME/.config/papertrail/credentials/gmail_credentials.json" \
+  PAPERTRAIL_GMAIL_TOKEN_JSON=@"$HOME/.config/papertrail/credentials/gmail_token.json"
+```
+
+Select the backend in your profile:
+
+```yaml
+gmail:
+  enabled: true
+  credential_backend: infisical
+  infisical:
+    project_id: <project-id>
+    environment: prod
+    path: /
+```
+
+Run `papertrail` normally. It retrieves the selected OAuth JSON through the CLI
+and writes refreshed authorization back to the token secret through stdin. The
+login needs read permission on both secrets and write permission on the token.
+`login_profile`, `executable`, and the secret names can be overridden as shown in
+`profile.yaml.example`. CLI failures stop authentication without falling back to
+local credential files. Verify Gmail access and vault writeback before removing
+the old files. The default `file` backend remains available for existing profiles;
+it writes refreshed tokens atomically with owner-only permissions.
+
+If Google rejects a saved refresh token, run
+`papertrail --profile personal gmail-auth`. This explicitly opens Google consent
+and saves the new authorization to the selected backend without downloading
+attachments. It also supports first-time Infisical login after uploading only
+the client configuration. Choose the Gmail account intended for this profile.
+
+![papertrail architecture diagram](../architecture.png)
+
+## License
+
+[MIT](../LICENSE)
+
+## AgentBridge routing
+
+Model requests use only AgentBridge. Set `AGENTBRIDGE_BASE_URL` to its API root
+(default `http://127.0.0.1:8082/api/v1`). `AGENTBRIDGE_API_KEY` is an optional
+gateway token. OpenRouter credentials belong to AgentBridge. Existing model
+choices are retained; raw upstream IDs gain `openrouter/` only on outbound
+requests. There is no direct OpenRouter endpoint or fallback. Hosted deployments
+must configure a reachable AgentBridge URL instead of the loopback default.
+
+## Light Svelte dashboard
+
+`papertrail --profile personal review` opens the light Svelte dashboard with
+Transactions as its starting screen. Choose a month to see tables for every bank
+and account, with dates, signed amounts, numeric linked-document counts, and review status.
+Dates use `YYYY-MM-DD`; the month selector uses `YYYY - Month` (for example, `2026 - August`). The desktop evidence preview fills the remaining viewport
+height and adapts when the window or header changes.
+Row references, rules, method, confidence, and reasoning remain in Match details
+on the focused review screen. Filter by account or status, search transactions,
+inspect document/statement previews, and approve pairings inline. Review opens
+the focused comparison and decision screen. Document options groups opening the
+original, download, raw sidecar JSON, and fullscreen in one preview menu.
+Statements without reconciliation remain visible with their reported count.
+Documents without a transaction use the same table layout and row selection as
+bank transactions, with their expected/undo action in the Status column.
+
+Documents supports search, type/month filters, PDF/XLSX previews, original-file
+downloads, and links back to bank transactions. Click anywhere in a document row
+to select its preview, or focus its document button and press Enter or Space.
+Extracted document details can be expanded below the preview.
+Search, type, account, and status filters survive tab changes and refreshes.
+Undated documents remain available under All months. Unreadable previews offer
+a retry after restoring the source file.
+
+Review supports approve, reject, clear, and undo; undo returns to the restored
+transaction and month. Multi-document matches can be inspected one document at a
+time. Missing evidence cannot be approved. Documents without a transaction appear
+beneath the monthly bank tables and can be marked expected or have that decision
+removed. Export month ZIP downloads the selected month's files. See the
+[old-to-new workflow map](../dashboard-workflow.md) for the preserved tasks.
+
+Approvals use the existing `.reconciliation.groundtruth.json` files; rejections
+are stored in their `rejections` collection. Undo restores the previous decision.
+Changed evidence invalidates prior decisions, and stale requests must be
+refreshed before saving. The dashboard never changes extracted sidecars, source
+files, or reconciliation matches. Keyboard shortcuts: `Y` approve, `N` reject,
+`U` undo, and arrow keys or `j`/`k` to navigate, including after clicking
+a queue row. Shortcuts pause while editing fields. Escape or clicking outside
+closes action menus. Use the header refresh button to reload data; the month ZIP
+action is available once on Transactions.
+
+The installed Python package includes the built frontend; Node.js is only needed
+when editing the UI. The existing Gradio browse, dedupe, review, and unified
+launchers remain available:
+
+```bash
+PAPERTRAIL_UI_PROFILE=personal uv run python -m tools.dashboard --port auto
+uv run python tools/app.py --port auto       # existing Gradio tools
+```
+
+To develop the Svelte frontend, start the Python dashboard for the selected
+profile, then use its printed URL as the API proxy:
+
+```bash
+cd frontend
+pnpm install --frozen-lockfile
+PAPERTRAIL_API_URL=http://127.0.0.1:<printed-port> pnpm dev -- --port auto
+pnpm check
+pnpm test
+pnpm build
+```
+
+The production build writes bundled assets into `tools/static/dashboard/`.
+Commit updated assets alongside frontend source changes. Design references in
+`frontend/design/` use fictional documents; private source files and screenshots
+must stay outside the repository.
